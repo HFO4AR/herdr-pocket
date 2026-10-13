@@ -75,7 +75,9 @@ class MainActivity : Activity() {
         return Button(this).apply {
             this.text = text; isAllCaps = false; setTextColor(if (primary) bg else ink)
             background = shape(if (primary) mint else card)
-            layoutParams = LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(12) }
+            minHeight = dp(52)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) }
             setOnClickListener { if (!busy) action() }
             page.addView(this)
         }
@@ -150,7 +152,7 @@ class MainActivity : Activity() {
     }
     private fun agentsPage(agents: List<JSONObject>) {
         activeAgent = null
-        base(if (demo) "DEMO · 示例数据" else "LIVE / $selectedSession", "你的 Agent", "${agents.size} 个会话中的 Agent · 点击查看输出")
+        base(if (demo) "DEMO · 示例数据" else "LIVE / $selectedSession", "你的 Agent", "${agents.size} 个 Agent · 点击查看输出")
         if (agents.isEmpty()) label("当前没有识别到的 Agent。")
         agents.sortedBy { if (it.optString("agent_status") == "blocked") 0 else 1 }.forEach { agent ->
             val name = agent.optString("terminal_title_stripped", agent.optString("terminal_title", agent.optString("agent")))
@@ -189,7 +191,9 @@ class MainActivity : Activity() {
         val keys = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; page.addView(this) }
         listOf("↑" to "up", "↓" to "down", "Enter" to "enter", "Esc" to "esc").forEach { (label, key) ->
             keys.addView(Button(this).apply {
-                text = label; isAllCaps = false; layoutParams = LinearLayout.LayoutParams(0, dp(54), 1f)
+                text = label; isAllCaps = false; setTextColor(mint); background = shape(card)
+                minWidth = 0; setPadding(0, 0, 0, 0)
+                layoutParams = LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(3), dp(12), dp(3), 0) }
                 setOnClickListener { if (!busy) sendKey(agent, key) }
             })
         }
