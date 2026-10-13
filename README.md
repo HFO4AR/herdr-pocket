@@ -6,6 +6,12 @@ Not affiliated with Herdr or other similarly named mobile apps.
 
 **Status: v0.1.0 experimental.** Real SSH transport and Herdr CLI integration; not a chat-history sync service.
 
+[Download experimental APK](https://github.com/HFO4AR/herdr-pocket/releases/tag/v0.1.0-alpha.1) · [Build checks](https://github.com/HFO4AR/herdr-pocket/actions)
+
+<img src="docs/screenshots/agents.png" width="260" alt="Demo Agent list" /> <img src="docs/screenshots/agent.png" width="260" alt="Demo Agent output and controls" />
+
+Screenshots show offline demo data, not real conversations.
+
 ## 功能
 
 - SSH 密码登录，首次连接显示 SHA-256 主机指纹，确认后固定密钥；密钥变化拒绝连接。
