@@ -86,4 +86,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        output = Path("ui-artifacts"); output.mkdir(exist_ok=True)
+        (output / "failure.png").write_bytes(run("exec-out", "screencap", "-p"))
+        (output / "failure.xml").write_bytes(ET.tostring(screen()))
+        raise

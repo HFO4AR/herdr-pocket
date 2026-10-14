@@ -50,7 +50,7 @@ class MainActivity : Activity() {
     private var autoRefresh = true
     private val polling = object : Runnable {
         override fun run() {
-            if (foreground && autoRefresh && !busy && screen == "agent") refreshOutput?.invoke()
+            if (foreground && !demo && autoRefresh && !busy && screen == "agent") refreshOutput?.invoke()
             if (foreground) handler.postDelayed(this, 3000)
         }
     }
@@ -73,11 +73,13 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(4), dp(20), dp(4))
         }
         if (screen != "connect") bar.addView(Button(this).apply {
+            stateListAnimator = null; elevation = 0f
             text = "‹"; textSize = 30f; setTextColor(ink); background = shape(bg)
             contentDescription = "返回上一级"; setPadding(0, 0, 0, 0)
             setOnClickListener { navigateBack() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         bar.addView(TextView(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
             text = "herdr / pocket"; textSize = 18f; setTextColor(ink); typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             setPadding(dp(8), 0, 0, 0)
         }, LinearLayout.LayoutParams(0, dp(48), 1f))
@@ -117,6 +119,7 @@ class MainActivity : Activity() {
     }
     private fun button(text: String, primary: Boolean = false, action: () -> Unit): Button {
         return Button(this).apply {
+            stateListAnimator = null; elevation = 0f
             this.text = text; isAllCaps = false; setTextColor(if (primary) bg else ink)
             background = shape(if (primary) mint else card)
             minHeight = dp(48)
@@ -264,11 +267,13 @@ class MainActivity : Activity() {
         root.addView(footer)
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; footer.addView(this) }
         fun control(text: String, action: () -> Unit): Button = Button(this).apply {
+            stateListAnimator = null; elevation = 0f
             this.text = text; textSize = 12f; isAllCaps = false; setTextColor(mint); background = shape(card)
             setPadding(0, 0, 0, 0); minWidth = 0
             controls.addView(this, LinearLayout.LayoutParams(0, dp(48), 1f))
             setOnClickListener { if (!busy) action() }
         }
+        var refreshToggle: Button? = null
         fun refresh() {
             if (demo) {
                 output.text = "› 帮我检查移动端布局\n\n已完成连接页和 Agent 列表。\n\n• 会话搜索与状态提示\n• 固定输入栏，支持多行消息\n• 返回列表时保留草稿\n\n接下来验证手机上的交互体验。\n\n这是演示内容，不是真实会话。"
@@ -282,10 +287,11 @@ class MainActivity : Activity() {
                     if (nearBottom) contentScroll.post { contentScroll.fullScroll(View.FOCUS_DOWN) }
                 }
                 status.text = "已同步 " + java.text.DateFormat.getTimeInstance().format(java.util.Date())
-            }, { error -> autoRefresh = false; status.text = "同步暂停：${error.message} · 可点击刷新重试" })
+            }, { error -> autoRefresh = false; refreshToggle?.text = "自动更新"; status.text = "同步暂停：${error.message} · 可点击刷新重试" })
         }
         control("刷新输出") { refresh() }
         val toggle = control(if (autoRefresh) "暂停更新" else "自动更新") { }
+        refreshToggle = toggle
         toggle.setOnClickListener { autoRefresh = !autoRefresh; toggle.text = if (autoRefresh) "暂停更新" else "自动更新" }
         control("终端按键") {
             val labels = arrayOf("↑ 上", "↓ 下", "Enter 确认", "Esc 返回", "Ctrl+C 中断")
@@ -306,6 +312,7 @@ class MainActivity : Activity() {
             override fun afterTextChanged(s: Editable?) = Unit
         })
         composeRow.addView(Button(this).apply {
+            stateListAnimator = null; elevation = 0f
             text = "发送"; isAllCaps = false; setTextColor(bg); background = shape(mint); setPadding(0, 0, 0, 0)
             setOnClickListener {
                 if (busy || composer.text.isBlank()) return@setOnClickListener
