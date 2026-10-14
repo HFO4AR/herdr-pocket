@@ -1,5 +1,10 @@
-name: Build and test
-on: [push, pull_request, workflow_dispatch]
+name: Build, test and publish
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
@@ -27,6 +32,36 @@ jobs:
         with:
           name: herdr-pocket-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Build signed distribution
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          POCKET_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          POCKET_VERSION_CODE: ${{ github.run_number }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          export POCKET_KEYSTORE="$RUNNER_TEMP/pocket-release.jks"
+          trap 'rm -f "$POCKET_KEYSTORE"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$POCKET_KEYSTORE"
+          chmod 600 "$POCKET_KEYSTORE"
+          export POCKET_VERSION_CODE=$((POCKET_VERSION_CODE + 100))
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            export POCKET_VERSION_NAME="${REF_NAME#v}"
+          else
+            export POCKET_VERSION_NAME="0.2.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          ./gradlew assembleRelease --no-daemon
+          mkdir -p distribution
+          cp app/build/outputs/apk/release/app-release.apk distribution/herdr-pocket.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose distribution/herdr-pocket.apk
+          (cd distribution && sha256sum herdr-pocket.apk > herdr-pocket.apk.sha256)
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        with:
+          name: signed-distribution
+          path: distribution/
+          if-no-files-found: error
       - name: Enable emulator KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -49,3 +84,44 @@ jobs:
           name: offline-ui-screenshots
           path: ui-artifacts/
           if-no-files-found: ignore
+
+  publish:
+    needs: android
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-distribution
+          path: distribution
+      - name: Publish verified APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$REF_NAME"
+            flags=()
+            [[ "$tag" == *-* ]] && flags+=(--prerelease)
+          else
+            tag="preview-${GITHUB_RUN_NUMBER}"
+            flags=(--prerelease)
+          fi
+          cat > notes.md <<EOF
+          Automated Android build from commit ${GITHUB_SHA}.
+
+          Download herdr-pocket.apk below. Android 8.0 or newer required.
+          Bridge tests, Android lint and offline emulator interaction checks passed.
+          This does not certify real phone/SSH connectivity.
+
+          Uses the persistent Herdr Pocket release signing key. If you installed
+          v0.1.0-alpha.1 (debug-signed), uninstall it once before installing this build.
+          EOF
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" distribution/* --clobber
+          else
+            gh release create "$tag" distribution/* --target "$GITHUB_SHA" --title "Herdr Pocket $tag" --notes-file notes.md "${flags[@]}"
+          fi

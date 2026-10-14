@@ -54,7 +54,31 @@ def main():
     (output / "agent.png").write_bytes(run("exec-out", "screencap", "-p"))
     tap("刷新输出")
     assert find("这是演示内容") is not None
-    print("PASS: validation, demo session, agent list, output and refresh; zero host connections")
+    tap("继续这段对话")
+    run("shell", "input", "text", "draft-check")
+    assert find("发送") is not None, "Composer must remain visible above keyboard"
+    (output / "keyboard.png").write_bytes(run("exec-out", "screencap", "-p"))
+    run("shell", "input", "keyevent", "4")  # hide keyboard
+    tap("发送")
+    assert find("草稿已保留") is not None
+    run("shell", "input", "keyevent", "4")  # back to list, not disconnect
+    assert find("你的 Agent") is not None
+    tap("移动端界面设计")
+    assert find("draft-check") is not None, "Draft lost on navigation"
+    run("shell", "settings", "put", "system", "accelerometer_rotation", "0")
+    run("shell", "settings", "put", "system", "user_rotation", "1")
+    time.sleep(2)
+    assert find("draft-check") is not None, "Rotation lost draft"
+    assert find("发送") is not None
+    (output / "landscape.png").write_bytes(run("exec-out", "screencap", "-p"))
+    run("shell", "settings", "put", "system", "user_rotation", "0")
+    time.sleep(2)
+    run("shell", "input", "keyevent", "4")
+    tap("搜索会话")
+    run("shell", "input", "text", "nonexistent")
+    assert find("没有匹配的会话") is not None
+    print("PASS: form, session, list, output, keyboard composer, safe demo send, back, drafts, rotation and search; zero host connections")
+
 
 
 if __name__ == "__main__":

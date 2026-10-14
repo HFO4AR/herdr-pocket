@@ -8,6 +8,12 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.text.TextWatcher
+import android.text.Editable
+import android.content.res.Configuration
 import android.text.InputType
 import android.view.View
 import android.widget.*
@@ -16,11 +22,11 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
-    private val bg = Color.rgb(16, 23, 25)
-    private val card = Color.rgb(28, 38, 41)
-    private val ink = Color.rgb(234, 244, 241)
-    private val muted = Color.rgb(150, 174, 171)
-    private val mint = Color.rgb(140, 233, 193)
+    private val bg = Color.rgb(12, 15, 22)
+    private val card = Color.rgb(24, 29, 40)
+    private val ink = Color.rgb(237, 240, 248)
+    private val muted = Color.rgb(156, 168, 189)
+    private val mint = Color.rgb(162, 183, 255)
     private val executor = Executors.newSingleThreadExecutor()
     private val transport = SshTransport()
     private val prefs by lazy { getSharedPreferences("connection", MODE_PRIVATE) }
@@ -32,6 +38,22 @@ class MainActivity : Activity() {
     private var demo = false
     private var generation = 0
     private var activeAgent: JSONObject? = null
+    private lateinit var root: LinearLayout
+    private lateinit var contentScroll: ScrollView
+    private var screen = "connect"
+    private var cachedSessions = listOf<String>()
+    private var cachedAgents = listOf<JSONObject>()
+    private val drafts = mutableMapOf<String, String>()
+    private val handler = Handler(Looper.getMainLooper())
+    private var refreshOutput: (() -> Unit)? = null
+    private var foreground = false
+    private var autoRefresh = true
+    private val polling = object : Runnable {
+        override fun run() {
+            if (foreground && autoRefresh && !busy && screen == "agent") refreshOutput?.invoke()
+            if (foreground) handler.postDelayed(this, 3000)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,21 +61,43 @@ class MainActivity : Activity() {
         connectionPage()
     }
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(16).toFloat() }
+    private fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(12).toFloat() }
     private fun base(kicker: String, title: String, subtitle: String) {
         generation++
-        page = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(20), dp(22), dp(28)); setBackgroundColor(bg)
-        }
-        val scroll = ScrollView(this).apply { isFillViewport = true; addView(page) }
-        scroll.setOnApplyWindowInsetsListener { v, insets ->
+        refreshOutput = null
+        root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(bg) }
+        root.setOnApplyWindowInsetsListener { v, insets ->
             v.setPadding(0, insets.systemWindowInsetTop, 0, insets.systemWindowInsetBottom); insets
         }
-        setContentView(scroll)
-        label(kicker, 12, mint)
-        label(title, 30, ink).setPadding(0, dp(12), 0, dp(8))
-        label(subtitle, 14, muted)
-        status = label("", 13, mint)
+        val bar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(4), dp(20), dp(4))
+        }
+        if (screen != "connect") bar.addView(Button(this).apply {
+            text = "‹"; textSize = 30f; setTextColor(ink); background = shape(bg)
+            contentDescription = "返回上一级"; setPadding(0, 0, 0, 0)
+            setOnClickListener { navigateBack() }
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        bar.addView(TextView(this).apply {
+            text = "herdr / pocket"; textSize = 18f; setTextColor(ink); typeface = Typeface.create("sans-serif-medium", 0)
+            setPadding(dp(8), 0, 0, 0)
+        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        root.addView(bar)
+        page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(12), dp(20), dp(20))
+        }
+        contentScroll = ScrollView(this).apply { isFillViewport = true; addView(page) }
+        root.addView(contentScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        setContentView(root)
+        label(kicker, 11, mint).letterSpacing = .12f
+        label(title, if (screen == "agent") 23 else 28, ink).apply {
+            typeface = Typeface.create("sans-serif-medium", 0); setPadding(0, dp(8), 0, dp(8))
+        }
+        label(subtitle, 13, muted)
+        status = TextView(this).apply {
+            textSize = 12f; setTextColor(muted); setPadding(dp(20), dp(6), dp(20), dp(6))
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        root.addView(status)
     }
     private fun label(text: String, size: Int = 16, color: Int = ink): TextView {
         return TextView(this).apply {
@@ -75,7 +119,7 @@ class MainActivity : Activity() {
         return Button(this).apply {
             this.text = text; isAllCaps = false; setTextColor(if (primary) bg else ink)
             background = shape(if (primary) mint else card)
-            minHeight = dp(52)
+            minHeight = dp(48)
             setPadding(dp(16), dp(12), dp(16), dp(12))
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) }
             setOnClickListener { if (!busy) action() }
@@ -83,13 +127,17 @@ class MainActivity : Activity() {
         }
     }
     private fun connectionPage() {
-        demo = false; activeAgent = null
+        screen = "connect"; demo = false; activeAgent = null
         window.setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE)
-        base("HERDR POCKET  /  01", "随时，接着聊。", "你的电脑继续工作。手机接入原来的会话。")
-        label("SSH 连接", 18)
+        base("YOUR WORK, WITH YOU", "把工作，带在身边。", "连接电脑，继续原来的 Agent 会话。")
+        label("连接你的电脑", 18)
+        label("主机地址", 12, muted)
         val host = input("服务器域名或 IP", prefs.getString("host", "") ?: "")
+        label("SSH 端口", 12, muted)
         val port = input("端口", prefs.getString("port", "22") ?: "22").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        label("用户名", 12, muted)
         val user = input("SSH 用户名", prefs.getString("user", "") ?: "")
+        label("登录密码", 12, muted)
         val password = input("密码 · 仅本次连接使用", secret = true)
         label("支持局域网、Sakura Frp 等原生 TCP 入口。", 12)
         button("连接电脑", true) {
@@ -103,7 +151,7 @@ class MainActivity : Activity() {
             connect(endpoint, pass)
         }
         button("先看看界面 · 演示模式") { demo = true; window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE); sessionsPage(listOf("demo")) }
-        label("开源 · 无账户 · 无广告\n密码不落盘；首次连接核对主机指纹。v0.1.0", 12, muted)
+        label("开源 · 无账户 · 无广告\n密码不落盘；首次连接核对主机指纹。v0.2.0", 12, muted)
     }
     private fun connect(endpoint: Endpoint, password: String) {
         val pinId = "pin:${endpoint.host}:${endpoint.port}"
@@ -111,15 +159,14 @@ class MainActivity : Activity() {
             transport.connect(endpoint, password, prefs.getString(pinId, null))
             transport.useBundled(bridge)
         }, {
-            base("CONNECTED", "电脑已连接", "首次使用先安装配套桥接程序。已安装可以直接进入。")
-            button("安装 / 校验桥接程序", true) {
-                AlertDialog.Builder(this).setTitle("安装到当前 SSH 用户")
-                    .setMessage("将随 App 提供的开源 Python 桥接程序写入 ~/.herdr-pocket。无需 sudo，不开放端口，不重启 Herdr。服务器需要 Python 3.9+。")
-                    .setPositiveButton("安装") { _, _ -> work("正在上传并校验…", { transport.install(bridge); transport.request(JSONObject().put("op", "hello")) }, { status.text = "桥接程序已就绪"; loadSessions() }) }
-                    .setNegativeButton("取消", null).show()
-            }
+            screen = "setup"
+            base("SSH CONNECTED", "连接已建立", "检查配套桥接程序后即可打开会话。")
+            button("安装 / 校验桥接程序", true) { installBridge() }
             button("读取会话") { loadSessions() }
-            button("断开") { transport.close(); connectionPage() }
+            button("断开连接") { transport.close(); connectionPage() }
+            work("检查桥接程序…", { transport.request(JSONObject().put("op", "hello")) }, {
+                loadSessions()
+            }, { status.text = "需要安装或更新桥接程序。点击上方安装即可。" })
         }, { error ->
             if (error is UntrustedHost) {
                 AlertDialog.Builder(this).setTitle("核对服务器指纹")
@@ -129,15 +176,23 @@ class MainActivity : Activity() {
             } else showError(error)
         })
     }
+    private fun installBridge() {
+        AlertDialog.Builder(this).setTitle("安装配套桥接程序")
+            .setMessage("将 App 自带的开源 Python 程序安装到当前 SSH 用户的 ~/.herdr-pocket。无需 sudo，不重启 Herdr。需要 Python 3.9+。")
+            .setPositiveButton("安装并进入") { _, _ ->
+                work("正在安装并校验…", { transport.install(bridge); transport.request(JSONObject().put("op", "hello")) }, { loadSessions() })
+            }.setNegativeButton("取消", null).show()
+    }
     private fun loadSessions() = work("读取会话…", { transport.request(JSONObject().put("op", "sessions")) }, { data ->
         val arr = data.getJSONArray("sessions")
         val names = (0 until arr.length()).map { arr.getJSONObject(it) }.filter { it.optBoolean("running") }.map { it.getString("name") }
         sessionsPage(names)
     })
     private fun sessionsPage(names: List<String>) {
+        screen = "sessions"; cachedSessions = names
         base(if (demo) "DEMO · 不连接服务器" else "LIVE / SESSIONS", "会话", "选择电脑上正在运行的 Herdr 会话。")
         if (names.isEmpty()) label("没有运行中的会话。在电脑上启动 Herdr 后刷新。")
-        names.forEach { name -> button("$name  →", true) { selectedSession = name; loadAgents() } }
+        names.forEach { name -> button("$name  →") { selectedSession = name; loadAgents() } }
         if (!demo) button("刷新") { loadSessions() }
         button("断开 / 返回") { transport.close(); connectionPage() }
     }
@@ -151,54 +206,118 @@ class MainActivity : Activity() {
         })
     }
     private fun agentsPage(agents: List<JSONObject>) {
-        activeAgent = null
-        base(if (demo) "DEMO · 示例数据" else "LIVE / $selectedSession", "你的 Agent", "${agents.size} 个 Agent · 点击查看输出")
-        if (agents.isEmpty()) label("当前没有识别到的 Agent。")
-        agents.sortedBy { if (it.optString("agent_status") == "blocked") 0 else 1 }.forEach { agent ->
-            val name = agent.optString("terminal_title_stripped", agent.optString("terminal_title", agent.optString("agent")))
-            val state = agent.optString("agent_status")
-            button("${agent.optString("agent")} · $state\n$name") { agentPage(agent) }
+        screen = "agents"; activeAgent = null; cachedAgents = agents
+        base(if (demo) "DEMO WORKSPACE" else "WORKSPACE / $selectedSession", "你的 Agent", "${agents.size} 个会话 · ${agents.count { it.optString("agent_status") == "working" }} 个运行中")
+        val search = input("搜索会话或 Agent")
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; page.addView(this) }
+        fun render(query: String) {
+            list.removeAllViews()
+            val matches = agents.filter { it.toString().contains(query, ignoreCase = true) }
+                .sortedBy { if (it.optString("agent_status") == "blocked") 0 else 1 }
+            if (matches.isEmpty()) list.addView(TextView(this).apply {
+                text = if (agents.isEmpty()) "还没有识别到 Agent，启动后刷新列表。" else "没有匹配的会话"; setTextColor(muted); setPadding(0, dp(28), 0, dp(28))
+            })
+            matches.forEach { agent ->
+                val name = agent.optString("terminal_title_stripped", agent.optString("terminal_title", agent.optString("agent")))
+                val state = when (agent.optString("agent_status")) { "working" -> "运行中"; "blocked" -> "等待处理"; "idle", "done" -> "可对话"; else -> "状态未知" }
+                val tile = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL; background = shape(card); setPadding(dp(18), dp(16), dp(18), dp(16))
+                    isClickable = true; isFocusable = true
+                    val attr = android.util.TypedValue(); theme.resolveAttribute(android.R.attr.selectableItemBackground, attr, true)
+                    foreground = getDrawable(attr.resourceId)
+                    setOnClickListener { if (!busy) agentPage(agent) }
+                }
+                fun line(value: String, size: Float, color: Int) = TextView(this).apply {
+                    text = value; textSize = size; setTextColor(color); setPadding(0, dp(4), 0, dp(4)); tile.addView(this)
+                }
+                line("${agent.optString("agent").uppercase()}    /    $state", 11f, mint)
+                line(name, 18f, ink).typeface = Typeface.create("sans-serif-medium", 0)
+                line("${agent.optString("workspace_id")}   ·   打开会话  →", 12f, muted)
+                list.addView(tile, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            }
         }
-        button("刷新列表", true) { loadAgents() }
-        button("返回会话") { if (demo) sessionsPage(listOf("demo")) else loadSessions() }
+        render("")
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { render(s.toString()) }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        button("刷新列表") { loadAgents() }
+        button("切换 Herdr 会话") { sessionsPage(cachedSessions) }
+        status.text = if (demo) "离线演示 · 不连接服务器" else "SSH 已连接 · $selectedSession"
     }
     private fun requestFor(op: String, agent: JSONObject) = JSONObject().put("op", op).put("session", selectedSession)
         .put("target", agent.getString("pane_id")).put("identity", agent.getString("identity"))
     private fun agentPage(agent: JSONObject) {
-        activeAgent = agent
-        base(if (demo) "DEMO · 不发送指令" else "${agent.optString("workspace_id")} / ${agent.optString("pane_id")}", agent.optString("agent"), "最近终端输出 · 手动刷新 · 不代表完整聊天历史")
-        val output = label("正在读取…", 13).apply {
+        screen = "agent"; activeAgent = agent
+        val draftKey = "$selectedSession/${agent.getString("pane_id")}/${agent.getString("identity")}"
+        base(if (demo) "DEMO / ${agent.optString("agent").uppercase()}" else "${agent.optString("agent").uppercase()} / $selectedSession",
+            agent.optString("terminal_title_stripped", agent.optString("terminal_title", agent.optString("agent"))),
+            "最近终端输出 · 前台每 3 秒更新")
+        val output = label("正在读取…", 14).apply {
             typeface = Typeface.MONOSPACE; setTextIsSelectable(true); background = shape(card)
-            setPadding(dp(14), dp(14), dp(14), dp(14)); minHeight = dp(180)
+            setLineSpacing(dp(4).toFloat(), 1f); setPadding(dp(16), dp(16), dp(16), dp(16))
         }
-        val composer = input("给这个 Agent 发消息").apply { isSingleLine = false; maxLines = 6; minLines = 2 }
+        val footer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(4), dp(16), dp(8)); setBackgroundColor(card)
+        }
+        root.addView(footer)
+        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; footer.addView(this) }
+        fun control(text: String, action: () -> Unit): Button = Button(this).apply {
+            this.text = text; textSize = 12f; isAllCaps = false; setTextColor(mint); background = shape(card)
+            setPadding(0, 0, 0, 0); minWidth = 0
+            controls.addView(this, LinearLayout.LayoutParams(0, dp(48), 1f))
+            setOnClickListener { if (!busy) action() }
+        }
         fun refresh() {
-            if (demo) { output.text = "› 帮我检查移动端布局\n\n已完成连接页和 Agent 列表。\n接下来验证手机上的交互体验。\n\n这是演示内容，不是真实会话。"; return }
-            work("读取输出…", { transport.request(requestFor("read", agent)) }, { result ->
-                output.text = findText(result) ?: result.toString(2)
-                status.text = "输出已更新 · ${java.text.DateFormat.getTimeInstance().format(java.util.Date())}"
-            })
+            if (demo) {
+                output.text = "› 帮我检查移动端布局\n\n已完成连接页和 Agent 列表。\n\n• 会话搜索与状态提示\n• 固定输入栏，支持多行消息\n• 返回列表时保留草稿\n\n接下来验证手机上的交互体验。\n\n这是演示内容，不是真实会话。"
+                status.text = "离线演示 · 不发送指令"; return
+            }
+            work("正在同步输出…", { transport.request(requestFor("read", agent)) }, { result ->
+                val text = findText(result) ?: result.toString(2)
+                if (output.text.toString() != text) {
+                    val nearBottom = contentScroll.getChildAt(0).height - contentScroll.height - contentScroll.scrollY < dp(100)
+                    output.text = text
+                    if (nearBottom) contentScroll.post { contentScroll.fullScroll(View.FOCUS_DOWN) }
+                }
+                status.text = "已同步 " + java.text.DateFormat.getTimeInstance().format(java.util.Date())
+            }, { error -> autoRefresh = false; status.text = "同步暂停：${error.message} · 可点击刷新重试" })
         }
-        button("发送", true) {
-            if (composer.text.isBlank()) return@button
-            if (demo) { status.text = "演示模式：没有发送"; return@button }
-            val req = requestFor("prompt", agent).put("text", composer.text.toString()).put("id", UUID.randomUUID().toString())
-            work("正在发送…", { transport.request(req) }, {
-                composer.setText(""); status.text = "指令已发送；Agent 尚未确认任务完成。"
-            })
+        control("刷新输出") { refresh() }
+        val toggle = control(if (autoRefresh) "暂停更新" else "自动更新") { }
+        toggle.setOnClickListener { autoRefresh = !autoRefresh; toggle.text = if (autoRefresh) "暂停更新" else "自动更新" }
+        control("终端按键") {
+            val labels = arrayOf("↑ 上", "↓ 下", "Enter 确认", "Esc 返回", "Ctrl+C 中断")
+            val keys = arrayOf("up", "down", "enter", "esc", "ctrl+c")
+            AlertDialog.Builder(this).setTitle("终端操作").setItems(labels) { _, index -> sendKey(agent, keys[index]) }.setNegativeButton("取消", null).show()
         }
-        button("刷新输出") { refresh() }
-        val keys = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; page.addView(this) }
-        listOf("↑" to "up", "↓" to "down", "Enter" to "enter", "Esc" to "esc").forEach { (label, key) ->
-            keys.addView(Button(this).apply {
-                text = label; isAllCaps = false; setTextColor(mint); background = shape(card)
-                minWidth = 0; setPadding(0, 0, 0, 0)
-                layoutParams = LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(3), dp(12), dp(3), 0) }
-                setOnClickListener { if (!busy) sendKey(agent, key) }
-            })
+        val composeRow = LinearLayout(this).apply { gravity = Gravity.BOTTOM; footer.addView(this) }
+        val composer = EditText(this).apply {
+            hint = "继续这段对话…"; contentDescription = "消息输入框"; setTextColor(ink); setHintTextColor(muted)
+            textSize = 15f; background = shape(bg); setPadding(dp(12), dp(12), dp(12), dp(12))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            maxLines = 4; minLines = 1; setText(drafts[draftKey] ?: "")
         }
-        button("中断当前运行 · Ctrl+C") { sendKey(agent, "ctrl+c") }
-        button("返回 Agent 列表") { loadAgents() }
+        composeRow.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
+        composer.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { drafts[draftKey] = s.toString() }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        composeRow.addView(Button(this).apply {
+            text = "发送"; isAllCaps = false; setTextColor(bg); background = shape(mint); setPadding(0, 0, 0, 0)
+            setOnClickListener {
+                if (busy || composer.text.isBlank()) return@setOnClickListener
+                if (demo) { status.text = "演示模式：没有发送，草稿已保留"; return@setOnClickListener }
+                val sent = composer.text.toString()
+                work("正在发送…", { transport.request(requestFor("prompt", agent).put("text", sent).put("id", UUID.randomUUID().toString())) }, {
+                    if (composer.text.toString() == sent) composer.setText("")
+                    status.text = "已发送 · 等待 Agent 响应"
+                })
+            }
+        }, LinearLayout.LayoutParams(dp(64), dp(48)).apply { leftMargin = dp(8) })
+        refreshOutput = { refresh() }
         refresh()
     }
     private fun sendKey(agent: JSONObject, key: String) {
@@ -232,6 +351,22 @@ class MainActivity : Activity() {
         }
     }
     @Deprecated("Legacy Activity navigation")
-    override fun onBackPressed() { if (!busy) { transport.close(); connectionPage() } }
-    override fun onDestroy() { transport.close(); executor.shutdownNow(); super.onDestroy() }
+    override fun onBackPressed() { navigateBack() }
+    private fun navigateBack() {
+        if (busy) { status.text = "正在处理，请稍候…"; return }
+        when (screen) {
+            "agent" -> agentsPage(cachedAgents)
+            "agents" -> sessionsPage(cachedSessions)
+            "sessions", "setup" -> {
+                if (demo) connectionPage() else AlertDialog.Builder(this).setTitle("断开电脑连接？")
+                    .setPositiveButton("断开") { _, _ -> transport.close(); drafts.clear(); connectionPage() }
+                    .setNegativeButton("继续使用", null).show()
+            }
+            else -> super.onBackPressed()
+        }
+    }
+    override fun onResume() { super.onResume(); foreground = true; handler.removeCallbacks(polling); handler.postDelayed(polling, 3000) }
+    override fun onPause() { foreground = false; handler.removeCallbacks(polling); super.onPause() }
+    override fun onConfigurationChanged(newConfig: Configuration) { super.onConfigurationChanged(newConfig) }
+    override fun onDestroy() { handler.removeCallbacksAndMessages(null); transport.close(); executor.shutdownNow(); super.onDestroy() }
 }

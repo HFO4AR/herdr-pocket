@@ -6,8 +6,21 @@ android {
         applicationId = "dev.herdr.pocket"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = System.getenv("POCKET_VERSION_CODE")?.toInt() ?: 2
+        versionName = System.getenv("POCKET_VERSION_NAME") ?: "0.2.0"
+    }
+    signingConfigs {
+        if (System.getenv("POCKET_KEYSTORE") != null) create("distribution") {
+            storeFile = file(System.getenv("POCKET_KEYSTORE"))
+            storePassword = System.getenv("POCKET_STORE_PASSWORD")
+            keyAlias = "pocket"
+            keyPassword = System.getenv("POCKET_STORE_PASSWORD")
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            if (System.getenv("POCKET_KEYSTORE") != null) signingConfig = signingConfigs.getByName("distribution")
+        }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
