@@ -18,7 +18,11 @@ def screen():
 
 
 def find(text):
-    for node in screen().iter("node"):
+    nodes = list(screen().iter("node"))
+    for node in nodes:
+        if text == node.get("text", ""):
+            return node
+    for node in nodes:
         if text in node.get("text", ""):
             return node
     return None

@@ -78,7 +78,7 @@ class MainActivity : Activity() {
             setOnClickListener { navigateBack() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         bar.addView(TextView(this).apply {
-            text = "herdr / pocket"; textSize = 18f; setTextColor(ink); typeface = Typeface.create("sans-serif-medium", 0)
+            text = "herdr / pocket"; textSize = 18f; setTextColor(ink); typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             setPadding(dp(8), 0, 0, 0)
         }, LinearLayout.LayoutParams(0, dp(48), 1f))
         root.addView(bar)
@@ -90,7 +90,7 @@ class MainActivity : Activity() {
         setContentView(root)
         label(kicker, 11, mint).letterSpacing = .12f
         label(title, if (screen == "agent") 23 else 28, ink).apply {
-            typeface = Typeface.create("sans-serif-medium", 0); setPadding(0, dp(8), 0, dp(8))
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); setPadding(0, dp(8), 0, dp(8))
         }
         label(subtitle, 13, muted)
         status = TextView(this).apply {
@@ -231,7 +231,7 @@ class MainActivity : Activity() {
                     text = value; textSize = size; setTextColor(color); setPadding(0, dp(4), 0, dp(4)); tile.addView(this)
                 }
                 line("${agent.optString("agent").uppercase()}    /    $state", 11f, mint)
-                line(name, 18f, ink).typeface = Typeface.create("sans-serif-medium", 0)
+                line(name, 18f, ink).typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                 line("${agent.optString("workspace_id")}   ·   打开会话  →", 12f, muted)
                 list.addView(tile, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
             }
