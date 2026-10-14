@@ -11,3 +11,16 @@
 - Physical machinery, irreversible actions, and third-party project safety requirements still require their own authorization. A remote Enter is a real keypress.
 
 For a vulnerability, use GitHub private vulnerability reporting if enabled, or contact the repository owner without posting credentials or exploit details publicly.
+
+## Distribution signing
+
+Automated distributions from v0.2.0 use a dedicated release key (not the v0.1.0 debug certificate).
+Certificate SHA-256:
+
+```
+89301ebbfcd50523b4fac88ec9f6a68d61fba2b41a8d6ad136c972c7caf10fee
+```
+
+Check with Android SDK `apksigner verify --print-certs herdr-pocket.apk`.
+The APK checksum is distributed alongside each release. Signing secrets are only available to main/tag builds;
+pull requests cannot publish. Publication waits for build, lint, bridge tests and offline emulator checks.

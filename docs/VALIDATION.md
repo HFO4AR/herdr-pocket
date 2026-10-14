@@ -1,3 +1,19 @@
+# v0.2.0 redesign validation (2026-10-14)
+
+Validated source: `97ded4a`. [Successful CI and automatic release](https://github.com/HFO4AR/herdr-pocket/actions/runs/38563814065).
+[Signed preview APK](https://github.com/HFO4AR/herdr-pocket/releases/tag/preview-7).
+
+- PASS: 12 bridge unit tests; local debug build; cloud Android lint and debug/release builds.
+- PASS: API 35 emulator checked connection form validation, demo session selection, Agent list, output refresh, visible composer above keyboard, safe demo send, hierarchical back navigation, draft retention, rotation and search empty state.
+- PASS: Actual emulator screenshots inspected: portrait list/output, software keyboard and landscape. See `screenshots/` (offline demo data only).
+- PASS: Dedicated signed release APK independently downloaded; `apksigner verify --print-certs` and SHA-256 checksum verified. Public signing certificate is documented in SECURITY.md.
+- PASS: GitHub Actions automatically published `preview-7` only after all checks passed. Main pushes produce signed preview releases; `v*` tags produce versioned releases.
+- Fixed during verification: font constants rejected by lint; demo polling overwrote send feedback; toolbar alignment and default button shadows.
+- NOT VERIFIED: This version on a physical phone, real APK SSH/SFTP operations, real foreground polling, or prompt/key delivery through the user's tunnel. No real Agent received test input.
+- Rotation preserves the Activity; process death still disconnects and discards in-memory credentials/drafts. Terminal output remains a recent plain-text snapshot, not full conversation history.
+
+---
+
 # Initial validation (2026-10-13)
 
 - PASS: 12 Python bridge unit tests. Covers argument isolation, plain-text terminal output, protocol validation, session existence, agent replacement, busy-state refusal, allowed keys, duplicate/conflicting request IDs, and unknown outcomes.
