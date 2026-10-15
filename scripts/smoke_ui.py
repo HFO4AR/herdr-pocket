@@ -67,8 +67,12 @@ def main():
     live=[line.split()[0] for line in run('devices').decode().splitlines()[1:] if line.endswith('\tdevice')]
     assert len(live)==1 and live[0].startswith('emulator-'),'Require sole emulator, never phone'
     os.environ['ANDROID_SERIAL']=live[0]
-    vault=run('shell','am','instrument','-w','dev.herdr.pocket.test/dev.herdr.pocket.SecureProfilesTest').decode()
+    fixture=['-e','fixturePin',os.environ['POCKET_FIXTURE_PIN']] if os.environ.get('POCKET_FIXTURE_PIN') else []
+    vault=run('shell','am','instrument','-w',*fixture,'dev.herdr.pocket.test/dev.herdr.pocket.SecureProfilesTest').decode()
+    if fixture: assert 'ssh-pty: PASS' in vault,vault
+    assert 'terminal-buffer: PASS' in vault,vault
     assert 'vault-tests: PASS (2 tests)' in vault,vault
+    if fixture: print('PASS: SSH fixture PTY, UTF-8, persistent cwd, resize, Ctrl+C, stale target and duplicate input',flush=True)
     print('PASS: Keystore save/reload/no plaintext/destination change/forget/delete',flush=True)
     run('shell','am','start','-W','-n','dev.herdr.pocket/.MainActivity')
     tap('添加第一台设备')
@@ -82,6 +86,10 @@ def main():
     run('shell','am','start','-W','-n','dev.herdr.pocket/.MainActivity')
     expect('Test-workstation');expect('密码已加密保存')
     print('PASS: device/password survives process restart',flush=True)
+    tap('编辑 Test-workstation');tap('记住密码 · 本机加密保存');tap('保存设备')
+    expect('连接时输入密码');tap('连接设备')
+    expect('记住密码 · 登录成功后加密保存');tap('关闭')
+    print('PASS: actual connection dialog exposes remember-password option',flush=True)
     tap('体验聊天演示')
     expect('在线会话');screenshot('agents')
     tap('把移动端做成真正的聊天工具')
@@ -107,6 +115,11 @@ def main():
     run('shell','settings','put','system','user_rotation','0');time.sleep(2)
     tap('返回列表');tap('历史');expect('历史记录');screenshot('history')
     tap('我的');expect('workstation.local');screenshot('account')
+    tap('终端');tap('开发终端');screenshot('herdr-terminal')
+    fill('终端输入','demo-command');run('shell','input','keyevent','4');tap('执行');expect('终端演示：未发送')
+    tap('返回终端列表');tap('打开 SSH 终端');time.sleep(1);screenshot('ssh-terminal')
+    tap('Ctrl+C');expect('终端演示：未发送')
+    tap('返回终端列表');tap('返回 SSH 终端');expect('直接键盘')
     print('PASS: chat, pagination, commands, child isolation, drafts, keyboard, rotation, history and SSH info; no real host calls',flush=True)
 
 

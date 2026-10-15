@@ -7,3 +7,4 @@ Original app and bridge code are MIT licensed. This is not a fork of another mob
 - Kotlin standard library — Apache License 2.0.
 - Android SDK/Gradle tooling have their own licenses and are not part of this project's MIT grant.
 - Herdr is a separately installed dependency and is not bundled.
+- [xterm.js](https://github.com/xtermjs/xterm.js), @xterm/xterm 6.0.0 and @xterm/addon-fit 0.11.0 — MIT license. Bundled offline terminal renderer; exact license texts in `app/src/main/assets/ui/vendor/`.

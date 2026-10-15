@@ -61,7 +61,9 @@ class MainActivity : Activity() {
         }
         setContentView(container)
         val html = assets.open("ui/index.html").bufferedReader().use { it.readText() }
-            .replace("/*BUNDLED_CSS*/", assets.open("ui/app.css").bufferedReader().use { it.readText() })
+            .replace("/*BUNDLED_CSS*/", assets.open("ui/vendor/xterm.css").bufferedReader().use { it.readText() } + assets.open("ui/app.css").bufferedReader().use { it.readText() })
+            .replace("/*TERMINAL_VENDOR*/", assets.open("ui/vendor/xterm.js").bufferedReader().use { it.readText() } + "\n" + assets.open("ui/vendor/addon-fit.js").bufferedReader().use { it.readText() })
+            .replace("/*TERMINAL_APP*/", assets.open("ui/terminals.js").bufferedReader().use { it.readText() })
             .replace("/*BUNDLED_JS*/", assets.open("ui/app.js").bufferedReader().use { it.readText() })
         web.loadDataWithBaseURL("https://pocket.invalid/", html, "text/html", "UTF-8", null)
     }
@@ -78,9 +80,13 @@ class MainActivity : Activity() {
         try {
             transport.connect(endpoint, password, pins.getString(pinId, null))
             transport.useBundled(bridge)
+            if (request.has("remember") && request.optString("password").isNotEmpty()) {
+                vault.save(JSONObject(device.toString()).put("password", password).put("remember", request.getBoolean("remember")))
+            }
+            device.put("remember", vault.get(device.getString("id")).optString("password").isNotEmpty())
             connectedDevice = JSONObject(device.toString()).apply { remove("password") }
             val ready = try { transport.request(JSONObject().put("op", "hello")).getInt("protocol") == 1 } catch (_: Exception) { false }
-            success(id, JSONObject().put("device", connectedDevice).put("ready", ready))
+            success(id, JSONObject().put("device", connectedDevice).put("ready", ready).put("devices", vault.list()))
         } catch (e: UntrustedHost) {
             if (trusted) { failure(id, e); return }
             runOnUiThread {
@@ -111,7 +117,7 @@ class MainActivity : Activity() {
                                 }
                                 pins.edit().remove("host").remove("port").remove("user").putBoolean("profilesMigrated", true).apply()
                             }
-                            success(id, JSONObject().put("devices", vault.list()))
+                            success(id, JSONObject().put("devices", vault.list()).put("version", packageManager.getPackageInfo(packageName, 0).versionName))
                         }
                         "saveDevice" -> success(id, vault.save(req))
                         "deleteDevice" -> { vault.delete(req.getString("id")); success(id, JSONObject().put("devices", vault.list())) }
@@ -130,9 +136,13 @@ class MainActivity : Activity() {
                             runOnUiThread { window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
                             success(id, JSONObject())
                         }
+                        "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> {
+                            check(connectedDevice != null) { "请先连接设备" }
+                            success(id, transport.terminal(op, req))
+                        }
                         "remote" -> {
                             check(connectedDevice != null) { "请先连接设备" }
-                            check(req.optString("op") in setOf("sessions", "agents", "read", "prompt", "key", "catalog", "history", "account")) { "不支持的操作" }
+                            check(req.optString("op") in setOf("sessions", "agents", "read", "prompt", "key", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey")) { "不支持的操作" }
                             success(id, transport.request(req))
                         }
                         else -> error("不支持的操作")

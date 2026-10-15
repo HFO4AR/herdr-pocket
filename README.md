@@ -4,7 +4,7 @@ An independent, open-source Android companion for [Herdr](https://herdr.dev).
 Built from scratch in Kotlin, with a small auditable Python bridge carried inside the APK.
 Not affiliated with Herdr or other similarly named mobile apps.
 
-**Status: v0.3.0 experimental.** Android SSH companion with a bundled offline chat UI and read-only Codex / Claude transcript adapters.
+**Status: v0.4.0 experimental.** Android SSH companion with a bundled offline chat UI and read-only Codex / Claude transcript adapters.
 
 [Download signed APK](https://github.com/HFO4AR/herdr-pocket/releases) · [Build checks](https://github.com/HFO4AR/herdr-pocket/actions)
 
@@ -13,6 +13,14 @@ Not affiliated with Herdr or other similarly named mobile apps.
 Screenshots use offline fixtures, never real conversations or credentials.
 
 视觉采用 Host App 默认亮色 / coral 设计规则：暖白底、珊瑚橙选中态、黑色主按钮，10 / 14 / 20 px 圆角与相同字体顺序。移动端保留至少 44 px 主要触控目标和聊天布局；当前不包含 Host 的深色主题选择器。
+
+## 这版新增
+
+- **SSH 交互终端**：在「终端」打开独立 PTY shell；彩色输出、Tab、方向键、Ctrl+C、Ctrl+D、直接键盘及中文命令输入。返回列表保留 shell；断开设备或关闭 shell 才结束。手机端保留有界输出，后台超过缓存会明确提示丢失更早输出，不会重放输入。
+- **Herdr 普通分屏**：「终端」列出所选会话所有工作区的非 Agent 分屏，读取近期输出，向同一终端发送文本、回车或快捷键。每次校验终端身份，分屏换进程成为 Agent 后拒绝继续用旧目标输入。这里显示 400 行近期快照，非桌面完整终端画面的像素镜像。
+- **历史缺失修复**：除 Herdr 会话 ID 外，支持明确的原生 resume ID / transcript 路径 / 打开的历史文件；同 ID 多副本不会再导致关联失败。缺少确证时直接显示项目候选，点选后可只读浏览或人工确认关联，避免空白页面。超过 2 MB 的内部记录尾部会自动跳过，跨分页边界不再漏消息；失败保留原因和重试入口。
+- **ch-cli 远端历史**：沿当前已建立的 SSH 路由，只读对应远端用户的历史目录；专用路由工作目录中唯一的会话自动关联，多个会话提供选择。不会读取服务商登录资料、安装远端程序或重启正在运行的 Agent。
+- **连接时记住密码**：实际输入登录密码的弹窗新增默认勾选的保存选项；仅认证成功后加密保存。认证失败可以重新输入，不必删除设备。「我的」显示版本与密码保存状态。
 
 ## 这版能做什么
 
@@ -39,7 +47,7 @@ Sakura Frp 使用 **TCP 隧道，目标指向运行 Herdr 的电脑 SSH 端口**
 
 ## 隐私与边界
 
-- SSH 是唯一网络传输。界面 HTML/CSS/JS 内置于 APK，不加载网站、CDN 或远程脚本；禁用 WebView 网络资源、外部导航、文件和内容 URL。
+- SSH 是唯一网络传输。SSH 终端使用同一已验证连接上的独立 shell 通道。界面 HTML/CSS/JS 内置于 APK，不加载网站、CDN 或远程脚本；禁用 WebView 网络资源、外部导航、文件和内容 URL。
 - 保存的设备资料和密码全部加密存于 App 私有存储，密钥留在 Android Keystore。Android 备份关闭。没有分析统计或广告。
 - 历史正文按需读取，不复制到电脑索引缓存；私有缓存只保存标题和会话元数据。手机历史和草稿仅在内存中。
 - 不读取 Codex/Claude 登录凭据，不显示隐藏推理或系统/开发者消息；内部 guardian 记录不作为用户会话列出。

@@ -107,4 +107,124 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(data['total'],1)
         with self.assertRaises(bridge.BridgeError):bridge.handle({'v':1,'op':'history','record_id':data['records'][0]['id'],'before':-1})
 
+    def test_sparse_internal_tail_does_not_hide_messages(self):
+        self.write('codex', 'sparse.jsonl', [codex('user', 'visible earlier'),
+            {'type': 'world_state', 'payload': 'x' * 3_000_000},
+            {'type': 'event_msg', 'payload': {'type': 'token_count'}}])
+        entries = bridge.transcript_catalog()
+        page = bridge.history_page({'record_id': entries[0]['id']}, entries)
+        self.assertEqual([x['text'] for x in page['messages']], ['visible earlier'])
+        self.assertFalse(page['has_more'])
+
+    def test_window_boundary_message_is_not_lost(self):
+        rows = [codex('user', 'first'), codex('assistant', 'cross-boundary' + 'x' * 200_000)]
+        rows += [{'type': 'event_msg', 'payload': {'type': 'token_count', 'padding': 'y' * 100_000}} for _ in range(19)]
+        self.write('codex', 'boundary.jsonl', rows)
+        entries = bridge.transcript_catalog()
+        page = bridge.history_page({'record_id': entries[0]['id']}, entries)
+        self.assertEqual(len(page['messages']), 2)
+        self.assertTrue(page['messages'][1]['text'].startswith('cross-boundary'))
+        self.assertFalse(page['has_more'])
+
+    def test_no_discovery_from_cwd_or_arbitrary_uuid(self):
+        thread = '11111111-2222-3333-4444-555555555555'
+        self.assertEqual(bridge.explicit_session_ids(['sh', '-c', 'codex resume ' + thread], 'codex'), set())
+        self.assertEqual(bridge.explicit_session_ids(['codex', 'explain ' + thread], 'codex'), set())
+        self.assertEqual(bridge.explicit_session_ids(['codex', 'resume', thread], 'codex'), {thread})
+        self.assertEqual(bridge.explicit_session_ids(['claude', '--resume=' + thread], 'claude'), {thread})
+
+    def test_history_resolution_exact_process_resume_and_path(self):
+        thread = '11111111-2222-3333-4444-555555555555'
+        path = self.write('codex', 'root.jsonl', [{'type':'session_meta','payload':{'id':thread}},codex('user','hello')])
+        entries = bridge.transcript_catalog()
+        agent = {'agent':'codex','pane_id':'test:1','agent_session':None}
+        info = {'process_info': {'foreground_processes':[{'pid':123,'argv':['codex','resume',thread]}]}}
+        with patch.object(bridge,'call',return_value=info), patch.object(bridge,'process_snapshot',return_value=None):
+            ref = bridge.resolve_agent_history(agent, [], entries)
+        self.assertEqual(ref['record_id'], entries[0]['id'])
+        self.assertEqual(ref['source'],'process')
+        agent['agent_session'] = {'kind':'path','value':str(path)}
+        self.assertEqual(bridge.resolve_agent_history(agent, [], entries)['thread'],thread)
+        agent['agent_session']['value'] = '/outside/private.jsonl'
+        self.assertEqual(bridge.resolve_agent_history(agent, [], entries)['status'],'missing')
+
+    def test_history_resolution_fd_remote_and_ambiguity(self):
+        paths = [self.write('codex', str(i)+'.jsonl', [{'type':'session_meta','payload':{'id':str(i)}},codex('user','same project')]) for i in range(2)]
+        entries = bridge.transcript_catalog()
+        agent = {'agent':'codex','pane_id':'test:1'}
+        info = {'process_info': {'foreground_processes':[{'pid':123}]}}
+        snapshots = {123:{'argv':['python3','relay.py'],'children':[124],'paths':[]},124:{'argv':['ssh','host'],'children':[],'paths':[]}}
+        with patch.object(bridge,'call',return_value=info), patch.object(bridge,'process_snapshot',side_effect=snapshots.get):
+            self.assertEqual(bridge.resolve_agent_history(agent, [], entries)['status'],'remote')
+        snapshot = {'argv':['codex'],'children':[],'paths':paths}
+        with patch.object(bridge,'call',return_value=info), patch.object(bridge,'process_snapshot',return_value=snapshot):
+            self.assertEqual(bridge.resolve_agent_history(agent, [], entries)['status'],'ambiguous')
+            snapshot['paths'] = paths[:1]
+            self.assertEqual(bridge.resolve_agent_history(agent, [], entries)['status'],'matched')
+            snapshot['paths'] = [self.home/'private.jsonl']
+            self.assertEqual(bridge.resolve_agent_history(agent, [], entries)['status'],'unavailable')
+
+    def test_duplicate_rollouts_of_same_thread_can_resolve(self):
+        for name in ('old.jsonl','new.jsonl'):
+            self.write('codex',name,[{'type':'session_meta','payload':{'id':'same-thread'}},codex('user','hello')])
+        agent={'agent':'codex','pane_id':'test:1','agent_session':{'kind':'id','value':'same-thread'}}
+        entries=bridge.transcript_catalog()
+        ref=bridge.resolve_agent_history(agent,[],entries)
+        self.assertEqual(ref['status'],'matched')
+        self.assertEqual(ref['record_id'],entries[0]['id'])
+
+    def test_ch_ssh_route_parser_only_accepts_live_attach(self):
+        sid='11111111-2222-3333-4444-555555555555'
+        argv=['ssh','-tt','-p','2222','-i','/fixture/key','-o','StrictHostKeyChecking=no','user@fixture.invalid',"exec /fixture/ch.route __native-attach '"+sid+"'",'']
+        route=bridge.ch_ssh_route(argv)
+        self.assertIsNotNone(route)
+        self.assertNotIn('StrictHostKeyChecking=no',route['ssh'])
+        self.assertEqual(route['workspace'],'~/.local/share/ch/workspaces/'+sid)
+        self.assertIsNone(bridge.ch_ssh_route(['sh','-c',' '.join(argv)]))
+        self.assertIsNone(bridge.ch_ssh_route(['ssh','host','echo __native-attach '+sid]))
+        self.assertIsNone(bridge.ch_ssh_route(['ssh','host',"exec ch --state /tmp/../private __native-attach "+sid]))
+
+    def test_remote_catalog_uses_one_host_fetch_and_does_not_guess(self):
+        route={'ssh':['host'],'workspace':'~/workspaces/route','key':'fixture'}
+        record={'id':'a'*64,'thread':'thread','provider':'claude','parent':None,'title':'fixture','cwd':'/remote/workspaces/route'}
+        bridge._remote_catalog_cache.clear()
+        self.addCleanup(bridge._remote_catalog_cache.clear)
+        with patch.object(bridge,'remote_read',return_value={'records':[record],'home':'/remote'}) as read:
+            first=bridge.remote_catalog(route,{'target':'one'})
+            second=bridge.remote_catalog(dict(route,workspace='~/workspaces/other'),{'target':'two'})
+        self.assertEqual(read.call_count,1)
+        self.assertTrue(first[0]['route_match'])
+        self.assertFalse(second[0]['route_match'])
+        self.assertTrue(first[0]['id'].startswith('remote:fixture:'))
+
+    def test_remote_request_revalidates_route_and_record_namespace(self):
+        route={'ssh':['host'],'workspace':'~/workspaces/route','key':'fixture'}
+        context={'session':'default','target':'test:1','identity':'snapshot'}
+        record={'id':'a'*64,'thread':'thread','provider':'claude'}
+        result={'record':record,'children':[],'messages':[],'before':0,'has_more':False}
+        request={'op':'history','record_id':'remote:fixture:'+'a'*64,'remote':context}
+        with patch.object(bridge,'route_for_context',return_value=route) as revalidate,patch.object(bridge,'remote_read',return_value=result):
+            page=bridge.remote_history_request(request)
+            self.assertEqual(page['record']['remote'],context)
+            revalidate.assert_called_once_with(context)
+            with self.assertRaises(bridge.BridgeError):bridge.remote_history_request(dict(request,record_id='remote:other:'+'a'*64))
+
+    def test_remote_reader_stdin_executes_only_allowed_read_entry(self):
+        import subprocess
+        record=self.write('codex','remote.jsonl',[codex('user','synthetic message')])
+        route={'ssh':['fixture.invalid'],'workspace':'/fixture','key':'fixture'}
+        captured=[]
+        def run(args,**kwargs):
+            captured.append((args,kwargs))
+            # Compile the actual remote payload to catch source embedding errors.
+            compile(kwargs['input'],'remote-bridge','exec')
+            self.assertNotIn('environ',kwargs['input'].split('request = json.loads(')[-1])
+            return subprocess.CompletedProcess(args,0,'{"records":[],"home":"/fixture"}','')
+        with patch.object(bridge.subprocess,'run',side_effect=run):
+            bridge.remote_read(route,{'op':'catalog','workspace':'/fixture'})
+        self.assertIn('StrictHostKeyChecking=yes',captured[0][0])
+        self.assertIn('transcript_catalog(write_cache=False)',captured[0][1]['input'])
+        with patch.object(bridge.subprocess,'run',return_value=subprocess.CompletedProcess([],1,'','private server error')):
+            with self.assertRaisesRegex(bridge.BridgeError,'远端历史读取失败'):bridge.remote_read(route,{'op':'catalog','workspace':'/fixture'})
+
 if __name__=='__main__':unittest.main()

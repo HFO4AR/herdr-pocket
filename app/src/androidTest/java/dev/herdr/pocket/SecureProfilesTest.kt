@@ -6,12 +6,15 @@ import android.os.Bundle
 import org.json.JSONObject
 
 class SecureProfilesTest : Instrumentation() {
-    override fun onCreate(arguments: Bundle?) { super.onCreate(arguments); start() }
+    private var fixturePin = ""
+    override fun onCreate(arguments: Bundle?) { fixturePin = arguments?.getString("fixturePin") ?: ""; super.onCreate(arguments); start() }
     override fun onStart() {
         try {
             testPasswordSurvivesReloadWithoutPlaintextOrCrossHostReuse()
             testUncheckingRememberErasesPassword()
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)") })
+            testTerminalBuffer()
+            if (fixturePin.isNotEmpty()) testSshPty()
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS" else "ssh-pty: SKIPPED") })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
@@ -45,4 +48,64 @@ class SecureProfilesTest : Instrumentation() {
             assertEquals("", SecureProfiles(targetContext).get(id).getString("password"))
         } finally { vault.delete(id) }
     }
+    private fun testTerminalBuffer() {
+        val buffer = TerminalBuffer(8)
+        buffer.append("abcdef".toByteArray(), 6)
+        val first = buffer.read(0)
+        check(first.getLong("next") == 6L && !first.getBoolean("lost"))
+        check(first.toString() == buffer.read(0).toString())
+        buffer.append("ghijkl".toByteArray(), 6)
+        val lost = buffer.read(0)
+        check(lost.getBoolean("lost"))
+        check(String(java.util.Base64.getDecoder().decode(lost.getString("data"))) == "efghijkl")
+        check(buffer.read(12).getString("data") == "")
+    }
+    private fun testSshPty() {
+        val ssh = SshTransport()
+        try {
+            ssh.connect(Endpoint("10.0.2.2", 22222, "pocket-fixture"), "pocket-fixture-password", fixturePin)
+            ssh.install(targetContext.assets.open("pocket_bridge.py").use { it.readBytes() })
+            val catalog = ssh.request(JSONObject().put("op", "catalog"))
+            val record = catalog.getJSONArray("records").getJSONObject(0)
+            val history = ssh.request(JSONObject().put("op", "history").put("record_id", record.getString("id")))
+            check(history.getJSONArray("messages").length() == 2) { "SSH history fixture missing messages" }
+            val id = ssh.terminal("shellOpen", JSONObject().put("cols", 80).put("rows", 24)).getString("id")
+            var cursor = 0L
+            fun args() = JSONObject().put("terminalId", id)
+            fun awaitText(expected: String): String {
+                val bytes = java.io.ByteArrayOutputStream()
+                val deadline = System.nanoTime() + 10_000_000_000L
+                while (System.nanoTime() < deadline) {
+                    val r = ssh.terminal("shellRead", args().put("cursor", cursor))
+                    cursor = r.getLong("next")
+                    bytes.write(java.util.Base64.getDecoder().decode(r.getString("data")))
+                    val text = bytes.toString("UTF-8")
+                    if (text.contains(expected)) return text
+                    Thread.sleep(50)
+                }
+                error("SSH fixture output timed out")
+            }
+            ssh.terminal("shellWrite", args().put("sequence", 1).put("text", "stty -echo; printf 'READY'; printf '%s\\n' '-PTY'\r"))
+            awaitText("READY-PTY")
+            ssh.terminal("shellWrite", args().put("sequence", 2).put("text", "cd /tmp; printf '位置:'; pwd\r"))
+            awaitText("位置:/tmp")
+            ssh.terminal("shellResize", args().put("cols", 91).put("rows", 31))
+            ssh.terminal("shellWrite", args().put("sequence", 3).put("text", "stty size\r"))
+            awaitText("31 91")
+            var rejected = false
+            try { ssh.terminal("shellWrite", args().put("sequence", 3).put("text", "echo duplicated\r")) } catch (_: IllegalArgumentException) { rejected = true }
+            check(rejected) { "Duplicate input accepted" }
+            rejected = false
+            try { ssh.terminal("shellWrite", JSONObject().put("terminalId", "stale").put("sequence", 4).put("text", "echo wrong\r")) } catch (_: IllegalStateException) { rejected = true }
+            check(rejected) { "Wrong terminal accepted" }
+            ssh.terminal("shellWrite", args().put("sequence", 4).put("text", "sleep 30\r"))
+            Thread.sleep(200)
+            ssh.terminal("shellWrite", args().put("sequence", 5).put("text", "\u0003"))
+            Thread.sleep(200)
+            ssh.terminal("shellWrite", args().put("sequence", 6).put("text", "printf 'INTERRUPTED'; printf '%s\\n' '-OK'\r"))
+            awaitText("INTERRUPTED-OK")
+            ssh.terminal("shellClose", args())
+        } finally { ssh.close() }
+    }
+
 }

@@ -116,6 +116,27 @@ class SshTransport : AutoCloseable {
             return result.getJSONObject("data")
         } finally { channel.disconnect() }
     }
-    override fun close() { session?.disconnect(); session = null }
+    private var shell: ShellTerminal? = null
+    fun terminal(op: String, req: JSONObject): JSONObject {
+        val ssh = session ?: error("尚未连接")
+        check(ssh.isConnected) { "SSH 已断开，请重新连接；未重发输入" }
+        if (op == "shellOpen") {
+            check(shell == null) { "已有 SSH 终端，请先关闭或返回原终端" }
+            val opened = ShellTerminal(ssh.openChannel("shell") as ChannelShell, req.optInt("cols", 80), req.optInt("rows", 24))
+            shell = opened
+            return JSONObject().put("id", opened.id)
+        }
+        val current = shell ?: error("SSH 终端不存在")
+        check(req.getString("terminalId") == current.id) { "终端已更换，拒绝旧页面输入" }
+        when (op) {
+            "shellRead" -> return current.read(req.getLong("cursor"))
+            "shellWrite" -> current.write(req.getLong("sequence"), req.getString("text"))
+            "shellResize" -> current.resize(req.getInt("cols"), req.getInt("rows"))
+            "shellClose" -> { current.close(); shell = null }
+            else -> error("不支持的终端操作")
+        }
+        return JSONObject()
+    }
+    override fun close() { shell?.close(); shell = null; session?.disconnect(); session = null }
     private fun quote(value: String) = "'" + value.replace("'", "'\"'\"'") + "'"
 }

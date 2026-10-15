@@ -32,3 +32,13 @@ History access is limited to JSONL files within the SSH user's `~/.codex/session
 Adapters exclude system/developer messages, private reasoning and internal guardian records. Commands/results are historical evidence, never executable UI. Text uses DOM text nodes, not HTML interpolation. Transcript sources are private third-party formats and remain version-sensitive.
 
 The Android WebView only runs UI assets packaged in the APK, with network loads, external navigation, file/content access and frames blocked. CSP disables external scripts/resources. Native RPC results are JSON values, never concatenated HTML. UI tests contain fake devices only. Encrypted data is excluded from Android backup; losing the Keystore key means saved credentials need to be entered again.
+
+
+The SSH terminal opens a PTY only on explicit user action. It supports arbitrary shell input as a user terminal, including destructive commands; commands are never synthesized or automatically replayed. Output uses a bounded in-memory ring. xterm.js and its styles are bundled offline, with OSC 52 clipboard access suppressed. Closing the independent shell may terminate programs in it; returning to the list does not close it. Herdr pane input targets are revalidated and require durable UUID receipts.
+
+The connection password dialog can now persist the supplied password after successful authentication. Failed authentication does not overwrite the saved secret. Passwords remain absent from device list responses and UI output.
+
+
+For explicitly authorized ch-cli remote history access, the bridge reuses transport metadata from the live SSH attach process, with `BatchMode=yes`, strict host-key checking and forwarding disabled. It never copies or reads private-key contents, provider auth/config files, or process environment. Remote history roots remain the corresponding SSH user's `~/.codex/sessions` and `~/.claude/projects`. The adapter arrives through stdin and does not install remote files or persist a remote cache. Account display remains the primary SSH connection's username/hostname.
+
+Remote record identifiers are bound to a rediscovered live route; the app cannot supply an arbitrary SSH destination or filesystem path. A unique dedicated ch-cli route workspace can identify its one native conversation. Generic cwd matches and ambiguous routes provide explicit read-only choices. Selecting history does not resume a provider session or send input. Temporary SSH/read failures remain visible and do not authorize mutation replay.
