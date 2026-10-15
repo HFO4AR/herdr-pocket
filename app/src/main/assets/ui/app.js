@@ -15,6 +15,15 @@ let seq=0;const pending=new Map();
 function rpc(op,args={},progress){return new Promise((resolve,reject)=>{const id='r'+(++seq);pending.set(id,{resolve,reject,progress});try{PocketNative.request(id,op,JSON.stringify(args));}catch(e){pending.delete(id);reject(e);}});}
 window.nativeResult=(id,r)=>{const p=pending.get(id);if(!p)return;pending.delete(id);r.ok?p.resolve(r.data):p.reject(new Error(r.error));};
 window.nativeProgress=(id,stage)=>{pending.get(id)?.progress?.(stage);};
+// Connection events pushed by the native layer (silent reconnects).
+window.nativeEvent=e=>{
+ if(e.type==='reconnecting'){S.reconnecting=true;toast('连接断了，正在重新连接…');}
+ else if(e.type==='reconnected'){S.reconnecting=false;toast('已重新连接');if(typeof T!=='undefined'&&T.shell&&!T.shell.ended){T.shell.ended=true;terminalStatus(T.shell,'连接中断过，这个 SSH 终端已结束；返回列表重新打开');}}
+ else if(e.type==='reconnect_failed'){S.reconnecting=false;}};
+window.openFromNotification=pane=>{S.pendingPane=pane;if(!S.device)return;const a=S.agents.find(x=>x.pane_id===pane);if(a){openPending();return;}setTab('live');};
+function openPending(){const pane=S.pendingPane;if(!pane||!S.device)return;S.pendingPane=null;const a=S.agents.find(x=>x.pane_id===pane);if(!a){toast('那个 Agent 已经不在这个会话里了');return;}if(typeof T!=='undefined')leaveTerminal();closeSheet();openAgent(a);}
+// The background watcher only notifies about changes after what the UI already showed.
+function syncWatch(){if(S.demo||!S.device||!S.session)return;const states={};S.agents.forEach(a=>{states[a.pane_id+'/'+a.identity]=a.agent_status||'';});rpc('watchState',{session:S.session,states}).catch(()=>{});}
 // Reassignable on purpose: offline tests wrap it to observe requests.
 let remote=(op,args={})=>S.demo?demoRequest(op,args):rpc('remote',{op,...args});
 
@@ -123,6 +132,7 @@ function devicesPage(main){
 function connectionCard(){
  const card=el('section','card account-card');const top=el('div','row');top.append(avatar('', 'ok'));const t=el('div','grow');t.append(el('div','card-title',S.device.name),el('div','card-meta',S.demo?'离线演示':'SSH 已连接'));top.append(t);card.append(top);
  [['SSH 用户',S.account?.ssh_user||S.device.user],['主机地址',S.device.host],['端口',String(S.device.port)],['电脑主机名',S.account?.hostname||'读取中…'],['密码保存',S.device.remember?'已加密保存':'未保存'],['应用版本',S.version||'—']].forEach(([k,v])=>{const n=el('div','setting-row');n.append(el('span','',k),el('span','',v));card.append(n);});
+ if(!S.demo){const toggle=el('label','switch-row');const box=el('input');box.type='checkbox';box.checked=S.alerts!==false;box.setAttribute('aria-label','后台提醒');box.onchange=async()=>{try{S.alerts=(await rpc('setAlerts',{enabled:box.checked})).alerts;toast(S.alerts?'切到后台时会继续关注 Agent':'已关闭后台提醒');}catch(e){box.checked=!box.checked;error(e);}};const t=el('span','grow');t.append(el('strong','','后台提醒'),el('small','','切到后台后，Agent 完成或等你确认时发通知'));toggle.append(t,box,el('span','switch'));card.append(toggle);}
  const actions=el('div','device-actions');actions.append(btn('更新桥接程序','secondary',setupBridge),btn('断开连接','secondary danger',()=>confirmAction('断开当前设备？','电脑上的 Agent 会继续运行。','断开',()=>disconnect().catch(error),true)));card.append(actions);
  card.append(el('p','fine','只显示 SSH 连接信息，不读取 Codex / Claude 的登录资料。'));return card;}
 function field(box,title,value='',type='text',placeholder=''){const label=el('label','',title);const input=el('input','field');input.type=type;input.value=value;input.placeholder=placeholder;input.autocomplete='off';input.setAttribute('aria-label',title);label.append(input);box.append(label);return input;}
@@ -170,7 +180,7 @@ async function loadLive(){
  if(!S.device)return;const epoch=++S.epoch;S.liveLoading=S.agents.length?'agents':'sessions';S.liveError='';if(S.tab==='live'&&!S.chat)render();
  try{const r=await remote('sessions');if(epoch!==S.epoch)return;S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];return;}
   S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
-  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;}
+  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;syncWatch();if(S.pendingPane){S.liveLoading=false;openPending();return;}}
  catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
  finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
 // Lightweight status refresh: Herdr state only, keeps resolved history refs.
@@ -180,7 +190,7 @@ async function refreshStatus(){
   const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}if(old.agent_status!==a.agent_status||titleOf(old)!==titleOf(a))changed=true;return {...old,...a,history_ref:old.history_ref};});
   if(next.length!==S.agents.length)changed=true;
   const fresh=next.filter(a=>!known.has(a.pane_id)||known.get(a.pane_id).identity!==a.identity);
-  S.agents=next;
+  S.agents=next;if(changed)syncWatch();
   if(S.chat?.agent){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status};onAgentStatus(was,cur.agent_status);}}
   if(fresh.length&&S.tab==='live'&&!S.chat){loadLive();return;}
   if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}
@@ -429,5 +439,5 @@ async function demoRequest(op,r){
  if(op==='prompt'||op==='key')return{sent:false};
  throw Error('演示不支持此操作');}
 
-async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;render();}catch(e){error(e);}}
+async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;if(r.connected&&!S.device){S.device=r.connected;setTab('live');return;}render();}catch(e){error(e);}}
 boot();

@@ -13,8 +13,8 @@ class SecureProfilesTest : Instrumentation() {
             testPasswordSurvivesReloadWithoutPlaintextOrCrossHostReuse()
             testUncheckingRememberErasesPassword()
             testTerminalBuffer()
-            if (fixturePin.isNotEmpty()) testSshPty()
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS" else "ssh-pty: SKIPPED") })
+            if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect() }
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS" else "ssh-pty: SKIPPED") })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
@@ -108,4 +108,35 @@ class SecureProfilesTest : Instrumentation() {
         } finally { ssh.close() }
     }
 
+    private fun testSilentReconnect() {
+        PocketCore.init(targetContext)
+        val events = mutableListOf<String>()
+        PocketCore.listener = { type, _ -> events.add(type) }
+        val endpoint = Endpoint("10.0.2.2", 22222, "pocket-fixture")
+        val pinKey = PocketCore.pinId(endpoint)
+        val previousPin = PocketCore.pins.getString(pinKey, null)
+        val id = PocketCore.vault.save(JSONObject().put("name", "fixture").put("host", endpoint.host).put("port", endpoint.port)
+            .put("user", endpoint.user).put("password", "pocket-fixture-password").put("remember", true)).getString("id")
+        try {
+            PocketCore.pins.edit().putString(pinKey, fixturePin).commit()
+            PocketCore.connect(PocketCore.vault.get(id), "pocket-fixture-password") {}
+            PocketCore.transport.install(PocketCore.bridge)
+            check(PocketCore.request(JSONObject().put("op", "hello")).getInt("protocol") == 1)
+            // A dropped session is restored before anything is written.
+            PocketCore.transport.simulateDrop()
+            check(!PocketCore.transport.isConnected())
+            check(PocketCore.request(JSONObject().put("op", "hello")).getInt("protocol") == 1) { "No reconnect" }
+            check(events == listOf("reconnecting", "reconnected")) { "Unexpected events $events" }
+            // A changed host key must stop automatic reconnects.
+            PocketCore.pins.edit().putString(pinKey, "AAAAC3NzaC1lZDI1NTE5AAAAIChangedChangedChangedChangedChangedChange").commit()
+            PocketCore.transport.simulateDrop()
+            var refused = false
+            try { PocketCore.request(JSONObject().put("op", "hello")) } catch (e: IllegalStateException) { refused = e.message?.contains("主机密钥") == true }
+            check(refused) { "Reconnected despite a changed host key" }
+        } finally {
+            PocketCore.disconnect(); PocketCore.listener = null
+            PocketCore.vault.delete(id)
+            PocketCore.pins.edit().apply { if (previousPin == null) remove(pinKey) else putString(pinKey, previousPin) }.commit()
+        }
+    }
 }

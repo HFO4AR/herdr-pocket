@@ -77,10 +77,11 @@ def main():
     os.environ['ANDROID_SERIAL']=live[0]
     fixture=['-e','fixturePin',os.environ['POCKET_FIXTURE_PIN']] if os.environ.get('POCKET_FIXTURE_PIN') else []
     vault=run('shell','am','instrument','-w',*fixture,'dev.herdr.pocket.test/dev.herdr.pocket.SecureProfilesTest').decode()
-    if fixture: assert 'ssh-pty: PASS' in vault,vault
+    if fixture: assert 'ssh-pty: PASS' in vault and 'ssh-reconnect: PASS' in vault,vault
     assert 'terminal-buffer: PASS' in vault,vault
     assert 'vault-tests: PASS (2 tests)' in vault,vault
     if fixture: print('PASS: SSH fixture PTY, UTF-8, persistent cwd, resize, Ctrl+C, stale target and duplicate input',flush=True)
+    if fixture: print('PASS: silent reconnect after a dropped session; refused after a host-key change',flush=True)
     print('PASS: Keystore save/reload/no plaintext/destination change/forget/delete',flush=True)
     run('shell','am','start','-W','-n','dev.herdr.pocket/.MainActivity')
     tap('添加第一台设备')

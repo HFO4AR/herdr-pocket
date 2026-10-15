@@ -112,6 +112,17 @@ small,.muted{color:var(--muted);font-size:12px;line-height:1.5}
 .connection-status strong{display:block;margin-bottom:2px}
 .connection-status.failed{color:var(--danger);border-color:#f3c9c6;background:var(--danger-soft)}
 
+/* Toggle */
+.switch-row{display:flex;align-items:center;gap:12px;margin:14px 0 0;padding:12px 0 2px;border-top:1px solid var(--line);font-weight:400;cursor:pointer}
+.switch-row strong{display:block;font-size:14px;font-weight:600;color:var(--ink)}
+.switch-row small{display:block;margin-top:2px}
+.switch-row input{position:absolute;opacity:0;width:1px;height:1px}
+.switch{position:relative;width:44px;height:26px;border-radius:13px;background:var(--line-strong);flex-shrink:0;transition:background .18s var(--ease)}
+.switch:after{content:'';position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transition:transform .18s var(--ease)}
+.switch-row input:checked+.switch{background:var(--success)}
+.switch-row input:checked+.switch:after{transform:translateX(18px)}
+.switch-row input:focus-visible+.switch{outline:2px solid #8c2c00;outline-offset:2px}
+
 /* Forms & sheets */
 .form-grid{display:grid;grid-template-columns:1fr 92px;gap:12px}
 label{display:block;font-size:12px;font-weight:600;margin:14px 0 6px;color:var(--ink-2)}

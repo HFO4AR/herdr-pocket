@@ -1,8 +1,12 @@
 package dev.herdr.pocket
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
@@ -18,18 +22,22 @@ import java.util.concurrent.Executors
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
     private lateinit var web: WebView
-    private val executor = Executors.newSingleThreadExecutor()
-    private val transport = SshTransport()
-    private val vault by lazy { SecureProfiles(this) }
-    private val pins by lazy { getSharedPreferences("connection", MODE_PRIVATE) }
-    private val bridge by lazy { assets.open("pocket_bridge.py").use { it.readBytes() } }
-    private var connectedDevice: JSONObject? = null
+    // Two workers: a slow history read must not block a status poll or a key press.
+    private val executor = Executors.newFixedThreadPool(2)
+    private val core = PocketCore
     private var destroyed = false
     private var started = false
+    private var pendingPane: String? = null
+    // Latest Herdr session and agent states shown in the UI, handed to the watcher.
+    @Volatile private var watchSession = ""
+    @Volatile private var watchStates = "{}"
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        core.init(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        pendingPane = intent?.getStringExtra(WatchService.EXTRA_PANE)
         web = WebView(this)
         web.setBackgroundColor(android.graphics.Color.rgb(251, 250, 246))
         web.settings.apply {
@@ -55,6 +63,7 @@ class MainActivity : Activity() {
         val container = FrameLayout(this).apply {
             addView(web, FrameLayout.LayoutParams(-1, -1))
             setOnApplyWindowInsetsListener { v, insets ->
+                @Suppress("DEPRECATION")
                 v.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
                 insets
             }
@@ -66,31 +75,38 @@ class MainActivity : Activity() {
             .replace("/*TERMINAL_APP*/", assets.open("ui/terminals.js").bufferedReader().use { it.readText() })
             .replace("/*BUNDLED_JS*/", assets.open("ui/app.js").bufferedReader().use { it.readText() })
         web.loadDataWithBaseURL("https://pocket.invalid/", html, "text/html", "UTF-8", null)
+        core.listener = { type, detail -> event(JSONObject().put("type", type).put("detail", detail)) }
     }
-    private fun reply(id: String, result: JSONObject) {
-        runOnUiThread { if (!destroyed) web.evaluateJavascript("window.nativeResult(${JSONObject.quote(id)}, ${result});", null) }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra(WatchService.EXTRA_PANE)?.let { pane ->
+            if (started) web.evaluateJavascript("window.openFromNotification(${JSONObject.quote(pane)})", null) else pendingPane = pane
+        }
     }
-    private fun progress(id: String, stage: String) {
-        runOnUiThread { if (!destroyed) web.evaluateJavascript("window.nativeProgress(${JSONObject.quote(id)}, ${JSONObject.quote(stage)});", null) }
-    }
+
+    private fun js(code: String) = runOnUiThread { if (!destroyed) web.evaluateJavascript(code, null) }
+    private fun reply(id: String, result: JSONObject) = js("window.nativeResult(${JSONObject.quote(id)}, ${result});")
+    private fun progress(id: String, stage: String) = js("window.nativeProgress(${JSONObject.quote(id)}, ${JSONObject.quote(stage)});")
+    private fun event(value: JSONObject) = js("window.nativeEvent && window.nativeEvent($value);")
     private fun success(id: String, value: JSONObject) = reply(id, JSONObject().put("ok", true).put("data", value))
     private fun failure(id: String, error: Exception) = reply(id, JSONObject().put("ok", false).put("error", error.message ?: "操作失败"))
+
     private fun connect(id: String, request: JSONObject, trusted: Boolean = false) {
-        val device = vault.get(request.getString("id"))
-        val endpoint = Endpoint(device.getString("host"), device.getInt("port"), device.getString("user"))
-        val pinId = "pin:${endpoint.host}:${endpoint.port}"
+        val device = core.vault.get(request.getString("id"))
+        val endpoint = core.endpointOf(device)
         val password = request.optString("password").ifEmpty { device.optString("password") }
         try {
-            transport.connect(endpoint, password, pins.getString(pinId, null)) { stage -> progress(id, stage) }
-            transport.useBundled(bridge)
+            core.connect(device, password) { stage -> progress(id, stage) }
             if (request.has("remember") && request.optString("password").isNotEmpty()) {
-                vault.save(JSONObject(device.toString()).put("password", password).put("remember", request.getBoolean("remember")))
+                core.vault.save(JSONObject(device.toString()).put("password", password).put("remember", request.getBoolean("remember")))
             }
-            device.put("remember", vault.get(device.getString("id")).optString("password").isNotEmpty())
-            connectedDevice = JSONObject(device.toString()).apply { remove("password") }
+            val remembered = core.vault.get(device.getString("id")).optString("password").isNotEmpty()
+            val shown = JSONObject(core.connectedDevice.toString()).put("remember", remembered)
             progress(id, "SSH 已连接，正在检查桥接程序…")
-            val ready = try { transport.request(JSONObject().put("op", "hello")).getInt("protocol") == 1 } catch (_: Exception) { false }
-            success(id, JSONObject().put("device", connectedDevice).put("ready", ready).put("devices", vault.list()))
+            val ready = try { core.request(JSONObject().put("op", "hello")).getInt("protocol") == 1 } catch (_: Exception) { false }
+            success(id, JSONObject().put("device", shown).put("ready", ready).put("devices", core.vault.list()))
+            runOnUiThread { askNotificationPermission() }
         } catch (e: UntrustedHost) {
             progress(id, "等待你核对并确认 SSH 主机指纹…")
             if (trusted) { failure(id, e); return }
@@ -98,13 +114,22 @@ class MainActivity : Activity() {
                 AlertDialog.Builder(this).setTitle("核对 SSH 主机指纹")
                     .setMessage("${endpoint.host}:${endpoint.port}\n\n${e.fingerprint}\n\n与电脑上的主机密钥指纹一致后再信任。")
                     .setPositiveButton("信任并连接") { _, _ ->
-                        pins.edit().putString(pinId, e.key).apply()
+                        core.pins.edit().putString(core.pinId(endpoint), e.key).apply()
                         executor.execute { try { connect(id, request, true) } catch (error: Exception) { failure(id, error) } }
                     }.setNegativeButton("取消") { _, _ -> failure(id, IllegalStateException("已取消连接")) }
                     .setOnCancelListener { failure(id, IllegalStateException("已取消连接")) }.show()
             }
         }
     }
+
+    private fun askNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33 && core.alertsEnabled && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            && !core.settings.getBoolean("askedNotifications", false)) {
+            core.settings.edit().putBoolean("askedNotifications", true).apply()
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7)
+        }
+    }
+
     inner class Native {
         @JavascriptInterface fun request(id: String, op: String, raw: String) {
             if (raw.length > 70000 || id.length > 80) return
@@ -113,42 +138,55 @@ class MainActivity : Activity() {
                     val req = JSONObject(raw)
                     when (op) {
                         "devices" -> {
+                            val pins = core.pins
                             if (!pins.getBoolean("profilesMigrated", false)) {
                                 val host = pins.getString("host", "") ?: ""
                                 val user = pins.getString("user", "") ?: ""
-                                if (vault.list().length() == 0 && host.isNotBlank() && user.isNotBlank()) {
-                                    vault.save(JSONObject().put("host", host).put("user", user).put("name", host)
+                                if (core.vault.list().length() == 0 && host.isNotBlank() && user.isNotBlank()) {
+                                    core.vault.save(JSONObject().put("host", host).put("user", user).put("name", host)
                                         .put("port", pins.getString("port", "22")?.toIntOrNull() ?: 22).put("remember", false))
                                 }
                                 pins.edit().remove("host").remove("port").remove("user").putBoolean("profilesMigrated", true).apply()
                             }
-                            success(id, JSONObject().put("devices", vault.list()).put("version", packageManager.getPackageInfo(packageName, 0).versionName))
+                            success(id, JSONObject().put("devices", core.vault.list()).put("version", packageManager.getPackageInfo(packageName, 0).versionName)
+                                .put("alerts", core.alertsEnabled).apply {
+                                    // The activity can be recreated while the watcher kept the session.
+                                    core.connectedDevice?.let { d -> put("connected", JSONObject(d.toString()).put("remember",
+                                        core.vault.get(d.getString("id")).optString("password").isNotEmpty())) }
+                                })
+                            pendingPane?.let { pane -> pendingPane = null; js("window.openFromNotification(${JSONObject.quote(pane)})") }
                         }
-                        "saveDevice" -> success(id, vault.save(req))
-                        "deleteDevice" -> { vault.delete(req.getString("id")); success(id, JSONObject().put("devices", vault.list())) }
-                        "connect" -> { runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }; connectedDevice = null; connect(id, req) }
-                        "disconnect" -> { transport.close(); connectedDevice = null; success(id, JSONObject()) }
+                        "saveDevice" -> success(id, core.vault.save(req))
+                        "deleteDevice" -> { core.vault.delete(req.getString("id")); success(id, JSONObject().put("devices", core.vault.list())) }
+                        "connect" -> { runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }; connect(id, req) }
+                        "disconnect" -> { WatchService.stop(this@MainActivity); core.disconnect(); success(id, JSONObject()) }
                         "install" -> {
-                            transport.install(bridge)
-                            success(id, transport.request(JSONObject().put("op", "hello")))
+                            core.transport.install(core.bridge)
+                            success(id, core.request(JSONObject().put("op", "hello")))
                         }
                         "protect" -> {
                             runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }
                             success(id, JSONObject())
                         }
                         "demo" -> {
-                            check(connectedDevice == null) { "先断开真实设备，再进入演示" }
+                            check(core.connectedDevice == null) { "先断开真实设备，再进入演示" }
                             runOnUiThread { window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
                             success(id, JSONObject())
                         }
-                        "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> {
-                            check(connectedDevice != null) { "请先连接设备" }
-                            success(id, transport.terminal(op, req))
+                        "watchState" -> {
+                            watchSession = req.optString("session")
+                            watchStates = req.optJSONObject("states")?.toString() ?: "{}"
+                            success(id, JSONObject())
                         }
+                        "setAlerts" -> {
+                            core.settings.edit().putBoolean("backgroundAlerts", req.getBoolean("enabled")).apply()
+                            if (req.getBoolean("enabled")) runOnUiThread { core.settings.edit().putBoolean("askedNotifications", false).apply(); askNotificationPermission() }
+                            success(id, JSONObject().put("alerts", core.alertsEnabled))
+                        }
+                        "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> success(id, core.terminal(op, req))
                         "remote" -> {
-                            check(connectedDevice != null) { "请先连接设备" }
                             check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey")) { "不支持的操作" }
-                            success(id, transport.request(req))
+                            success(id, core.request(req))
                         }
                         else -> error("不支持的操作")
                     }
@@ -156,9 +194,27 @@ class MainActivity : Activity() {
             }
         }
     }
+
     @Deprecated("Legacy back dispatch")
     override fun onBackPressed() { if (started) web.evaluateJavascript("window.pocketBack()", null) else super.onBackPressed() }
-    override fun onPause() { if (started) web.evaluateJavascript("window.setForeground(false)", null); super.onPause() }
-    override fun onResume() { super.onResume(); if (started) web.evaluateJavascript("window.setForeground(true)", null) }
-    override fun onDestroy() { destroyed = true; transport.close(); executor.shutdownNow(); web.removeJavascriptInterface("PocketNative"); web.destroy(); super.onDestroy() }
+    override fun onPause() {
+        if (started) web.evaluateJavascript("window.setForeground(false)", null)
+        // Hand over to the watcher while the app is not visible; it only reads state.
+        if (core.connectedDevice != null && core.alertsEnabled && watchSession.isNotEmpty() && !isChangingConfigurations) {
+            try { WatchService.start(this, watchSession, watchStates) } catch (_: Exception) {}
+        }
+        super.onPause()
+    }
+    override fun onResume() {
+        super.onResume()
+        WatchService.stop(this)
+        if (started) web.evaluateJavascript("window.setForeground(true)", null)
+    }
+    override fun onDestroy() {
+        destroyed = true
+        core.listener = null
+        // Leaving the app ends the connection unless the watcher is keeping it for alerts.
+        if (isFinishing) { WatchService.stop(this); core.disconnect() }
+        executor.shutdownNow(); web.removeJavascriptInterface("PocketNative"); web.destroy(); super.onDestroy()
+    }
 }

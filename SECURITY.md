@@ -25,6 +25,14 @@ Check with Android SDK `apksigner verify --print-certs herdr-pocket.apk`.
 The APK checksum is distributed alongside each release. Signing secrets are only available to main/tag builds;
 pull requests cannot publish. Publication waits for build, lint, bridge tests and offline emulator checks.
 
+## Reconnects and background alerts
+
+- A silent reconnect only uses the host key already pinned for that host and port; a changed key stops reconnecting and is reported. It never shows a new trust prompt on its own.
+- The password for a reconnect comes from the encrypted vault, or, if the device does not remember it, from memory for the current app process only. It is cleared on disconnect.
+- A request is re-sent after reconnecting only when it provably never reached the host: the session was already down, or the exec channel failed to open (stdin is streamed only after the channel opens). Anything that failed after being written keeps the "outcome unknown" error and is never replayed.
+- Reconnecting ends the previous interactive SSH shell; it is not resumed.
+- The background watcher is a foreground service with a visible notification and a stop action. It only runs the read-only `status` operation, never sends prompts or keys, and stops when the app returns to the foreground, on disconnect, after five consecutive failures or after eight hours. Notifications contain the agent title and state only, not message content.
+
 ## History and bundled UI
 
 History access is limited to JSONL files within the SSH user's `~/.codex/sessions` and `~/.claude/projects`. Remote requests use catalog-issued SHA-256 record IDs, not filesystem paths. Symlinks escaping the roots are rejected. To tell which conversation a live Codex pane is showing, the bridge also reads thread names from `~/.codex/session_index.jsonl` and the file names (thread IDs) in `~/.codex/thread-writer-locks/`; it never opens the lock files or any Codex auth/config file. The account endpoint returns only SSH username and hostname; no provider authentication/config files are read.

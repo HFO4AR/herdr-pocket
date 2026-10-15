@@ -10,6 +10,9 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider
 
 data class Endpoint(val host: String, val port: Int, val user: String)
 class UntrustedHost(val key: String, val fingerprint: String) : Exception("请核对服务器指纹")
+class HostKeyChanged : Exception("服务器主机密钥和之前信任的不一致，已拒绝连接；请先在电脑上核对")
+/** The request never reached the host (no channel opened), so it is safe to send again. */
+class NotSent(val sessionDown: Boolean, cause: Exception) : Exception("SSH 通道未建立，请求未发送", cause)
 
 /** SSH is the only transport. Passwords never enter preferences or logs. */
 class SshTransport : AutoCloseable {
@@ -18,13 +21,13 @@ class SshTransport : AutoCloseable {
     fun connect(endpoint: Endpoint, password: String, pinnedKey: String?, progress: (String) -> Unit = {}) {
         close()
         if (Security.getProvider("BC") == null) Security.addProvider(BouncyCastleProvider())
-        var pending: UntrustedHost? = null
+        var pending: Exception? = null
         val jsch = JSch()
         jsch.setHostKeyRepository(object : HostKeyRepository {
             override fun check(host: String, key: ByteArray): Int {
                 val encoded = Base64.getEncoder().encodeToString(key)
                 if (pinnedKey == encoded) return HostKeyRepository.OK
-                if (pinnedKey != null) return HostKeyRepository.CHANGED
+                if (pinnedKey != null) { pending = HostKeyChanged(); return HostKeyRepository.CHANGED }
                 val hash = Base64.getEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(key))
                 pending = UntrustedHost(encoded, "SHA256:$hash")
                 return HostKeyRepository.NOT_INCLUDED
@@ -86,18 +89,22 @@ class SshTransport : AutoCloseable {
     private var bridgePath = ""
     fun useBundled(bytes: ByteArray) { bridgePath = "$home/.herdr-pocket/${bridgeName(bytes)}" }
     private fun bridgeName(bytes: ByteArray) = "bridge-" + MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } + ".py"
+    fun isConnected() = session?.isConnected == true
+    /** Instrumented tests only: drop the TCP session as a network loss would. */
+    internal fun simulateDrop() { session?.disconnect() }
     fun request(value: JSONObject): JSONObject {
         val ssh = session ?: error("尚未连接")
-        check(ssh.isConnected) { "SSH 已断开，请返回重新连接。未自动重发任何指令。" }
-        val channel = ssh.openChannel("exec") as ChannelExec
+        if (!ssh.isConnected) throw NotSent(true, IllegalStateException("SSH 已断开"))
         val err = ByteArrayOutputStream()
         val input = (value.put("v", 1).toString() + "\n").byteInputStream()
+        // stdin is only streamed after the channel opens; failing here means nothing was sent.
+        val channel = try { ssh.openChannel("exec") as ChannelExec } catch (e: JSchException) { throw NotSent(!ssh.isConnected, e) }
         channel.setCommand("python3 " + quote(bridgePath))
         channel.setInputStream(input)
         channel.setErrStream(err)
         val output = channel.inputStream
         try {
-            channel.connect(10000)
+            try { channel.connect(10000) } catch (e: JSchException) { throw NotSent(!ssh.isConnected, e) }
             val buffer = ByteArrayOutputStream()
             val chunk = ByteArray(8192)
             val deadline = System.nanoTime() + 35_000_000_000L
@@ -128,7 +135,7 @@ class SshTransport : AutoCloseable {
             shell = opened
             return JSONObject().put("id", opened.id)
         }
-        val current = shell ?: error("SSH 终端不存在")
+        val current = shell ?: error("SSH 终端已结束（连接断开后会重建连接，但不会恢复旧 shell），请重新打开")
         check(req.getString("terminalId") == current.id) { "终端已更换，拒绝旧页面输入" }
         when (op) {
             "shellRead" -> return current.read(req.getLong("cursor"))
