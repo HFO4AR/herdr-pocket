@@ -11,15 +11,35 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider
 data class Endpoint(val host: String, val port: Int, val user: String)
 class UntrustedHost(val key: String, val fingerprint: String) : Exception("请核对服务器指纹")
 class HostKeyChanged : Exception("服务器主机密钥和之前信任的不一致，已拒绝连接；请先在电脑上核对")
-/** The request never reached the host (no channel opened), so it is safe to send again. */
-class NotSent(val sessionDown: Boolean, cause: Exception) : Exception("SSH 通道未建立，请求未发送", cause)
+/**
+ * The request never reached the host (no exec channel was started), so it is safe to send again.
+ * [generation] identifies the SSH session it failed on, so concurrent failures trigger one reconnect.
+ */
+class NotSent(val generation: Long, val sessionDown: Boolean, cause: Exception) : Exception("SSH 通道没建立起来，请求还没发出去", cause)
 
-/** SSH is the only transport. Passwords never enter preferences or logs. */
+/**
+ * SSH is the only transport. Passwords never enter preferences or logs.
+ *
+ * Thread-safety: requests run on several threads at once. Each request pins the session it
+ * started on ([acquire]/[release]); a reconnect swaps in a new session and either drops the old
+ * one immediately (it is believed dead) or lets in-flight requests on it finish first.
+ */
 class SshTransport : AutoCloseable {
-    private var session: Session? = null
-    private var home = ""
-    fun connect(endpoint: Endpoint, password: String, pinnedKey: String?, progress: (String) -> Unit = {}) {
-        close()
+    @Volatile private var session: Session? = null
+    @Volatile var generation = 0L
+        private set
+    @Volatile private var home = ""
+    @Volatile private var bridgePath = ""
+    private val inflight = HashMap<Session, Int>() // guarded by this
+    private val retiring = HashSet<Session>() // guarded by this
+
+    /**
+     * Opens a new session. With [keepOld] the current session stays usable until the new one is
+     * authenticated, and requests still running on it are allowed to finish (make-before-break).
+     * Without it every existing session is dropped first.
+     */
+    fun connect(endpoint: Endpoint, password: String, pinnedKey: String?, progress: (String) -> Unit = {}, keepOld: Boolean = false) {
+        if (!keepOld) close()
         if (Security.getProvider("BC") == null) Security.addProvider(BouncyCastleProvider())
         var pending: Exception? = null
         val jsch = JSch()
@@ -43,19 +63,31 @@ class SshTransport : AutoCloseable {
         candidate.setPassword(password)
         candidate.setConfig("StrictHostKeyChecking", "yes")
         candidate.setConfig("PreferredAuthentications", "password")
-        candidate.serverAliveInterval = 15000
-        candidate.timeout = 30000
-        try {
+        // JSch only sends a keepalive when a socket read times out, and setServerAliveInterval
+        // also sets that read timeout. Setting `timeout` afterwards (as before) silently moved the
+        // keepalive to 30 s; JSch's default ServerAliveCountMax of 1 then dropped the session after
+        // one unanswered keepalive. Over mobile data + frp a 30 s stall is normal, so tolerate
+        // 4 missed replies (~75 s); dead sessions are caught sooner when a channel fails to open.
+        candidate.serverAliveInterval = KEEPALIVE_MS
+        candidate.serverAliveCountMax = KEEPALIVE_MISSES
+        val path = try {
             progress("正在建立 SSH 连接并验证身份…")
             candidate.connect(15000)
-            session = candidate
+            progress("SSH 身份验证成功，正在读取远端目录…")
+            val sftp = candidate.openChannel("sftp") as ChannelSftp
+            try { sftp.connect(10000); sftp.realpath(".") } finally { sftp.disconnect() }
         } catch (e: Exception) {
             candidate.disconnect()
             throw pending ?: e
         }
-        progress("SSH 身份验证成功，正在读取远端目录…")
-        val sftp = candidate.openChannel("sftp") as ChannelSftp
-        try { sftp.connect(10000); home = sftp.realpath(".") } finally { sftp.disconnect() }
+        val old = synchronized(this) {
+            val previous = session
+            session = candidate; home = path; generation++
+            previous
+        }
+        // An interactive shell belongs to the session it was opened on; it is never moved.
+        shell?.close(); shell = null
+        if (old != null) retire(old, graceful = keepOld)
     }
     fun install(bytes: ByteArray) {
         val ssh = session ?: error("尚未连接")
@@ -86,25 +118,51 @@ class SshTransport : AutoCloseable {
             bridgePath = path
         } finally { sftp.disconnect() }
     }
-    private var bridgePath = ""
     fun useBundled(bytes: ByteArray) { bridgePath = "$home/.herdr-pocket/${bridgeName(bytes)}" }
     private fun bridgeName(bytes: ByteArray) = "bridge-" + MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } + ".py"
     fun isConnected() = session?.isConnected == true
+    /** True while an interactive shell is open; it would not survive a reconnect. */
+    fun hasShell() = shell != null
     /** Instrumented tests only: drop the TCP session as a network loss would. */
     internal fun simulateDrop() { session?.disconnect() }
+
+    private fun acquire(): Pair<Session, Long> = synchronized(this) {
+        // Null only while another thread is replacing the session; nothing has been sent.
+        val ssh = session ?: throw NotSent(generation, true, IllegalStateException("尚未连接"))
+        inflight[ssh] = (inflight[ssh] ?: 0) + 1
+        ssh to generation
+    }
+    private fun release(ssh: Session) {
+        val drop = synchronized(this) {
+            val left = (inflight[ssh] ?: 1) - 1
+            if (left <= 0) inflight.remove(ssh) else inflight[ssh] = left
+            left <= 0 && retiring.remove(ssh)
+        }
+        if (drop) ssh.disconnect()
+    }
+    private fun retire(ssh: Session, graceful: Boolean) {
+        val now = synchronized(this) { if (graceful && (inflight[ssh] ?: 0) > 0) { retiring.add(ssh); false } else true }
+        if (now) ssh.disconnect()
+    }
+
     fun request(value: JSONObject): JSONObject {
-        val ssh = session ?: error("尚未连接")
-        if (!ssh.isConnected) throw NotSent(true, IllegalStateException("SSH 已断开"))
+        val (ssh, gen) = acquire()
+        try { return exec(ssh, gen, value) } finally { release(ssh) }
+    }
+
+    private fun exec(ssh: Session, gen: Long, value: JSONObject): JSONObject {
+        if (!ssh.isConnected) throw NotSent(gen, true, IllegalStateException("SSH 已断开"))
         val err = ByteArrayOutputStream()
         val input = (value.put("v", 1).toString() + "\n").byteInputStream()
-        // stdin is only streamed after the channel opens; failing here means nothing was sent.
-        val channel = try { ssh.openChannel("exec") as ChannelExec } catch (e: JSchException) { throw NotSent(!ssh.isConnected, e) }
+        // JSch sends the exec request first and starts streaming stdin only once the server has
+        // accepted it, so any failure in openChannel/connect means the request never left.
+        val channel = try { ssh.openChannel("exec") as ChannelExec } catch (e: JSchException) { throw NotSent(gen, !ssh.isConnected, e) }
         channel.setCommand("python3 " + quote(bridgePath))
         channel.setInputStream(input)
         channel.setErrStream(err)
         val output = channel.inputStream
         try {
-            try { channel.connect(10000) } catch (e: JSchException) { throw NotSent(!ssh.isConnected, e) }
+            try { channel.connect(OPEN_TIMEOUT_MS) } catch (e: JSchException) { throw NotSent(gen, !ssh.isConnected, e) }
             val buffer = ByteArrayOutputStream()
             val chunk = ByteArray(8192)
             val deadline = System.nanoTime() + 35_000_000_000L
@@ -116,16 +174,18 @@ class SshTransport : AutoCloseable {
                     check(buffer.size() <= 2_000_000) { "服务器响应过大" }
                 }
                 if (channel.isClosed && output.available() == 0) break
-                check(System.nanoTime() < deadline) { "等待响应超时；指令结果未知，请先刷新查看，勿重复发送。" }
+                check(System.nanoTime() < deadline) { "等了 35 秒还没有回应；请求已经发出，结果未知。先刷新看看，别直接重发。" }
                 Thread.sleep(30)
             }
+            // Closed without an exit status: the connection died after the request was sent.
+            check(channel.exitStatus != -1 || ssh.isConnected) { "请求发出后连接断了，结果未知。先刷新看看，别直接重发。" }
             check(channel.exitStatus == 0) { "服务器命令失败：" + err.toString("UTF-8").take(1500) }
             val result = JSONObject(buffer.toString("UTF-8"))
             check(result.optBoolean("ok")) { result.optString("error", "请求失败") }
             return result.getJSONObject("data")
         } finally { channel.disconnect() }
     }
-    private var shell: ShellTerminal? = null
+    @Volatile private var shell: ShellTerminal? = null
     fun terminal(op: String, req: JSONObject): JSONObject {
         val ssh = session ?: error("尚未连接")
         check(ssh.isConnected) { "SSH 已断开，请重新连接；未重发输入" }
@@ -146,6 +206,21 @@ class SshTransport : AutoCloseable {
         }
         return JSONObject()
     }
-    override fun close() { shell?.close(); shell = null; session?.disconnect(); session = null }
+    override fun close() {
+        shell?.close(); shell = null
+        val all = synchronized(this) {
+            val list = retiring.toMutableList().also { list -> session?.let { list.add(it) } }
+            retiring.clear(); session = null
+            list
+        }
+        all.forEach { it.disconnect() }
+    }
     private fun quote(value: String) = "'" + value.replace("'", "'\"'\"'") + "'"
+
+    private companion object {
+        const val KEEPALIVE_MS = 15_000
+        const val KEEPALIVE_MISSES = 4
+        // One round trip on a healthy link; longer means the session is most likely dead.
+        const val OPEN_TIMEOUT_MS = 8_000
+    }
 }

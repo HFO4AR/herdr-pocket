@@ -84,7 +84,12 @@ class WatchService : Service() {
                 }
             }
         } catch (_: Exception) {
-            if (++failures >= 5) { stopSelf(); return }
+            // PocketCore already reconnected once if the session was dead; repeated failures mean the
+            // computer or tunnel is unreachable. Say so instead of silently losing alerts.
+            if (++failures >= 5) {
+                notify("watch-stopped", "后台关注停了", "连不上电脑，已停止提醒；回到 App 会重新连接", "", false)
+                stopSelf(); return
+            }
         }
         handler.postDelayed(::poll, POLL_MS)
     }
@@ -107,7 +112,7 @@ class WatchService : Service() {
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(text)
-            .setContentIntent(open(pane))
+            .setContentIntent(open(pane.ifEmpty { null }))
             .setAutoCancel(true)
             .setCategory(if (urgent) Notification.CATEGORY_REMINDER else Notification.CATEGORY_STATUS)
             .build()

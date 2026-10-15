@@ -110,7 +110,7 @@ class SecureProfilesTest : Instrumentation() {
 
     private fun testSilentReconnect() {
         PocketCore.init(targetContext)
-        val events = mutableListOf<String>()
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
         PocketCore.listener = { type, _ -> events.add(type) }
         val endpoint = Endpoint("10.0.2.2", 22222, "pocket-fixture")
         val pinKey = PocketCore.pinId(endpoint)
@@ -126,6 +126,20 @@ class SecureProfilesTest : Instrumentation() {
             PocketCore.transport.simulateDrop()
             check(!PocketCore.transport.isConnected())
             check(PocketCore.request(JSONObject().put("op", "hello")).getInt("protocol") == 1) { "No reconnect" }
+            check(events == listOf("reconnecting", "reconnected")) { "Unexpected events $events" }
+            // A suspect session (network switch, long unattended pause) is replaced quietly first.
+            val before = PocketCore.transport.generation
+            PocketCore.markSuspect()
+            check(PocketCore.request(JSONObject().put("op", "hello")).getInt("protocol") == 1)
+            check(PocketCore.transport.generation == before + 1) { "Suspect session kept" }
+            check(events.size == 2) { "Quiet reconnect was announced $events" }
+            // Concurrent requests after a drop share one reconnect instead of killing each other's session.
+            events.clear()
+            PocketCore.transport.simulateDrop()
+            val failures = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+            val workers = (1..3).map { Thread { try { PocketCore.request(JSONObject().put("op", "hello")) } catch (e: Throwable) { failures.add(e) } } }
+            workers.forEach { it.start() }; workers.forEach { it.join(30_000) }
+            check(failures.isEmpty()) { "Concurrent request failed: ${failures.firstOrNull()?.message}" }
             check(events == listOf("reconnecting", "reconnected")) { "Unexpected events $events" }
             // A changed host key must stop automatic reconnects.
             PocketCore.pins.edit().putString(pinKey, "AAAAC3NzaC1lZDI1NTE5AAAAIChangedChangedChangedChangedChangedChange").commit()

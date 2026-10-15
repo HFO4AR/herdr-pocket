@@ -19,6 +19,8 @@ import android.widget.FrameLayout
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
+private const val UNATTENDED_PAUSE_MS = 60_000L
+
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
 private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css")
 private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/demo.js", "ui/app.js")
@@ -35,6 +37,8 @@ class MainActivity : Activity() {
     // Latest Herdr session and agent states shown in the UI, handed to the watcher.
     @Volatile private var watchSession = ""
     @Volatile private var watchStates = "{}"
+    private var pausedAt = 0L
+    private var watched = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -205,15 +209,21 @@ class MainActivity : Activity() {
     override fun onBackPressed() { if (started) web.evaluateJavascript("window.pocketBack()", null) else super.onBackPressed() }
     override fun onPause() {
         if (started) web.evaluateJavascript("window.setForeground(false)", null)
+        pausedAt = android.os.SystemClock.elapsedRealtime(); watched = false
         // Hand over to the watcher while the app is not visible; it only reads state.
         if (core.connectedDevice != null && core.alertsEnabled && watchSession.isNotEmpty() && !isChangingConfigurations) {
-            try { WatchService.start(this, watchSession, watchStates) } catch (_: Exception) {}
+            try { WatchService.start(this, watchSession, watchStates); watched = true } catch (_: Exception) {}
         }
         super.onPause()
     }
     override fun onResume() {
         super.onResume()
         WatchService.stop(this)
+        // Without the watcher Android may freeze the app in the background, so keepalives stop and a
+        // carrier NAT or the frp tunnel can drop the TCP connection without telling us. Swap in a
+        // fresh session before the first refresh instead of waiting for a channel to time out.
+        if (pausedAt > 0 && !watched && android.os.SystemClock.elapsedRealtime() - pausedAt > UNATTENDED_PAUSE_MS) core.markSuspect()
+        pausedAt = 0
         if (started) web.evaluateJavascript("window.setForeground(true)", null)
     }
     override fun onDestroy() {
