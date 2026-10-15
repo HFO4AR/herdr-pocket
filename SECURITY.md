@@ -1,7 +1,7 @@
 # Security
 
 - SSH host keys are pinned per hostname/port after explicit user confirmation. A mismatch is rejected; there is no permissive fallback.
-- The app currently supports password authentication only. Passwords are never persisted, logged or copied to the clipboard. Android backup is disabled. Screenshots are blocked on real connection screens; offline demo screens permit screenshots.
+- The app currently supports password authentication only. Passwords are only persisted when the user chooses to remember them, encrypted together with device profiles using AES-GCM and an Android Keystore key. Passwords are never returned by the device-list API, logged or copied to the clipboard. Changing the host, port or username does not reuse a saved password. Android backup is disabled. Screenshots are blocked on real connection/device-editing screens; offline demo conversation screens permit screenshots.
 - The public bridge source is bundled with the app. Install requires an explicit action, uses SFTP, verifies uploaded bytes, and names the file by SHA-256. No downloaded remote installer is executed.
 - SSH requests have timeouts and bounded response size. Prompt input is bounded and passed as one subprocess argument, never evaluated as shell code.
 - Only existing running sessions and recognized agents are targeted. The bridge does not run arbitrary shell commands, create agents, stop Herdr servers, or bypass approval dialogs.
@@ -24,3 +24,11 @@ Certificate SHA-256:
 Check with Android SDK `apksigner verify --print-certs herdr-pocket.apk`.
 The APK checksum is distributed alongside each release. Signing secrets are only available to main/tag builds;
 pull requests cannot publish. Publication waits for build, lint, bridge tests and offline emulator checks.
+
+## History and bundled UI
+
+History access is limited to JSONL files within the SSH user's `~/.codex/sessions` and `~/.claude/projects`. Remote requests use catalog-issued SHA-256 record IDs, not filesystem paths. Symlinks escaping the roots are rejected. The account endpoint returns only SSH username and hostname; no provider authentication/config files are read.
+
+Adapters exclude system/developer messages, private reasoning and internal guardian records. Commands/results are historical evidence, never executable UI. Text uses DOM text nodes, not HTML interpolation. Transcript sources are private third-party formats and remain version-sensitive.
+
+The Android WebView only runs UI assets packaged in the APK, with network loads, external navigation, file/content access and frames blocked. CSP disables external scripts/resources. Native RPC results are JSON values, never concatenated HTML. UI tests contain fake devices only. Encrypted data is excluded from Android backup; losing the Keystore key means saved credentials need to be entered again.
