@@ -11,6 +11,9 @@ import sqlite3
 import subprocess
 import sys
 import time
+import stat as stat_module
+from urllib.parse import quote as uri_quote
+from contextlib import closing
 
 VERSION = "0.4.0"
 LIMIT = 65536
@@ -70,12 +73,15 @@ def agents(prefix, include_history=False):
     result = [dict(a, identity=identity(a)) for a in found]
     if not include_history: return result
     global _remote_deadline
-    _remote_deadline = time.monotonic() + 22
-    catalog = None
-    for agent in result:
-        if agent.get("agent") not in ("codex", "claude"): continue
-        if catalog is None: catalog = transcript_catalog()
-        agent["history_ref"] = resolve_agent_history(agent, prefix, catalog)
+    _remote_deadline = time.monotonic() + 20
+    _remote_results.clear()
+    live = [a for a in result if a.get("agent") in ("codex", "claude")]
+    probes = {a["pane_id"]: probe_pane(a, prefix, a["agent"]) for a in live}
+    prefetch_remote([(probes[a["pane_id"]]["route"], a["agent"]) for a in live if probes[a["pane_id"]]["route"]])
+    catalog = transcript_catalog() if live else []
+    codex_index = (codex_thread_names(), codex_loaded_threads()) if any(a["agent"] == "codex" for a in live) else None
+    for agent in live:
+        agent["history_ref"] = resolve_agent_history(agent, prefix, catalog, codex_index, probes[agent["pane_id"]])
     return result
 
 
@@ -159,14 +165,19 @@ def process_snapshot(pid):
         before = (root / "stat").read_text().rsplit(") ", 1)[1].split()[19]
         argv = (root / "cmdline").read_bytes()[:65536].decode(errors="replace").split("\0")
         children = [int(x) for x in (root / "task" / str(pid) / "children").read_text().split()]
-        paths = []
+        paths, active_threads = [], []
         for fd in list((root / "fd").iterdir())[:256]:
             try:
                 target = fd.readlink()
                 if target.suffix == ".jsonl": paths.append(target)
+                # Claude keeps its current native session task directory open.
+                # Read the FD link only; never open task files or process environ.
+                if (len(target.parts) >= 6 and target.parts[:3] == ("/", "tmp", "claude-"+str(os.getuid()))
+                        and target.name == "tasks" and re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", target.parent.name)):
+                    active_threads.append(target.parent.name)
             except OSError: pass
         after = (root / "stat").read_text().rsplit(") ", 1)[1].split()[19]
-        return {"argv": argv, "children": children, "paths": paths, "cwd": str((root / "cwd").readlink())} if before == after else None
+        return {"argv": argv, "children": children, "paths": paths, "cwd": str((root / "cwd").readlink()), "start":before, "active_threads":active_threads} if before == after else None
     except (OSError, ValueError, IndexError): return None
 
 
@@ -182,55 +193,113 @@ def explicit_session_ids(argv, provider):
     return ids
 
 
-def resolve_agent_history(agent, prefix, catalog):
-    provider = agent["agent"]
-    candidates = [x for x in catalog if x["provider"] == provider]
-    reported = agent.get("agent_session") or {}
-    value = reported.get("value")
-    if value:
-        # Herdr supports both session ids and transcript paths. Paths must already
-        # be in the allow-listed catalog; no request path is ever opened here.
-        matches = [x for x in candidates if x["thread"] == value or str(x["_path"]) == value]
-        if matches: return {"status": "matched", "record_id": matches[0]["id"], "thread": matches[0]["thread"], "source": "herdr"}
-        return {"status": "missing", "source": "herdr"}
+UUID_RE = r"[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}"
+
+
+def codex_thread_names():
+    """Thread id -> latest user-visible name; names only, never conversation content."""
+    names, path = {}, Path.home() / ".codex/session_index.jsonl"
+    try:
+        with path.open("rb") as stream:
+            stream.seek(max(0, path.stat().st_size - 4_000_000))
+            for line in stream:
+                try: row = json.loads(line)
+                except (ValueError, UnicodeError): continue
+                if isinstance(row, dict) and isinstance(row.get("id"), str) and isinstance(row.get("thread_name"), str):
+                    names[row["id"]] = row["thread_name"].strip()
+    except OSError: pass
+    return names
+
+
+def codex_loaded_threads():
+    """Threads the Codex app-server currently has open (lock file names only)."""
+    try: return {x.stem for x in (Path.home() / ".codex/thread-writer-locks").glob("*.lock") if re.fullmatch(UUID_RE, x.stem)}
+    except OSError: return set()
+
+
+def codex_title_threads(agent, candidates, names, loaded):
+    """Codex TUI titles are "<thread name> | <cwd name>"; match only unique, open, root threads."""
+    title = (agent.get("terminal_title_stripped") or agent.get("terminal_title") or "").strip()
+    if not title: return set()
+    base = Path(agent.get("foreground_cwd") or agent.get("cwd") or "").name
+    roots = {x["thread"] for x in candidates if not x.get("parent")}
+    hits = {t for t, name in names.items() if name and t in roots and title in (name + " | " + base, name)}
+    open_hits = hits & loaded
+    return open_hits or (hits if len(hits) == 1 else set())
+
+
+def probe_pane(agent, prefix, provider):
+    """Walk the pane's process tree once; read argv, cwd and FD link names only."""
+    found = {"ids": set(), "paths": set(), "active": set(), "route": None, "cwd": "", "remote": False, "ok": False}
     try: info = call(prefix + ["pane", "process-info", "--pane", agent["pane_id"]]).get("process_info", {})
-    except BridgeError: return {"status": "unavailable"}
-    processes = info.get("foreground_processes", [])
-    ids, paths, seen = set(), set(), set()
-    remote = False
-    candidate_cwd = ""
-    route = None
-    queue = [(p.get("pid"), p.get("argv", [])) for p in processes]
+    except BridgeError: return found
+    found["ok"] = True
+    queue = [(p.get("pid"), p.get("argv", [])) for p in info.get("foreground_processes", [])]
+    seen = set()
     while queue and len(seen) < 64:
         pid, initial_argv = queue.pop(0)
         if not isinstance(pid, int) or pid in seen: continue
         seen.add(pid)
         snapshot = process_snapshot(pid)
         argv = snapshot["argv"] if snapshot else initial_argv
-        remote = remote or bool(argv and Path(argv[0]).name in ("ssh", "mosh", "mosh-client"))
-        route = route or ch_ssh_route(argv)
-        if argv and Path(argv[0]).name in (provider,provider+".exe"):
-            candidate_cwd = (snapshot or {}).get("cwd", candidate_cwd)
-        ids.update(explicit_session_ids(argv, provider))
-        if snapshot:
-            # Only native provider processes may supply transcript FD matches.
-            if argv and Path(argv[0]).name in (provider, provider + ".exe"):
-                paths.update(snapshot["paths"])
-            queue.extend((child, []) for child in snapshot["children"])
-    matches = [x for x in candidates if x["thread"] in ids or x["_path"] in paths]
-    if matches and len({x["thread"] for x in matches}) == 1:
-        return {"status": "matched", "record_id": matches[0]["id"], "thread": matches[0]["thread"], "source": "process"}
+        found["remote"] = found["remote"] or bool(argv and Path(argv[0]).name in ("ssh", "mosh", "mosh-client"))
+        found["route"] = found["route"] or ch_ssh_route(argv)
+        native = bool(argv and Path(argv[0]).name in (provider, provider + ".exe"))
+        if native:
+            found["ids"].update(explicit_session_ids(argv, provider))
+            if snapshot:
+                found["cwd"] = found["cwd"] or snapshot.get("cwd", "")
+                found["paths"].update(snapshot["paths"])
+                if provider == "claude": found["active"].update(snapshot.get("active_threads", []))
+            # A nested agent belongs to its parent, not to this pane.
+            continue
+        if snapshot: queue.extend((child, []) for child in snapshot["children"])
+    return found
+
+
+def matched(entry, source):
+    return {"status": "matched", "record_id": entry["id"], "thread": entry["thread"], "source": source}
+
+
+def resolve_agent_history(agent, prefix, catalog, codex_index=None, probe=None):
+    """Strongest evidence first; a weaker source never overrides a stronger one."""
+    provider = agent["agent"]
+    candidates = [x for x in catalog if x["provider"] == provider]
+    roots = {}
+    for x in candidates:  # catalog is newest first; keep the newest rollout per thread
+        if not x.get("parent"): roots.setdefault(x["thread"], x)
+    probe = probe or probe_pane(agent, prefix, provider)
+    value = (agent.get("agent_session") or {}).get("value")
+    herdr = {x["thread"] for x in candidates if value and (x["thread"] == value or str(x["_path"]) == value)}
+    title = codex_title_threads(agent, candidates, *(codex_index or ({}, set()))) if provider == "codex" else set()
+    fds = {x["thread"] for x in candidates if x["_path"] in probe["paths"]}
+    conflict = set()
+    for source, threads in (("native-process", probe["active"]), ("title", title), ("open-file", fds),
+                            ("herdr", herdr), ("process", probe["ids"])):
+        if len(threads) == 1:
+            thread = next(iter(threads))
+            if thread in roots: return matched(roots[thread], source)
+            if source == "native-process" and not probe["route"]:
+                return {"status": "pending", "thread": thread, "source": source, "reason": "会话刚开始，历史文件还没写出"}
+        elif len(threads) > 1:
+            conflict = conflict or threads
+            if source in ("native-process", "title"): break
+    route = probe["route"]
     if route:
-        context = {"session": prefix[1] if len(prefix)>1 else "default", "target": agent["pane_id"], "identity": agent.get("identity", identity(agent)), "provider":provider}
-        try:
-            records = remote_catalog(route, context)
-            threads = {x["thread"] for x in records if x.get("route_match") and not x.get("parent") and x["provider"] == provider}
-            if len(threads) == 1:
-                record = next(x for x in records if x["thread"] in threads and not x.get("parent"))
-                return {"status":"matched", "source":"ch-route", "record_id":record["id"], "thread":record["thread"], "record":record, "remote":context}
-            return {"status":"remote_candidates" if records else "remote_missing", "remote":context, "candidates":records[:12]}
-        except BridgeError as exc: return {"status":"remote_error", "reason":str(exc)}
-    return {"status": "remote" if remote else "ambiguous" if len(matches)>1 else "missing" if ids else "unavailable", "query":candidate_cwd, "candidates":[public_record(x) for x in candidates if candidate_cwd and x["cwd"] == candidate_cwd and not x.get("parent")][:12]}
+        context = {"session": prefix[1] if len(prefix) > 1 else "default", "target": agent["pane_id"],
+                   "identity": agent.get("identity", identity(agent)), "provider": provider}
+        return remote_resolution(route, context)
+    cwd = probe["cwd"] or agent.get("foreground_cwd") or agent.get("cwd") or ""
+    if conflict:
+        status, pool = "ambiguous", [roots[t] for t in conflict if t in roots]
+    else:
+        status = "remote" if probe["remote"] else "missing" if value or probe["ids"] else "unavailable"
+        pool = [x for x in roots.values() if cwd and x["cwd"] == cwd]
+    reason = {"remote": "这个窗格通过 SSH 连到别的电脑，无法定位那边的历史",
+              "ambiguous": "找到多段可能的会话，请选择正确的一段",
+              "missing": "会话标识已知，但没找到对应的历史文件",
+              "unavailable": "没有能唯一确认的会话标识，请从同目录的历史里选择" if pool else "没有能确认的会话标识"}[status]
+    return {"status": status, "query": cwd, "candidates": [public_record(x) for x in pool][:12], "reason": reason}
 
 
 def ch_ssh_route(argv):
@@ -261,29 +330,256 @@ def ch_ssh_route(argv):
     return route
 
 
-_remote_catalog_cache = {}
+_remote_results = {}
 _remote_deadline = None
 
 
-def remote_read(route, request):
+
+def route_binding_metadata(workspace):
+    """Select non-secret ch route locator fields; never select full config/info."""
+    workspace = Path(workspace).expanduser()
+    route_id = workspace.name
+    if not re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", route_id):
+        raise BridgeError("Invalid route id")
+    state = workspace.parent.parent.resolve()
+    directory = state / "sessions" / route_id
+    path = directory / "session.sqlite"
+    if path.is_symlink() or not path.resolve().is_relative_to(state / "sessions"):
+        raise BridgeError("Route metadata path is not allowed")
+    fields = ("socket", "session", "pane", "pid", "start")
+    expressions = ["json_extract(config, '$."+kind+"."+field+"')" for kind in ("native_route", "imported_tmux") for field in fields]
+    try:
+        with closing(sqlite3.connect("file:"+uri_quote(str(path))+"?mode=ro&immutable=1", uri=True, timeout=1)) as db:
+            row = db.execute("SELECT "+", ".join(expressions)+" FROM session WHERE singleton=1").fetchone()
+    except sqlite3.Error as exc: raise BridgeError("ch 路由定位元数据不可用") from exc
+    if not row: raise BridgeError("ch 路由定位元数据缺失")
+    native, imported = dict(zip(fields,row[:5])), dict(zip(fields,row[5:]))
+    # ch's migration overlay contains route locators, not provider credentials.
+    overlay = directory / "native-route.json"
+    if overlay.exists():
+        if overlay.is_symlink() or not overlay.resolve().is_relative_to(state / "sessions"):
+            raise BridgeError("Route overlay path is not allowed")
+        try:
+            with overlay.open("rb") as stream: raw = stream.read(65537)
+            if len(raw)>65536: raise ValueError()
+            value=json.loads(raw).get("native_route")
+            if isinstance(value,dict): native={key:value.get(key) for key in fields}
+        except (OSError,ValueError,AttributeError) as exc: raise BridgeError("ch 路由定位覆盖文件异常") from exc
+    binding = native if native.get("socket") else imported
+    if not binding.get("socket") or not binding.get("session"): raise BridgeError("ch 路由没有原生 tmux 定位信息")
+    return binding
+
+
+def active_threads_in_pane(pid, provider, expected_pid=None, expected_start=None):
+    queue=[pid]; seen=set(); candidates=[]; verified=expected_pid is None
+    while queue and len(seen)<128:
+        current=queue.pop(0)
+        if current in seen: continue
+        seen.add(current); snapshot=process_snapshot(current)
+        if not snapshot: continue
+        if current==expected_pid:
+            if str(snapshot.get("start"))!=str(expected_start): raise BridgeError("导入的原生进程已更换")
+            verified=True
+        argv=snapshot["argv"]
+        if argv and Path(argv[0]).name in (provider,provider+".exe"):
+            # Runtime directory beats startup --resume after /clear or /resume.
+            ids=set(snapshot.get("active_threads",[])) if provider=="claude" else set()
+            if not ids: ids=explicit_session_ids(argv,provider)
+            candidates.append(ids)
+            # Nested agents belong to this parent, not the selected tmux pane.
+            continue
+        queue.extend(snapshot["children"])
+    if not verified: raise BridgeError("导入的原生进程不再属于这个分屏")
+    if len(candidates)!=1 or len(candidates[0])!=1: return None
+    return next(iter(candidates[0]))
+
+
+def remote_active_history(workspace, provider="claude"):
+    try:
+        binding=route_binding_metadata(workspace)
+        socket=Path(binding["socket"])
+        info=socket.lstat()
+        if not socket.is_absolute() or not stat_module.S_ISSOCK(info.st_mode) or info.st_uid!=os.getuid():
+            raise BridgeError("tmux 路由 socket 身份不符")
+        session=binding["session"]
+        if not isinstance(session,str) or any(c in session for c in ("\n","\r","\0")): raise BridgeError("Invalid tmux session")
+        output=subprocess.run(["tmux","-S",str(socket),"list-panes","-s","-t","="+session,"-F","#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{pane_active}\t#{window_active}"],capture_output=True,text=True,timeout=3)
+        if output.returncode: raise BridgeError("远端 tmux 分屏已不可用")
+        panes=[]
+        for line in output.stdout.splitlines():
+            fields=line.split("\t")
+            if len(fields)!=5 or fields[2]!="0": continue
+            if binding.get("pane"):
+                if fields[0]!=binding["pane"]: continue
+            elif fields[3:] != ["1","1"]: continue
+            try: panes.append(int(fields[1]))
+            except ValueError: continue
+        if len(panes)!=1: raise BridgeError("远端活跃分屏定位不唯一")
+        thread=active_threads_in_pane(panes[0],provider,binding.get("pid"),binding.get("start"))
+        return {"status":"matched" if thread else "unavailable", "thread":thread, "source":"native-process"}
+    except (BridgeError,OSError,subprocess.TimeoutExpired) as exc:
+        return {"status":"unavailable","reason":str(exc)[:200]}
+
+
+
+def catalog_entry(kind, root, path):
+    if path.is_symlink() or not path.resolve().is_relative_to(root): return None
+    stat = path.stat(); meta = record_meta(path, kind)
+    if not meta: return None
+    key = hashlib.sha256((kind + ":" + str(path.relative_to(root))).encode()).hexdigest()
+    return dict(meta, id=key, modified=stat.st_mtime, size=stat.st_size, _path=path)
+
+
+def safe_entry(kind, root, path):
+    try: return catalog_entry(kind, root, path)
+    except (OSError, ValueError, TypeError, AttributeError): return None
+
+
+def provider_root(provider):
+    root = dict(transcript_roots())[provider].resolve()
+    return root if root.is_dir() else None
+
+
+def claude_project_dir(root, cwd):
+    # Claude names each project directory after its cwd with non-alphanumerics as "-".
+    return root / re.sub(r"[^A-Za-z0-9]", "-", str(Path(cwd).expanduser()))
+
+
+def with_children(kind, root, parents):
+    entries = list(parents)
+    for parent in parents:
+        path = parent["_path"]
+        for child in (path.parent / path.stem / "subagents").glob("*.jsonl"):
+            value = safe_entry(kind, root, child)
+            if value: entries.append(value)
+    return sorted({x["id"]: x for x in entries}.values(), key=lambda x: x["modified"], reverse=True)
+
+
+def catalog_for_history(record_id, provider, active_thread=None):
+    # Locate by opaque digest / exact native id without reparsing unrelated chats.
+    if provider != "claude": return transcript_catalog(write_cache=False)
+    root = provider_root(provider)
+    if not root: return []
+    selected = []
+    for path in root.rglob("*.jsonl"):
+        key = hashlib.sha256((provider + ":" + str(path.relative_to(root))).encode()).hexdigest()
+        if key != record_id and (not active_thread or path.stem != active_thread): continue
+        value = safe_entry(provider, root, path)
+        if value: selected.append(value)
+    return with_children(provider, root, selected)
+
+
+def scoped_records(provider, workspace, limit=12):
+    """Root conversations started in this workspace; never parses other projects."""
+    root = provider_root(provider)
+    if provider != "claude" or not root: return []
+    cwd = str(Path(workspace).expanduser())
+    directory = claude_project_dir(root, cwd)
+    try: files = sorted(directory.glob("*.jsonl"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit * 2]
+    except OSError: return []
+    records = [x for x in (safe_entry(provider, root, f) for f in files) if x and not x.get("parent")]
+    return records[:limit]
+
+
+def locate_thread(provider, thread, workspace):
+    root = provider_root(provider)
+    if provider != "claude" or not root or not re.fullmatch(UUID_RE, thread or ""): return None
+    preferred = claude_project_dir(root, workspace) / (thread + ".jsonl")
+    for path in [preferred, *root.glob("*/" + thread + ".jsonl")]:
+        if path.is_file():
+            value = safe_entry(provider, root, path)
+            if value and not value.get("parent"): return value
+    return None
+
+
+def remote_resolve(items):
+    """Remote side: map each ch workspace to its live native session and record."""
+    out = {}
+    for item in items[:32]:
+        workspace, provider = item.get("workspace"), item.get("provider", "claude")
+        if not isinstance(workspace, str) or provider not in ("claude", "codex"): continue
+        active = remote_active_history(workspace, provider)
+        record = locate_thread(provider, active.get("thread"), workspace) if active.get("status") == "matched" else None
+        out[workspace] = {"active": active, "record": public_record(record) if record else None,
+                          "candidates": [] if record else [public_record(x) for x in scoped_records(provider, workspace)]}
+    return out
+
+
+def remote_history_page(request, catalog=None):
+    active=remote_active_history(request["workspace"],request.get("provider","claude"))
+    if catalog is None: catalog=catalog_for_history(request["record_id"],request.get("provider","claude"),active.get("thread"))
+    matches=[x for x in catalog if x["provider"]==request.get("provider","claude") and x["thread"]==active.get("thread") and not x.get("parent")]
+    current=matches[0] if active.get("status")=="matched" and matches else None
+    follow=request.get("follow_active",False)
+    if not isinstance(follow,bool): raise BridgeError("Invalid follow_active")
+    selected=dict(request)
+    if follow and "before" not in request and current: selected["record_id"]=current["id"]
+    result=history_page(selected,catalog)
+    result["active_status"]=active
+    if current: result["active_record"]=public_record(current)
+    result["active_changed"]=selected["record_id"]!=request["record_id"]
+    return result
+
+def remote_read(route, request, limit=None):
     # Code is sent through stdin, and the only remote entry points read the two
     # authorized history roots. No installer, provider credentials or shell input.
     source = Path(__file__).read_text().rsplit('\nif __name__ == "__main__":',1)[0]
     code = source + "\nrequest = json.loads(" + repr(json.dumps(request)) + ")\n"
-    code += "catalog = transcript_catalog(write_cache=False)\n"
-    code += "result = history_page(request, catalog) if request['op'] == 'history' else {'records': [public_record(x) for x in catalog], 'home': str(Path.home())}\n"
+    code += "op = request['op']\n"
+    code += "if op == 'resolve': result = {'routes': remote_resolve(request.get('items', []))}\n"
+    code += "elif op == 'history': result = remote_history_page(request)\n"
+    code += "elif op == 'catalog': result = {'records': [public_record(x) for x in scoped_records(request.get('provider','claude'), request['workspace'], 100)]}\n"
+    code += "else: result = {'error': 'unknown remote op'}\n"
     code += "encoded = json.dumps(result, ensure_ascii=False)\nprint(encoded if len(encoded.encode()) <= 2_000_000 else '{\"error\":\"history response exceeds 2 MB\"}')\n"
     args = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=8", *route["ssh"], "python3 -c 'import sys; exec(sys.stdin.read())'"]
-    remaining = 15 if _remote_deadline is None else min(15, _remote_deadline-time.monotonic())
-    if remaining <= 0: raise BridgeError("远端历史索引达到本次读取时限，请刷新重试")
+    limit = limit or (25 if request["op"] == "history" else 15)
+    remaining = limit if _remote_deadline is None else min(limit, _remote_deadline-time.monotonic())
+    if remaining <= 0: raise BridgeError("远端历史读取达到本次时限，请刷新重试")
     try: result = subprocess.run(args, input=code, capture_output=True, text=True, timeout=remaining)
-    except (OSError, subprocess.TimeoutExpired) as exc: raise BridgeError("远端历史连接不可用或超时") from exc
-    if result.returncode: raise BridgeError("远端历史读取失败：SSH 认证、连接或 Python 环境不可用")
-    if len(result.stdout.encode()) > 2_000_000: raise BridgeError("远端历史索引过大")
+    except subprocess.TimeoutExpired as exc: raise BridgeError("远端电脑响应超时") from exc
+    except OSError as exc: raise BridgeError("无法启动 SSH 连接远端电脑") from exc
+    if result.returncode: raise BridgeError("连不上远端电脑：SSH 认证、网络或 Python 环境不可用")
+    if len(result.stdout.encode()) > 2_000_000: raise BridgeError("远端历史响应过大")
     try: data = json.loads(result.stdout)
     except ValueError as exc: raise BridgeError("远端历史返回格式异常") from exc
     if not isinstance(data,dict) or data.get("error"): raise BridgeError("远端历史读取失败或响应超过 2 MB")
     return data
+
+
+def prefetch_remote(pairs):
+    """One SSH round trip per remote account, all accounts in parallel."""
+    from concurrent.futures import ThreadPoolExecutor
+    groups = {}
+    for route, provider in pairs:
+        key = json.dumps(route["ssh"])
+        group = groups.setdefault(key, {"route": route, "items": {}})
+        group["items"][route["workspace"]] = provider
+    def run(group):
+        items = [{"workspace": w, "provider": p} for w, p in group["items"].items()]
+        try: return remote_read(group["route"], {"op": "resolve", "items": items}).get("routes", {})
+        except BridgeError as exc: return exc
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(groups)))) as pool:
+        for key, value in zip(groups, pool.map(run, groups.values())):
+            _remote_results[key] = value
+
+
+def remote_resolution(route, context):
+    key = json.dumps(route["ssh"])
+    if key not in _remote_results: prefetch_remote([(route, context["provider"])])
+    data = _remote_results.get(key)
+    if isinstance(data, BridgeError): return {"status": "remote_error", "reason": str(data), "remote": context}
+    item = (data or {}).get(route["workspace"])
+    if not item: return {"status": "remote_error", "reason": "远端没有返回这个窗格的结果", "remote": context}
+    active = item.get("active") or {}
+    if item.get("record"):
+        record = wrap_remote_record(item["record"], route, context)
+        return {"status": "matched", "source": "native-process", "record_id": record["id"], "thread": record["thread"], "record": record, "remote": context}
+    candidates = [wrap_remote_record(x, route, context) for x in item.get("candidates", [])]
+    if active.get("status") == "matched":
+        return {"status": "pending", "thread": active.get("thread"), "remote": context, "candidates": candidates,
+                "reason": "远端会话刚开始，历史文件还没写出"}
+    return {"status": "remote_candidates" if candidates else "remote_missing", "remote": context, "candidates": candidates,
+            "reason": active.get("reason") or "远端会话没有公开可核实的会话标识"}
 
 
 def wrap_remote_record(record, route, context):
@@ -291,17 +587,8 @@ def wrap_remote_record(record, route, context):
 
 
 def remote_catalog(route, context):
-    key = json.dumps(route["ssh"])
-    if key not in _remote_catalog_cache:
-        try: _remote_catalog_cache[key] = remote_read(route, {"op":"catalog", "workspace":route["workspace"]})
-        except BridgeError as exc: _remote_catalog_cache[key] = exc
-    data = _remote_catalog_cache[key]
-    if isinstance(data,BridgeError): raise data
-    workspace = route["workspace"]
-    if workspace.startswith("~/"): workspace = data["home"] + workspace[1:]
-    records = [x for x in data["records"] if not context.get("provider") or x["provider"] == context["provider"]]
-    exact = [x for x in records if x["cwd"] == workspace]
-    return [dict(wrap_remote_record(x,route,context),route_match=bool(exact)) for x in (exact or records)]
+    data = remote_read(route, {"op": "catalog", "workspace": route["workspace"], "provider": context.get("provider", "claude")})
+    return [wrap_remote_record(x, route, context) for x in data.get("records", [])]
 
 
 def route_for_context(context):
@@ -311,6 +598,12 @@ def route_for_context(context):
     agent = next((a for a in found if a.get("pane_id")==context.get("target") and a["identity"]==context.get("identity")),None)
     if not agent: raise BridgeError("远端窗格已改变，请刷新会话列表")
     info = call(prefix+["pane","process-info","--pane",agent["pane_id"]]).get("process_info",{})
+    route=route_from_process_info(info)
+    if route: return route
+    raise BridgeError("远端 SSH 路由已断开，请刷新会话列表")
+
+
+def route_from_process_info(info):
     queue = [(p.get("pid"),p.get("argv",[])) for p in info.get("foreground_processes",[])]; seen=set()
     while queue and len(seen)<64:
         pid, initial = queue.pop(0)
@@ -319,7 +612,7 @@ def route_for_context(context):
         route=ch_ssh_route(argv)
         if route: return route
         if snapshot: queue.extend((child,[]) for child in snapshot["children"])
-    raise BridgeError("远端 SSH 路由已断开，请刷新会话列表")
+    return None
 
 
 def remote_history_request(request):
@@ -337,10 +630,11 @@ def remote_history_request(request):
         return {"records":records[offset:offset+100],"total":len(records),"next":offset+100 if len(records)>offset+100 else None}
     key=request.get("record_id",""); prefix="remote:"+route["key"]+":"
     if not isinstance(key,str) or not key.startswith(prefix) or not re.fullmatch(r"[a-f0-9]{64}",key[len(prefix):]): raise BridgeError("Invalid remote history record")
-    data={"op":"history","record_id":key[len(prefix):],"workspace":route["workspace"]}
+    data={"op":"history","record_id":key[len(prefix):],"workspace":route["workspace"],"provider":context.get("provider","claude"),"follow_active":request.get("follow_active",False)}
     if "before" in request: data["before"]=request["before"]
     result=remote_read(route,data)
     result["record"]=wrap_remote_record(result["record"],route,context)
+    if result.get("active_record"): result["active_record"]=wrap_remote_record(result["active_record"],route,context)
     result["children"]=[wrap_remote_record(x,route,context) for x in result["children"]]
     return result
 

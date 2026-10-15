@@ -52,7 +52,15 @@ Codex adapters read session_meta and response_item records; Claude adapters read
 
 Unresolved references explicitly report `unavailable`, `missing`, `ambiguous`, `remote`, `remote_candidates`, `remote_missing`, or `remote_error`, with optional `reason`, `query`, and up to 12 inline metadata `candidates`. These are suggestions for explicit selection, not send destinations. Manual association retains the existing pane/identity and requires the app's explicit confirmation.
 
-For a live ch-cli SSH attach, process argv identifies the established SSH destination and dedicated route workspace. Only a single top-level provider thread in that exact route workspace is automatically matched. Multiple threads, or no exact workspace match, expose remote read-only candidates; they are not selected by newest timestamp.
+History resolution uses the strongest available evidence, and a weaker source never overrides a stronger one:
+
+1. **native-process** — the live Claude process holds its runtime directory `/tmp/claude-<uid>/<project>/<session-id>/tasks` open; the session ID in that FD link is the conversation currently on screen (it follows `/clear` and `/resume`).
+2. **title** — the Codex TUI sets the terminal title to `<thread name> | <cwd name>`. It is matched against `~/.codex/session_index.jsonl` names, preferring threads the Codex app-server has loaded (`~/.codex/thread-writer-locks/<id>.lock`). Duplicate names are only accepted when exactly one is loaded.
+3. **open-file** — a transcript JSONL the native process holds open.
+4. **herdr** — Herdr's reported `agent_session` (can be stale after switching sessions inside the TUI).
+5. **process** — `--resume`/`resume` IDs in argv (startup only; stale after an in-app switch).
+
+For a live ch-cli SSH attach, process argv identifies the established SSH destination and route workspace. One SSH round trip per remote account (all accounts in parallel) runs op `resolve`, which applies rule 1 inside ch's tmux pane and opens only the matching transcript. When no live ID is found, the candidates are the root conversations in that route's own Claude project directory; they are never selected by newest timestamp.
 
 Remote records have IDs `remote:<route digest>:<opaque record hash>` and a `remote` context containing Herdr `session`, `target`, `identity`, and provider. `catalog` and `history` accept that context; each request revalidates the live pane and rediscovers its SSH route. A stale route or mismatched namespace fails explicitly. Children and parent navigation preserve remote context. Catalog query/offset/thread semantics remain the same; local catalog remains available without a live Herdr session, while remote routes require their live attach pane.
 

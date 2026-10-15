@@ -15,7 +15,7 @@ class UntrustedHost(val key: String, val fingerprint: String) : Exception("请�
 class SshTransport : AutoCloseable {
     private var session: Session? = null
     private var home = ""
-    fun connect(endpoint: Endpoint, password: String, pinnedKey: String?) {
+    fun connect(endpoint: Endpoint, password: String, pinnedKey: String?, progress: (String) -> Unit = {}) {
         close()
         if (Security.getProvider("BC") == null) Security.addProvider(BouncyCastleProvider())
         var pending: UntrustedHost? = null
@@ -43,12 +43,14 @@ class SshTransport : AutoCloseable {
         candidate.serverAliveInterval = 15000
         candidate.timeout = 30000
         try {
+            progress("正在建立 SSH 连接并验证身份…")
             candidate.connect(15000)
             session = candidate
         } catch (e: Exception) {
             candidate.disconnect()
             throw pending ?: e
         }
+        progress("SSH 身份验证成功，正在读取远端目录…")
         val sftp = candidate.openChannel("sftp") as ChannelSftp
         try { sftp.connect(10000); home = sftp.realpath(".") } finally { sftp.disconnect() }
     }

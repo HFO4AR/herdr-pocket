@@ -24,3 +24,11 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .terminal-input-options{display:flex;align-items:center;justify-content:space-between;max-width:780px;margin:auto}.terminal-input-options .check{margin:4px 0;font-size:12px}
 .terminal-shell .composer textarea{max-height:72px}.terminal-shell .composer .primary{min-height:40px;padding:0 12px}
 @media(max-height:500px){.terminal-keys{padding:2px 6px}.terminal-keys button{min-height:36px}.terminal-input-options .check{margin:0}.terminal-input-options .link-btn{min-height:28px}}
+
+/* Persistent truthful connection stages, including reduced-motion text feedback. */
+.connection-status{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line);font-size:13px;overflow-wrap:anywhere;background:var(--surface)}
+.connection-status strong{display:block;margin-bottom:4px}.connection-status.failed{color:var(--danger)}
+.spinner{display:inline-block;width:18px;height:18px;flex-shrink:0;border:2px solid #d7d1c8;border-top-color:#a74925;border-radius:50%;animation:connection-spin .9s linear infinite}
+.dot.offline{background:#888}.loading-card{display:flex;align-items:center;gap:16px}.loading-card h2{font-size:17px}.loading-card p{margin-bottom:0}
+@keyframes connection-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.spinner{animation:none}}

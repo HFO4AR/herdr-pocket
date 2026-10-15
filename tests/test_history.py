@@ -184,18 +184,56 @@ class HistoryTests(unittest.TestCase):
         self.assertIsNone(bridge.ch_ssh_route(['ssh','host','echo __native-attach '+sid]))
         self.assertIsNone(bridge.ch_ssh_route(['ssh','host',"exec ch --state /tmp/../private __native-attach "+sid]))
 
-    def test_remote_catalog_uses_one_host_fetch_and_does_not_guess(self):
+    def test_remote_resolution_batches_per_account_and_does_not_guess(self):
         route={'ssh':['host'],'workspace':'~/workspaces/route','key':'fixture'}
+        other=dict(route,workspace='~/workspaces/other')
         record={'id':'a'*64,'thread':'thread','provider':'claude','parent':None,'title':'fixture','cwd':'/remote/workspaces/route'}
-        bridge._remote_catalog_cache.clear()
-        self.addCleanup(bridge._remote_catalog_cache.clear)
-        with patch.object(bridge,'remote_read',return_value={'records':[record],'home':'/remote'}) as read:
-            first=bridge.remote_catalog(route,{'target':'one'})
-            second=bridge.remote_catalog(dict(route,workspace='~/workspaces/other'),{'target':'two'})
+        nearby=dict(record,id='b'*64,thread='older')
+        reply={'routes':{'~/workspaces/route':{'active':{'status':'matched','thread':'thread'},'record':record,'candidates':[]},
+                         '~/workspaces/other':{'active':{'status':'unavailable','reason':'no id'},'record':None,'candidates':[nearby]}}}
+        bridge._remote_results.clear(); self.addCleanup(bridge._remote_results.clear)
+        with patch.object(bridge,'remote_read',return_value=reply) as read:
+            bridge.prefetch_remote([(route,'claude'),(other,'claude')])
+            first=bridge.remote_resolution(route,{'target':'one','provider':'claude'})
+            second=bridge.remote_resolution(other,{'target':'two','provider':'claude'})
         self.assertEqual(read.call_count,1)
-        self.assertTrue(first[0]['route_match'])
-        self.assertFalse(second[0]['route_match'])
-        self.assertTrue(first[0]['id'].startswith('remote:fixture:'))
+        self.assertEqual(len(read.call_args[0][1]['items']),2)
+        self.assertEqual(first['status'],'matched');self.assertTrue(first['record_id'].startswith('remote:fixture:'))
+        self.assertEqual(second['status'],'remote_candidates');self.assertNotIn('record_id',second)
+        self.assertEqual(second['reason'],'no id')
+
+    def test_remote_resolve_reads_only_workspace_project_directory(self):
+        thread='11111111-2222-3333-4444-555555555555'
+        workspace='/remote/ws/route'
+        project=re_dir='-remote-ws-route'
+        self.write('claude',project+'/'+thread+'.jsonl',[{'type':'user','sessionId':thread,'cwd':workspace,'message':{'content':'live'}}])
+        self.write('claude',project+'/older.jsonl',[{'type':'user','sessionId':'older','cwd':workspace,'message':{'content':'old'}}])
+        self.write('claude','-elsewhere/unrelated.jsonl',[{'type':'user','sessionId':'x','cwd':'/elsewhere','message':{'content':'no'}}])
+        parsed=[]; real=bridge.record_meta
+        def meta(path,provider): parsed.append(path.name); return real(path,provider)
+        with patch.object(bridge,'record_meta',side_effect=meta),patch.object(bridge,'remote_active_history',return_value={'status':'matched','thread':thread}):
+            live=bridge.remote_resolve([{'workspace':workspace,'provider':'claude'}])[workspace]
+        self.assertEqual(live['record']['thread'],thread);self.assertEqual(live['candidates'],[])
+        with patch.object(bridge,'record_meta',side_effect=meta),patch.object(bridge,'remote_active_history',return_value={'status':'unavailable'}):
+            idle=bridge.remote_resolve([{'workspace':workspace,'provider':'claude'}])[workspace]
+        self.assertIsNone(idle['record']);self.assertEqual({x['thread'] for x in idle['candidates']},{thread,'older'})
+        self.assertNotIn('unrelated.jsonl',parsed)
+
+    def test_codex_title_beats_stale_herdr_and_startup_resume(self):
+        def make(thread,title):
+            return self.write('codex',thread+'.jsonl',[{'type':'session_meta','payload':{'id':thread,'cwd':'/work/proj'}},codex('user',title)])
+        make('stale','old'); make('live','new'); make('other','x')
+        entries=bridge.transcript_catalog()
+        agent={'agent':'codex','pane_id':'test:1','terminal_title':'接入飞书 | proj','cwd':'/work/proj','agent_session':{'value':'other'}}
+        probe={'ids':{'stale'},'paths':set(),'active':set(),'route':None,'cwd':'/work/proj','remote':False,'ok':True}
+        index=({'stale':'查找配置','live':'接入飞书','other':'别的'},{'stale','live','other'})
+        ref=bridge.resolve_agent_history(agent,[],entries,index,probe)
+        self.assertEqual((ref['status'],ref['thread'],ref['source']),('matched','live','title'))
+        # Duplicate names are only trusted when exactly one of them is loaded.
+        index=({'stale':'接入飞书','live':'接入飞书'},{'live'})
+        self.assertEqual(bridge.resolve_agent_history(agent,[],entries,index,probe)['thread'],'live')
+        index=({'stale':'接入飞书','live':'接入飞书'},{'live','stale'})
+        self.assertEqual(bridge.resolve_agent_history(agent,[],entries,index,probe)['status'],'ambiguous')
 
     def test_remote_request_revalidates_route_and_record_namespace(self):
         route={'ssh':['host'],'workspace':'~/workspaces/route','key':'fixture'}
@@ -223,8 +261,94 @@ class HistoryTests(unittest.TestCase):
         with patch.object(bridge.subprocess,'run',side_effect=run):
             bridge.remote_read(route,{'op':'catalog','workspace':'/fixture'})
         self.assertIn('StrictHostKeyChecking=yes',captured[0][0])
-        self.assertIn('transcript_catalog(write_cache=False)',captured[0][1]['input'])
+        self.assertIn('scoped_records(',captured[0][1]['input'])
         with patch.object(bridge.subprocess,'run',return_value=subprocess.CompletedProcess([],1,'','private server error')):
-            with self.assertRaisesRegex(bridge.BridgeError,'远端历史读取失败'):bridge.remote_read(route,{'op':'catalog','workspace':'/fixture'})
+            with self.assertRaisesRegex(bridge.BridgeError,'连不上远端电脑'):bridge.remote_read(route,{'op':'catalog','workspace':'/fixture'})
+
+    def test_active_native_runtime_session_beats_startup_resume(self):
+        old='11111111-2222-3333-4444-555555555555'; current='22222222-2222-3333-4444-555555555555'
+        snapshots={10:{'argv':['bash'],'children':[11],'start':'1'},11:{'argv':['claude','--resume',old],'active_threads':[current],'children':[12],'start':'2'},12:{'argv':['claude','--resume',old],'children':[],'start':'3'}}
+        with patch.object(bridge,'process_snapshot',side_effect=snapshots.get):
+            self.assertEqual(bridge.active_threads_in_pane(10,'claude'),current)
+            self.assertEqual(bridge.active_threads_in_pane(10,'claude',11,'2'),current)
+            with self.assertRaisesRegex(bridge.BridgeError,'已更换'): bridge.active_threads_in_pane(10,'claude',11,'wrong-start')
+            with self.assertRaisesRegex(bridge.BridgeError,'不再属于'): bridge.active_threads_in_pane(10,'claude',99,'1')
+            snapshots[11]['active_threads']=[];snapshots[11]['argv']=['claude']
+            self.assertIsNone(bridge.active_threads_in_pane(10,'claude'))
+
+    def test_route_metadata_selects_locator_fields_only(self):
+        import sqlite3
+        route_id='11111111-2222-3333-4444-555555555555'
+        state=self.home/'state'; directory=state/'sessions'/route_id;directory.mkdir(parents=True)
+        dbpath=directory/'session.sqlite'
+        with sqlite3.connect(dbpath) as db:
+            db.execute('CREATE TABLE session(singleton INTEGER,config TEXT)')
+            db.execute('INSERT INTO session VALUES(1,?)',(json.dumps({'imported_tmux':{'socket':'/tmp/fixture.sock','session':'fixture','pane':'%4','pid':123,'start':456},'bridge':{'token':'never-return-this'}}),))
+        db.close()
+        statements=[];connect=sqlite3.connect
+        def tracked(*args,**kwargs):
+            self.assertIn('mode=ro&immutable=1',args[0]);db=connect(*args,**kwargs);db.set_trace_callback(statements.append);return db
+        with patch.object(bridge.sqlite3,'connect',side_effect=tracked):
+            binding=bridge.route_binding_metadata(state/'workspaces'/route_id)
+        self.assertEqual(binding,{'socket':'/tmp/fixture.sock','session':'fixture','pane':'%4','pid':123,'start':456})
+        self.assertTrue(all('json_extract(config' in statement for statement in statements))
+        self.assertNotIn('token',str(binding));self.assertNotIn('bridge',str(statements))
+        (directory/'native-route.json').write_text(json.dumps({'native_route':{'socket':'/tmp/migrated.sock','session':'migrated'}}))
+        self.assertEqual(bridge.route_binding_metadata(state/'workspaces'/route_id)['socket'],'/tmp/migrated.sock')
+
+    def test_remote_active_tmux_imported_pane_identity(self):
+        import subprocess
+        from types import SimpleNamespace
+        binding={'socket':'/tmp/fixture.sock','session':'fixture','pane':'%2','pid':22,'start':100}
+        response=subprocess.CompletedProcess([],0,'%1\t11\t0\t1\t1\n%2\t21\t0\t0\t1\n','')
+        with patch.object(bridge,'route_binding_metadata',return_value=binding),patch.object(bridge.Path,'lstat',return_value=SimpleNamespace(st_mode=bridge.stat_module.S_IFSOCK,st_uid=bridge.os.getuid())),patch.object(bridge.subprocess,'run',return_value=response),patch.object(bridge,'active_threads_in_pane',return_value='native') as active:
+            result=bridge.remote_active_history('/fixture')
+        self.assertEqual(result['thread'],'native')
+        active.assert_called_once_with(21,'claude',22,100)
+
+    def test_remote_follow_active_is_explicit_and_preserves_manual_older_history(self):
+        self.write('claude','old.jsonl',[{'type':'user','sessionId':'old','message':{'content':'old message'}}])
+        self.write('claude','current.jsonl',[{'type':'user','sessionId':'current','message':{'content':'active message'}}])
+        catalog=bridge.transcript_catalog();old=next(x for x in catalog if x['thread']=='old');current=next(x for x in catalog if x['thread']=='current')
+        request={'record_id':old['id'],'workspace':'/fixture','provider':'claude'}
+        with patch.object(bridge,'remote_active_history',return_value={'status':'matched','thread':'current'}):
+            manual=bridge.remote_history_page(request,catalog)
+            live=bridge.remote_history_page(dict(request,follow_active=True),catalog)
+            older=bridge.remote_history_page(dict(request,follow_active=True,before=old['size']),catalog)
+        self.assertEqual(manual['record']['id'],old['id']);self.assertFalse(manual['active_changed'])
+        self.assertEqual(live['record']['id'],current['id']);self.assertTrue(live['active_changed'])
+        self.assertEqual(older['record']['id'],old['id'])
+        self.assertEqual(live['messages'][0]['text'],'active message')
+
+    def test_process_snapshot_reads_only_current_user_task_directory_links(self):
+        real_path=Path; proc=self.home/'proc';pid=101;root=proc/str(pid)
+        (root/'task'/str(pid)).mkdir(parents=True);(root/'fd').mkdir()
+        (root/'task'/str(pid)/'children').write_text('')
+        (root/'stat').write_text('101 (claude) '+' '.join(['0']*19+['123']))
+        (root/'cmdline').write_bytes(b'claude\0')
+        (root/'cwd').symlink_to(self.home)
+        native='11111111-2222-3333-4444-555555555555'
+        (root/'fd'/'7').symlink_to('/tmp/claude-'+str(bridge.os.getuid())+'/project/'+native+'/tasks')
+        (root/'fd'/'8').symlink_to('/tmp/claude-'+str(bridge.os.getuid()+1)+'/project/22222222-2222-3333-4444-555555555555/tasks')
+        (root/'fd'/'9').symlink_to('/private/auth.json')
+        with patch.object(bridge,'Path',side_effect=lambda value:proc if value=='/proc' else real_path(value)):
+            snapshot=bridge.process_snapshot(pid)
+        self.assertEqual(snapshot['active_threads'],[native])
+        self.assertEqual(snapshot['start'],'123')
+        self.assertEqual(snapshot['paths'],[])
+
+    def test_targeted_remote_history_skips_unrelated_metadata(self):
+        current=self.write('claude','project/current.jsonl',[{'type':'user','sessionId':'current','message':{'content':'active'}}])
+        self.write('claude','project/other.jsonl',[{'type':'user','sessionId':'other','message':{'content':'unrelated'}}])
+        self.write('claude','project/current/subagents/agent-child.jsonl',[{'type':'user','sessionId':'current','message':{'content':'child'}}])
+        record=next(x for x in bridge.transcript_catalog() if x['thread']=='current' and not x['parent'])
+        original=bridge.record_meta;read=[]
+        def meta(path,provider):read.append(path.name);return original(path,provider)
+        with patch.object(bridge,'record_meta',side_effect=meta):
+            catalog=bridge.catalog_for_history(record['id'],'claude')
+        self.assertEqual(len(catalog),2)
+        self.assertNotIn('other.jsonl',read)
+        page=bridge.history_page({'record_id':record['id']},catalog)
+        self.assertEqual(len(page['children']),1)
 
 if __name__=='__main__':unittest.main()

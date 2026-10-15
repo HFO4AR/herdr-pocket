@@ -29,6 +29,42 @@ assert.equal(await page.evaluate(()=>S.devices[0].remember),true);
 await page.getByRole('button',{name:'取消',exact:true}).click();
 await page.evaluate(()=>disconnect());
 
+// Hold each asynchronous stage to prove loading does not turn into a false empty state.
+await page.evaluate(()=>{
+ window.originalRequest=PocketNative.request;
+ PocketNative.request=(id,op,raw)=>{
+  if(op==='connect'){window.pendingConnect=id;return;}
+  if(op==='remote'){window.pendingRemote={id,args:JSON.parse(raw)};return;}
+  originalRequest(id,op,raw);
+ };
+ void doConnect(S.devices[0]);
+});
+await page.getByText('正在建立 SSH 连接并验证身份…',{exact:true}).waitFor();
+assert(await page.getByRole('button',{name:'正在连接…',exact:true}).isDisabled());
+await page.evaluate(()=>nativeProgress(pendingConnect,'等待你核对并确认 SSH 主机指纹…'));
+await page.getByText('等待你核对并确认 SSH 主机指纹…',{exact:true}).waitFor();
+await page.waitForTimeout(4600);
+assert(await page.getByText('等待你核对并确认 SSH 主机指纹…',{exact:true}).isVisible());
+await page.evaluate(()=>nativeResult(pendingConnect,{ok:true,data:{device:S.devices[0],ready:true}}));
+await page.getByText('SSH 已连接，正在读取会话',{exact:true}).waitFor();
+assert.equal(await page.getByText('暂时没有会话',{exact:true}).count(),0);
+await page.evaluate(()=>nativeResult(pendingRemote.id,{ok:true,data:{sessions:[{name:'fixture',running:true}]}}));
+await page.getByText('正在识别 Agent 并同步本机和远端历史，首次读取可能需要几十秒。',{exact:true}).waitFor();
+fs.mkdirSync(path.join(root,'ui-artifacts'),{recursive:true});
+await page.screenshot({path:path.join(root,'ui-artifacts/connection-loading-browser.png')});
+await page.evaluate(()=>nativeResult(pendingRemote.id,{ok:false,error:'fixture read timeout'}));
+await page.getByText('会话读取失败',{exact:true}).waitFor();
+assert.equal(await page.getByText('暂时没有会话',{exact:true}).count(),0);
+await page.getByRole('button',{name:'重新读取',exact:true}).click();
+await page.evaluate(()=>nativeResult(pendingRemote.id,{ok:true,data:{sessions:[]}}));
+await page.getByText('暂时没有会话',{exact:true}).waitFor();
+await page.evaluate(async()=>{await disconnect();void doConnect(S.devices[0]);});
+await page.evaluate(()=>nativeResult(pendingConnect,{ok:false,error:'fixture authentication error'}));
+await page.getByText('连接未完成',{exact:true}).waitFor();
+assert(await page.getByRole('button',{name:'重试',exact:true}).isVisible());
+await page.evaluate(async()=>{closeSheet();PocketNative.request=originalRequest;await disconnect();});
+console.log('PASS: persistent SSH stages, duplicate connect disabled, loading versus empty, persistent failure and retry');
+
 await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
 await page.getByRole('button',{name:/把移动端做成真正的聊天工具/}).click();
 await page.getByText('历史记录、子 Agent 和执行的命令都要能看到。',{exact:true}).waitFor();
@@ -79,9 +115,11 @@ await page.evaluate(async()=>{
  S.bindings.clear();const originalRemote=remote;window.historyCalls=[];remote=(op,args={})=>{historyCalls.push({op,args});return originalRemote(op,args);};
  const context={session:'demo',target:'demo:1',identity:'demo-codex'};
  const record={...demoRecords[0],remote:context};
+ S.bindings.set('demo/demo-codex',demoRecords[2]);
  await openAgent({...demoAgents[0],history_ref:{status:'matched',source:'ch-route',record_id:record.id,record,remote:context}});
 });
 await page.getByText('历史记录、子 Agent 和执行的命令都要能看到。',{exact:true}).waitFor();
+assert.equal(await page.evaluate(()=>S.chat.manual),undefined);
 assert.equal(await page.evaluate(()=>historyCalls.filter(x=>x.op==='history').at(-1).args.remote.target),'demo:1');
 await page.getByRole('button',{name:'更多操作',exact:true}).click();
 await page.getByRole('button',{name:'选择其他历史记录',exact:true}).click();

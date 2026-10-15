@@ -70,6 +70,9 @@ class MainActivity : Activity() {
     private fun reply(id: String, result: JSONObject) {
         runOnUiThread { if (!destroyed) web.evaluateJavascript("window.nativeResult(${JSONObject.quote(id)}, ${result});", null) }
     }
+    private fun progress(id: String, stage: String) {
+        runOnUiThread { if (!destroyed) web.evaluateJavascript("window.nativeProgress(${JSONObject.quote(id)}, ${JSONObject.quote(stage)});", null) }
+    }
     private fun success(id: String, value: JSONObject) = reply(id, JSONObject().put("ok", true).put("data", value))
     private fun failure(id: String, error: Exception) = reply(id, JSONObject().put("ok", false).put("error", error.message ?: "操作失败"))
     private fun connect(id: String, request: JSONObject, trusted: Boolean = false) {
@@ -78,16 +81,18 @@ class MainActivity : Activity() {
         val pinId = "pin:${endpoint.host}:${endpoint.port}"
         val password = request.optString("password").ifEmpty { device.optString("password") }
         try {
-            transport.connect(endpoint, password, pins.getString(pinId, null))
+            transport.connect(endpoint, password, pins.getString(pinId, null)) { stage -> progress(id, stage) }
             transport.useBundled(bridge)
             if (request.has("remember") && request.optString("password").isNotEmpty()) {
                 vault.save(JSONObject(device.toString()).put("password", password).put("remember", request.getBoolean("remember")))
             }
             device.put("remember", vault.get(device.getString("id")).optString("password").isNotEmpty())
             connectedDevice = JSONObject(device.toString()).apply { remove("password") }
+            progress(id, "SSH 已连接，正在检查桥接程序…")
             val ready = try { transport.request(JSONObject().put("op", "hello")).getInt("protocol") == 1 } catch (_: Exception) { false }
             success(id, JSONObject().put("device", connectedDevice).put("ready", ready).put("devices", vault.list()))
         } catch (e: UntrustedHost) {
+            progress(id, "等待你核对并确认 SSH 主机指纹…")
             if (trusted) { failure(id, e); return }
             runOnUiThread {
                 AlertDialog.Builder(this).setTitle("核对 SSH 主机指纹")
