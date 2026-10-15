@@ -104,6 +104,26 @@ await page.locator('.queue-bar').getByText(/没能中断它/).waitFor({timeout:8
 assert.equal(await page.evaluate(()=>fx.attempts.length),before);
 console.log('PASS: a failed interrupt sends nothing and says why');
 
+// 5. The phone's screenshot case: a send reported "unknown" had in fact arrived, and the person sent the
+// same words again (queued, the agent was busy). Once the transcript shows it, the first becomes
+// delivered and the queued copy is held for the person instead of going out twice.
+await page.evaluate(()=>{fx.keyError='';fx.stuck=false;Q.clear();S.outbox=[];fx.list=fx.list.map(a=>({...a,agent_status:'idle'}));});
+await status('idle');
+await page.evaluate(()=>{fx.promptErrors.push('等了 35 秒还没有回应；请求已经发出，结果未知。先刷新看看，别直接重发。');});
+await send('明天再测试今天先到这');
+await page.locator('.message.user.pending').filter({hasText:'明天再测试今天先到这'}).getByText('发送未确认').waitFor();
+await status('working');
+await send('明天再测试今天先到这');
+await bubble('明天再测试今天先到这').waitFor();
+const tries=await page.evaluate(()=>fx.attempts.length);
+await page.evaluate(async()=>{fx.H.r1.push({id:'95:0',kind:'user',text:'明天再测试今天先到这',title:'',call_id:'',timestamp:new Date().toISOString()});await fetchHistory();});
+await page.getByText('刚才那条其实送到了').waitFor();
+assert.equal(await page.locator('.message.user.pending').filter({hasText:'明天再测试今天先到这'}).count(),0,'no 发送未确认 left');
+await page.locator('.queue-bar').getByText(/和刚送到的消息一样/).waitFor();
+await status('idle');await page.waitForTimeout(3500);
+assert.equal(await page.evaluate(()=>fx.attempts.length),tries,'the duplicate never goes out by itself');
+console.log('PASS: an unknown send seen in the transcript becomes delivered; a queued duplicate waits for the person');
+
 const ids=await page.evaluate(()=>[...fx.attempts,...fx.keys].map(x=>x.id));
 assert.equal(new Set(ids).size,ids.length,'every request has its own id');
 assert.deepEqual(errors,[]);

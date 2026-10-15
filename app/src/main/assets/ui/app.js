@@ -377,7 +377,17 @@ async function sendMessage(input){
  finally{button.disabled=!input.value.trim()&&!attCount(key);}}
 function scrollBottom(){const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
 // A pending bubble disappears once the transcript shows the same user text.
-function settleOutbox(){if(!S.outbox.length)return false;const count=S.outbox.length;const recent=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>{const x=imgSplit(m);return x.text+'\u0000'+(x.specs.length?1:0);});S.outbox=S.outbox.filter(o=>!(o.state==='sent'&&recent.includes(o.text.trim()+'\u0000'+(o.images?.length?1:0)))&&Date.now()-o.at<180000);return S.outbox.length!==count;}
+function settleOutbox(){if(!S.outbox.length)return false;const count=S.outbox.length;
+ const users=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>{const x=imgSplit(m);return {sig:x.text+'\u0000'+(x.specs.length?1:0),at:toDate(m.timestamp)?.getTime()||0};});
+ const sig=o=>o.text.trim()+'\u0000'+(o.images?.length?1:0);
+ // A send whose outcome was unknown, and whose text then shows up in the transcript (written after it
+ // was sent, allowing for clock skew), did arrive. Anything still queued with the same words waits
+ // for the person instead of going out a second time.
+ for(const o of S.outbox){if(o.state!=='failed'||!users.some(u=>u.sig===sig(o)&&u.at>=o.at-120000))continue;
+  o.state='sent';toast('刚才那条其实送到了');
+  const q=Q.get(o.key),dup=q?.items.find(it=>it.state==='queued'&&it.text.trim()===o.text.trim());
+  if(dup){dup.reason='和刚送到的那条一样，确认还要再发吗';queuePause(q,'排队里有一条和刚送到的消息一样，先停下。不需要就删掉，要发再点继续',true);}}
+ S.outbox=S.outbox.filter(o=>!(o.state==='sent'&&users.some(u=>u.sig===sig(o)))&&Date.now()-o.at<180000);return S.outbox.length!==count;}
 // A finish only counts when Herdr itself reported working → stopped just now;
 // the optimistic "working" set after sending must not flash "做完了".
 function onAgentStatus(was,now){

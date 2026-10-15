@@ -17,6 +17,7 @@ ROUTE = {"ssh": ["remote"], "workspace": "~/.local/share/ch/workspaces/x", "key"
 
 class RelayTests(unittest.TestCase):
     def setUp(self):
+        self.real_call = bridge.call
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
         self.state = Path(directory.name)
         self.agent = {"pane_id": "w1:p1", "terminal_id": "term_r", "agent": "claude", "agent_status": "done"}
@@ -111,6 +112,18 @@ class RelayTests(unittest.TestCase):
         with patch.object(bridge, "answer_question", side_effect=first_refused), patch.object(bridge, "validate_answer", return_value=None):
             self.send(op="answer", action="select", option=1, label="x", fingerprint="f")
         self.assertEqual(sent, [False, True])
+
+    def test_silent_success_of_pane_input_counts_as_sent(self):
+        # Measured on Herdr 0.8.2: pane run / send-text / send-keys print nothing and exit 0.
+        class Done:
+            returncode, stdout, stderr = 0, "", ""
+        with patch.object(bridge.subprocess, "run", return_value=Done()) as run:
+            for args in (["pane", "run", "w1:p1", "hi"], ["pane", "send-text", "w1:p1", "x"], ["pane", "send-keys", "w1:p1", "enter"],
+                         ["--session", "default", "pane", "run", "w1:p1", "hi"]):
+                self.assertEqual(self.real_call(args), {"type": "ok"})
+            # Anything else still has to answer in JSON.
+            with self.assertRaisesRegex(bridge.BridgeError, "non-JSON"):
+                self.real_call(["agent", "list"])
 
     def test_busy_relay_agent_is_not_prompted(self):
         self.agent["agent_status"] = "working"

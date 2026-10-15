@@ -63,6 +63,10 @@ def call(args, timeout=20):
     command_args = args[2:] if args[:1] == ["--session"] else args
     if command_args[:2] in (["agent", "read"], ["pane", "read"]):
         return {"text": result.stdout}
+    # Herdr 0.8.x pane input commands succeed silently: exit 0 and no output. Reading that as a
+    # failure marked delivered messages "outcome unknown" (the text had already reached the pane).
+    if command_args[:2] in (["pane", "run"], ["pane", "send-text"], ["pane", "send-keys"]) and not result.stdout.strip():
+        return {"type": "ok"}
     try:
         data = json.loads(result.stdout)
     except ValueError as exc:

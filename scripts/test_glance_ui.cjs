@@ -84,7 +84,9 @@ const previewOf=(page,title)=>rowOf(page,title).locator('.glance').evaluate(n=>[
 // 3. Poll: only busy agents or agents whose state changed are asked again, with their stamps;
 // unchanged files answer "same" and the list repaints in place (scroll kept).
 {const page=await fresh();
- await page.locator('.glance').first().waitFor();await page.waitForTimeout(100);
+ await page.locator('.glance').first().waitFor();
+ // The first fetch must be fully applied (slow CI machines), or this poll would still ask about everyone.
+ await page.waitForFunction(()=>!GL.busy&&S.agents.every(a=>!glanceItem(a)||GL.map.has(agentKey(a))));
  await page.evaluate(()=>{document.querySelector('.main').scrollTop=300;});
  const before=(await calls(page,'glance')).length;
  await page.evaluate(()=>{const a=fx.agents[8];fx.agents=fx.agents.map((x,i)=>i===8?{...x,agent_status:'working'}:x);fx.looks[8]={activity:{kind:'tool',verb:'edit',text:'cursor.py',open:true},at:new Date().toISOString(),stamp:'s8b'};});
