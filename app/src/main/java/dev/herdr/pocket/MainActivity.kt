@@ -8,11 +8,15 @@ import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.os.ext.SdkExtensions
 import android.provider.MediaStore
 import android.provider.Settings
+import android.view.View
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
@@ -35,8 +39,8 @@ private const val PICK_CAMERA = 42
 private const val PICK_FILES = 43
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/app.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/app.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -61,10 +65,9 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         core.init(this)
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        applySecure()
         pendingPane = intent?.getStringExtra(WatchService.EXTRA_PANE)
         web = WebView(this)
-        web.setBackgroundColor(android.graphics.Color.rgb(251, 250, 246))
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = false
@@ -73,7 +76,9 @@ class MainActivity : Activity() {
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             blockNetworkLoads = true
             builtInZoomControls = false
+            textZoom = core.settings.getInt("textZoom", 100)
         }
+        applyBars()
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse =
@@ -95,6 +100,7 @@ class MainActivity : Activity() {
         }
         setContentView(container)
         val html = assets.open("ui/index.html").bufferedReader().use { it.readText() }
+            .replace("<html lang=\"zh-CN\">", "<html lang=\"zh-CN\" data-theme=\"${if (dark()) "dark" else "light"}\">")
             .replace("/*BUNDLED_CSS*/", UI_CSS.joinToString("\n") { asset(it) })
             .replace("/*TERMINAL_VENDOR*/", assets.open("ui/vendor/xterm.js").bufferedReader().use { it.readText() } + "\n" + assets.open("ui/vendor/addon-fit.js").bufferedReader().use { it.readText() })
             .replace("/*TERMINAL_APP*/", assets.open("ui/terminals.js").bufferedReader().use { it.readText() })
@@ -149,6 +155,56 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun dark(): Boolean = when (core.settings.getString("theme", "system")) {
+        "dark" -> true
+        "light" -> false
+        else -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+    }
+
+    /** Screenshots are allowed unless the user turned on screen protection in 设置. */
+    private fun applySecure() {
+        if (core.settings.getBoolean("secureScreen", false)) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
+
+    /** System bars and the WebView backdrop follow the page theme, so nothing flashes light in dark mode. */
+    @Suppress("DEPRECATION")
+    private fun applyBars() {
+        val dark = dark()
+        val bg = if (dark) Color.rgb(21, 21, 20) else Color.rgb(251, 250, 246)
+        val nav = if (dark) Color.rgb(31, 30, 28) else Color.WHITE
+        window.statusBarColor = bg
+        window.navigationBarColor = nav
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(bg))
+        if (::web.isInitialized) {
+            web.setBackgroundColor(bg)
+            if (started) web.evaluateJavascript("window.applyTheme && window.applyTheme(${if (dark) "'dark'" else "'light'"})", null)
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(if (dark) 0 else mask, mask)
+        } else {
+            var flags = window.decorView.systemUiVisibility and (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR).inv()
+            if (!dark) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or (if (Build.VERSION.SDK_INT >= 27) View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR else 0)
+            window.decorView.systemUiVisibility = flags
+        }
+    }
+
+    private fun prefs(): JSONObject = JSONObject()
+        .put("theme", core.settings.getString("theme", "system")).put("dark", dark())
+        .put("textZoom", core.settings.getInt("textZoom", 100))
+        .put("secureScreen", core.settings.getBoolean("secureScreen", false))
+        .put("autoUpdate", core.settings.getBoolean("autoUpdate", true))
+        .put("seenUpdate", core.settings.getString("seenUpdate", ""))
+        .put("alerts", core.alertsEnabled)
+        .put("version", Updater.currentName(this)).put("versionCode", Updater.currentCode(this))
+        .put("update", core.settings.getString("updateResult", null)?.let { JSONObject(it) } ?: JSONObject.NULL)
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyBars()
+    }
+
     private fun askNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33 && core.alertsEnabled && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             && !core.settings.getBoolean("askedNotifications", false)) {
@@ -159,7 +215,8 @@ class MainActivity : Activity() {
 
     inner class Native {
         @JavascriptInterface fun request(id: String, op: String, raw: String) {
-            if (raw.length > 70000 || id.length > 80) return
+            // Only cache writes carry a whole chat; everything else stays small.
+            if (raw.length > (if (op == "cachePut") 1_600_000 else 70000) || id.length > 80) return
             executor.execute {
                 try {
                     val req = JSONObject(raw)
@@ -184,16 +241,54 @@ class MainActivity : Activity() {
                             pendingPane?.let { pane -> pendingPane = null; js("window.openFromNotification(${JSONObject.quote(pane)})") }
                         }
                         "saveDevice" -> success(id, core.vault.save(req))
-                        "deleteDevice" -> { core.vault.delete(req.getString("id")); success(id, JSONObject().put("devices", core.vault.list())) }
-                        "connect" -> { runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }; connect(id, req) }
+                        "deleteDevice" -> { core.vault.delete(req.getString("id")); core.cache.drop(req.getString("id")); success(id, JSONObject().put("devices", core.vault.list())) }
+                        "connect" -> { runOnUiThread { applySecure() }; connect(id, req) }
                         "disconnect" -> { WatchService.stop(this@MainActivity); core.disconnect(); success(id, JSONObject()) }
                         "install" -> {
                             core.transport.install(core.bridge)
                             success(id, core.request(JSONObject().put("op", "hello")))
                         }
                         "protect" -> {
-                            runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+                            runOnUiThread { applySecure() }
                             success(id, JSONObject())
+                        }
+                        "settings" -> success(id, prefs())
+                        "setSetting" -> {
+                            val edit = core.settings.edit()
+                            when (req.getString("key")) {
+                                "theme" -> edit.putString("theme", req.getString("value").also { require(it in setOf("system", "light", "dark")) { "不支持的主题" } })
+                                "textZoom" -> edit.putInt("textZoom", req.getInt("value").also { require(it in setOf(90, 100, 115, 130)) { "不支持的字号" } })
+                                "secureScreen" -> edit.putBoolean("secureScreen", req.getBoolean("value"))
+                                "autoUpdate" -> edit.putBoolean("autoUpdate", req.getBoolean("value"))
+                                "seenUpdate" -> edit.putString("seenUpdate", req.getString("value").take(64))
+                                else -> error("不支持的设置")
+                            }
+                            edit.commit()
+                            runOnUiThread { applySecure(); applyBars(); web.settings.textZoom = core.settings.getInt("textZoom", 100) }
+                            success(id, prefs())
+                        }
+                        "checkUpdate" -> {
+                            val cached = core.settings.getString("updateResult", null)?.let { JSONObject(it) }
+                            val fresh = cached != null && cached.optLong("current") == Updater.currentCode(this@MainActivity)
+                                && System.currentTimeMillis() - cached.optLong("checkedAt") < 12 * 3600_000L
+                            if (!req.optBoolean("force") && fresh) success(id, cached!!)
+                            else {
+                                val r = Updater.check(this@MainActivity)
+                                core.settings.edit().putString("updateResult", r.toString()).apply()
+                                success(id, r)
+                            }
+                        }
+                        "downloadUpdate" -> success(id, Updater.download(this@MainActivity, req.getString("tag")) { pct -> progress(id, pct.toString()) })
+                        "installUpdate" -> {
+                            val intent = Updater.installIntent(this@MainActivity, req.getString("tag"))
+                            val permission = intent.action == Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES
+                            runOnUiThread { try { startActivity(intent) } catch (e: ActivityNotFoundException) { failure(id, IllegalStateException("系统里没有可用的安装程序")); return@runOnUiThread }
+                                success(id, JSONObject().put("needPermission", permission)) }
+                        }
+                        "openUrl" -> {
+                            val url = req.getString("url")
+                            require(url == Updater.PAGE || url.startsWith(Updater.PAGE + "/")) { "只能打开项目主页" }
+                            runOnUiThread { try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))); success(id, JSONObject()) } catch (e: Exception) { failure(id, IllegalStateException("没有可以打开链接的应用")) } }
                         }
                         "demo" -> {
                             check(core.connectedDevice == null) { "先断开真实设备，再进入演示" }
@@ -210,6 +305,19 @@ class MainActivity : Activity() {
                             if (req.getBoolean("enabled")) runOnUiThread { core.settings.edit().putBoolean("askedNotifications", false).apply(); askNotificationPermission() }
                             success(id, JSONObject().put("alerts", core.alertsEnabled))
                         }
+                        "cacheGet" -> {
+                            val device = cacheDevice(req)
+                            val text = device?.let { core.cache.get(it, cacheKey(req)) }
+                            val value = text?.let { try { JSONObject(it) } catch (_: Exception) { null } }
+                            success(id, JSONObject().put("value", value ?: JSONObject.NULL))
+                        }
+                        "cachePut" -> {
+                            val device = cacheDevice(req)
+                            val value = req.optJSONObject("value")
+                            success(id, JSONObject().put("saved", device != null && value != null && core.cache.put(device, cacheKey(req), value.toString())))
+                        }
+                        "cacheInfo" -> core.cache.info().let { (bytes, entries) -> success(id, JSONObject().put("bytes", bytes).put("entries", entries)) }
+                        "cacheClear" -> { core.cache.clear(); success(id, JSONObject()) }
                         "pickImages" -> runOnUiThread { pick(id, req.optString("source"), req.optInt("max", 4).coerceIn(1, 4)) }
                         "dropImages" -> {
                             val ids = req.optJSONArray("ids") ?: JSONArray()
@@ -251,6 +359,15 @@ class MainActivity : Activity() {
             }
         }
     }
+
+    /** Cache scope: the connected device, or a saved device that is still connecting. Unknown ids get nothing. */
+    private fun cacheDevice(req: JSONObject): String? {
+        val asked = req.optString("device")
+        val connected = core.connectedDevice?.optString("id")
+        if (asked.isEmpty() || asked == connected) return connected
+        return try { core.vault.get(asked).getString("id") } catch (_: Exception) { null }
+    }
+    private fun cacheKey(req: JSONObject) = req.getString("key").also { require(it.length in 1..512) { "缓存键无效" } }
 
     /** System photo picker (no storage permission) or the camera app writing into [CameraFiles]. */
     private fun pick(id: String, source: String, max: Int) {

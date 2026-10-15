@@ -5,9 +5,9 @@
 .queue-go{min-height:38px;padding:0 14px;border-radius:999px;background:var(--surface);color:var(--ink);font-size:13px;font-weight:600;box-shadow:inset 0 0 0 1px var(--line-strong);flex-shrink:0}
 /* Waiting: an outlined, not-yet-sent bubble. */
 .message.queued .message-label{align-items:center;gap:6px;color:var(--muted)}
-.message.queued .bubble{background:var(--surface);border:1px dashed #deb29d}
+.message.queued .bubble{background:var(--surface);border:1px dashed var(--queued-line)}
 .message.queued .img-tile{opacity:.8}
-.message.queued.unknown .bubble{border:1px solid #f0d2a8;background:var(--warn-soft)}
+.message.queued.unknown .bubble{border:1px solid var(--warn-line);background:var(--warn-soft)}
 .message.queued.unknown .message-label{color:var(--warn);font-weight:600}
 .queue-reason{margin:6px 4px 0;font-size:12px;line-height:1.5;color:var(--muted);text-align:right;max-width:100%;overflow-wrap:anywhere}
 .unknown .queue-reason{color:var(--warn)}

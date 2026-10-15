@@ -23,7 +23,7 @@
 /* The turn's reply: the part a person actually reads */
 .message.reply{align-self:stretch}
 .reply .message-label .who{color:var(--ink-2);font-weight:600}
-.reply .bubble{border-radius:var(--radius-card);box-shadow:0 1px 3px #0000000f;padding:12px 16px;font-size:15.5px}
+.reply .bubble{border-radius:var(--radius-card);box-shadow:var(--shadow);padding:12px 16px;font-size:15.5px}
 .message.progress{align-self:stretch}
 .work[open]+.message.progress{display:none}
 .progress .bubble{background:transparent;border-style:dashed;border-color:var(--line-strong);border-radius:var(--radius-card);color:var(--ink-2);font-size:14px}
@@ -31,7 +31,7 @@
 .work{align-self:stretch;border:1px solid var(--line);border-radius:12px;background:var(--sunken);min-width:0}
 .work>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;min-height:48px;padding:7px 10px;border-radius:12px}
 .work>summary::-webkit-details-marker{display:none}
-.work>summary:active{background:#0000000a}
+.work>summary:active{background:var(--press)}
 .work-lead{width:28px;height:28px;border-radius:50%;background:var(--surface);display:grid;place-items:center;flex-shrink:0;color:var(--muted)}
 .work-lead svg{width:15px;height:15px}
 .work.has-failed .work-lead{background:var(--danger-soft);color:var(--danger)}
@@ -72,7 +72,7 @@
 .tool-group>summary,.tool-row>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;min-height:40px;padding:4px 6px;border-radius:var(--radius-control);font-size:13px;color:var(--ink-2)}
 .tool-group>summary::-webkit-details-marker,.tool-row>summary::-webkit-details-marker{display:none}
 .tool-group>summary:active,.tool-row>summary:active{background:var(--sunken)}
-.work .tool-group>summary:active,.work .tool-row>summary:active{background:#0000000a}
+.work .tool-group>summary:active,.work .tool-row>summary:active{background:var(--press)}
 .tool-icon{width:26px;height:26px;border-radius:8px;background:var(--sunken);display:grid;place-items:center;flex-shrink:0;color:var(--muted)}
 .work .tool-icon{background:var(--surface)}
 .tool-icon svg{width:15px;height:15px}

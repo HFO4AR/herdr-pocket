@@ -3,7 +3,7 @@
 // terminals.js shares the helpers and state declared here (S, el, btn, ib, sheet, remote…).
 
 // ─── Icons & DOM helpers ────────────────────────────────────────────────────
-const paths={chat:'M4 4h16v12H8l-4 4V4z',history:'M3 12a9 9 0 1 0 3-6M3 3v6h6M12 7v5l3 2',device:'M4 4h16v12H4zM8 20h8M12 16v4',account:'M20 21v-2a7 7 0 0 0-14 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',plus:'M12 5v14M5 12h14',back:'M15 5l-7 7 7 7',close:'M6 6l12 12M18 6L6 18',search:'M21 21l-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16',chevron:'M9 5l7 7-7 7',down:'M6 9l6 6 6-6',send:'M12 19V5M5 12l7-7 7 7',more:'M5 12h.01M12 12h.01M19 12h.01',terminal:'M4 6l6 6-6 6M12 18h8',branch:'M6 3v12a4 4 0 0 0 8 0V9M10 9l4-4 4 4',refresh:'M20 7a8 8 0 1 0 1 7M20 3v5h-5',lock:'M5 10h14v11H5zM8 10V6a4 4 0 0 1 8 0v4',check:'M4 12l5 5L20 6',edit:'M16 3l5 5-12 12H4v-5z',folder:'M3 6h7l2 2h9v12H3z',pause:'M8 5v14M16 5v14',file:'M6 2h8l5 5v15H6zM14 2v5h5',pen:'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',globe:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18',tool:'M14 7a4 4 0 0 0 5 5l-8 8-4-4 8-8z',x:'M7 7l10 10M17 7L7 17',copy:'M9 9h11v11H9zM5 15V4h11',alert:'M12 3l10 18H2zM12 10v5M12 18h.01',stop:'M6 6h12v12H6z',plug:'M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4',image:'M4 5h16v14H4zM4 16l5-5 4 4 2-2 5 5M15.5 9.5h.01',camera:'M3 8h4l2-3h6l2 3h4v11H3zM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7'};
+const paths={chat:'M4 4h16v12H8l-4 4V4z',history:'M3 12a9 9 0 1 0 3-6M3 3v6h6M12 7v5l3 2',device:'M4 4h16v12H4zM8 20h8M12 16v4',account:'M20 21v-2a7 7 0 0 0-14 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',plus:'M12 5v14M5 12h14',back:'M15 5l-7 7 7 7',close:'M6 6l12 12M18 6L6 18',search:'M21 21l-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16',chevron:'M9 5l7 7-7 7',down:'M6 9l6 6 6-6',send:'M12 19V5M5 12l7-7 7 7',more:'M5 12h.01M12 12h.01M19 12h.01',terminal:'M4 6l6 6-6 6M12 18h8',branch:'M6 3v12a4 4 0 0 0 8 0V9M10 9l4-4 4 4',refresh:'M20 7a8 8 0 1 0 1 7M20 3v5h-5',lock:'M5 10h14v11H5zM8 10V6a4 4 0 0 1 8 0v4',check:'M4 12l5 5L20 6',edit:'M16 3l5 5-12 12H4v-5z',folder:'M3 6h7l2 2h9v12H3z',pause:'M8 5v14M16 5v14',file:'M6 2h8l5 5v15H6zM14 2v5h5',pen:'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',globe:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18',tool:'M14 7a4 4 0 0 0 5 5l-8 8-4-4 8-8z',x:'M7 7l10 10M17 7L7 17',copy:'M9 9h11v11H9zM5 15V4h11',alert:'M12 3l10 18H2zM12 10v5M12 18h.01',stop:'M6 6h12v12H6z',plug:'M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4',image:'M4 5h16v14H4zM4 16l5-5 4 4 2-2 5 5M15.5 9.5h.01',camera:'M3 8h4l2-3h6l2 3h4v11H3zM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7',download:'M12 4v11M7 10l5 5 5-5M5 20h14',settings:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z'};
 function icon(name){const n=document.createElementNS('http://www.w3.org/2000/svg','svg');n.setAttribute('viewBox','0 0 24 24');n.setAttribute('aria-hidden','true');const p=document.createElementNS(n.namespaceURI,'path');p.setAttribute('d',paths[name]||paths.chat);n.append(p);return n;}
 function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;}
 function btn(text,cls,fn,name){const n=el('button',cls);n.type='button';if(name)n.append(icon(name));if(text)n.append(document.createTextNode(text));n.onclick=fn;return n;}
@@ -92,8 +92,8 @@ function noteStatus(list){
 setInterval(()=>{if(!S.active)return;document.querySelectorAll('[data-since]').forEach(n=>{const ms=Date.now()-Number(n.dataset.since);n.textContent=(n.dataset.prefix||'')+(n.dataset.fmt==='ago'?ago(ms):dur(ms));});},1000);
 
 // ─── App shell & navigation ─────────────────────────────────────────────────
-const TABS=[['live','chat','会话'],['history','history','历史'],['terminals','terminal','终端'],['devices','device','设备']];
-function setTab(tab){leaveTerminal();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();}
+const TABS=[['live','chat','会话'],['history','history','历史'],['terminals','terminal','终端'],['devices','device','设备'],['settings','settings','设置']];
+function setTab(tab){leaveTerminal();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();if(tab==='settings')settingsLoad().then(()=>{if(S.tab==='settings'&&!S.chat&&!overlay.childElementCount)paintSettings();});}
 function shell(){app.replaceChildren();const root=el('div','shell');app.append(root);if(S.demo)root.append(el('div','demo-banner','离线演示 · 示例数据，不连接电脑'));return root;}
 function header(root){
  const bar=el('header','topbar');const title=(TABS.find(t=>t[0]===S.tab)||[])[2]||'Herdr Pocket';bar.append(el('h1','',title));
@@ -107,12 +107,12 @@ function empty(main,title,desc,action){const n=el('div','empty');const a=el('div
 function render(){
  if(S.chat){renderChat();return;}if(typeof T!=='undefined'&&T.view){renderTerminal();return;}
  const root=shell();header(root);const main=el('main','main pane-enter');root.append(main);
- if(S.tab==='live')livePage(main);else if(S.tab==='history')historyPage(main);else if(S.tab==='terminals')terminalsPage(main);else devicesPage(main);
+ if(S.tab==='live')livePage(main);else if(S.tab==='history')historyPage(main);else if(S.tab==='terminals')terminalsPage(main);else if(S.tab==='settings')settingsPage(main);else devicesPage(main);
  const nav=el('nav','bottom-nav');nav.setAttribute('aria-label','主导航');
  const waiting=S.agents.filter(a=>a.agent_status==='blocked').length;
- TABS.forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waiting){const badge=el('span','nav-badge',String(waiting));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waiting+' 个 Agent 等你确认';}nav.append(n);});
+ TABS.forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waiting){const badge=el('span','nav-badge',String(waiting));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waiting+' 个 Agent 等你确认';}if(tab==='settings'&&settingsBadge()){n.append(el('span','nav-dot'));n.title='有新版本';}nav.append(n);});
  root.append(nav);}
-function requireDevice(main){if(S.device)return true;if(S.loading){loadingCard(main,'连接正在进行','连接成功后会自动读取会话，请稍候。');return false;}empty(main,'先连接你的电脑','连接后，在线会话、历史记录和终端会出现在这里。',btn('选择设备','primary',()=>setTab('devices')));return false;}
+function requireDevice(main){if(S.device||cacheBrowsing())return true;if(S.loading){loadingCard(main,'连接正在进行','连接成功后会自动读取会话，请稍候。');return false;}empty(main,'先连接你的电脑','连接后，在线会话、历史记录和终端会出现在这里。',btn('选择设备','primary',()=>setTab('devices')));return false;}
 function searchBox(placeholder,change,value=''){const box=el('div','search');const input=el('input');input.type='search';input.placeholder=placeholder;input.value=value;input.setAttribute('aria-label',placeholder);input.oninput=()=>change(input.value);box.append(icon('search'),input);return box;}
 
 // ─── Devices & connection ───────────────────────────────────────────────────
@@ -128,8 +128,7 @@ function devicesPage(main){
  main.append(el('p','fine','设备资料和勾选保存的密码用 Android Keystore 加密，只存在这台手机上。'));}
 function connectionCard(){
  const card=el('section','card account-card');const top=el('div','row');top.append(avatar('', 'ok'));const t=el('div','grow');t.append(el('div','card-title',S.device.name),el('div','card-meta',S.demo?'离线演示':'SSH 已连接'));top.append(t);card.append(top);
- [['SSH 用户',S.account?.ssh_user||S.device.user],['主机地址',S.device.host],['端口',String(S.device.port)],['电脑主机名',S.account?.hostname||'读取中…'],['密码保存',S.device.remember?'已加密保存':'未保存'],['应用版本',S.version||'—']].forEach(([k,v])=>{const n=el('div','setting-row');n.append(el('span','',k),el('span','',v));card.append(n);});
- if(!S.demo){const toggle=el('label','switch-row');const box=el('input');box.type='checkbox';box.checked=S.alerts!==false;box.setAttribute('aria-label','后台提醒');box.onchange=async()=>{try{S.alerts=(await rpc('setAlerts',{enabled:box.checked})).alerts;toast(S.alerts?'切到后台时会继续关注 Agent':'已关闭后台提醒');}catch(e){box.checked=!box.checked;error(e);}};const t=el('span','grow');t.append(el('strong','','后台提醒'),el('small','','切到后台后，Agent 完成或等你确认时发通知'));toggle.append(t,box,el('span','switch'));card.append(toggle);}
+ [['SSH 用户',S.account?.ssh_user||S.device.user],['主机地址',S.device.host],['端口',String(S.device.port)],['电脑主机名',S.account?.hostname||'读取中…'],['密码保存',S.device.remember?'已加密保存':'未保存']].forEach(([k,v])=>{const n=el('div','setting-row');n.append(el('span','',k),el('span','',v));card.append(n);});
  const actions=el('div','device-actions');actions.append(btn('更新桥接程序','secondary',setupBridge),btn('断开连接','secondary danger',()=>confirmAction('断开当前设备？','电脑上的 Agent 会继续运行。','断开',()=>disconnect().catch(error),true)));card.append(actions);
  card.append(el('p','fine','只显示 SSH 连接信息，不读取 Codex / Claude 的登录资料。'));return card;}
 function field(box,title,value='',type='text',placeholder=''){const label=el('label','',title);const input=el('input','field');input.type=type;input.value=value;input.placeholder=placeholder;input.autocomplete='off';input.setAttribute('aria-label',title);label.append(input);box.append(label);return input;}
@@ -139,15 +138,15 @@ function connectDevice(d){if(S.loading){toast('正在连接，请稍候');return
 async function doConnect(d,password='',remember){
  if(S.loading)return;
  if(S.device&&!S.demo&&S.device.id!==d.id){confirmAction('切换设备？','当前 SSH 连接会断开；未发送的草稿只在本次运行中保留。','切换',async()=>{await disconnect(false);doConnect(d,password,remember);});return;}
- S.loading=true;S.connecting=d;S.connectError='';S.connectStage='正在建立 SSH 连接并验证身份…';render();
+ S.loading=true;S.connecting=d;S.connectError='';S.connectStage='正在建立 SSH 连接并验证身份…';render();cacheConnecting(d);
  try{if(S.demo){S.demo=false;S.device=null;}
   const r=await rpc('connect',{id:d.id,password,...(remember===undefined?{}:{remember})},stage=>{S.connectStage=stage;render();});
   S.loading=false;clearTerminals();S.device=r.device;if(r.devices)S.devices=r.devices;S.account=null;S.records=[];S.statusSupported=true;
-  if(r.ready)setTab('live');else{render();setupBridge();}
- }catch(e){S.loading=false;S.device=null;S.connectError=e.message||String(e);render();if(/auth fail|authentication/i.test(e.message))connectionPassword(d);}
+  if(r.ready){if(!cacheResume())setTab('live');}else{render();setupBridge();}
+ }catch(e){S.loading=false;S.device=null;S.connectError=e.message||String(e);cacheAbandon();render();if(/auth fail|authentication/i.test(e.message))connectionPassword(d);}
  finally{S.loading=false;}}
 function setupBridge(){confirmAction('安装配套桥接程序','把随 App 分发的开源程序安装到当前 SSH 用户的 ~/.herdr-pocket。历史功能只读 ~/.codex/sessions 和 ~/.claude/projects，不读服务商登录资料。需要 Python 3.9+。','安装并进入',async()=>{if(S.loading)return;S.loading=true;S.connectError='';S.connectStage='SSH 已连接，正在安装与校验桥接程序…';render();try{await rpc('install');S.loading=false;S.statusSupported=true;setTab('live');}catch(e){S.loading=false;S.connectError=e.message;render();}});}
-async function disconnect(show=true){await rpc('disconnect');clearTerminals();Object.assign(S,{device:null,loading:false,connecting:null,connectError:'',liveLoading:false,liveError:'',demo:false,records:[],agents:[],account:null,chat:null,outbox:[],activity:''});S.drafts.clear();S.bindings.clear();queueClear();S.epoch++;if(show)setTab('devices');}
+async function disconnect(show=true){await rpc('disconnect');clearTerminals();Object.assign(S,{device:null,loading:false,connecting:null,connectError:'',liveLoading:false,liveError:'',demo:false,records:[],agents:[],account:null,chat:null,outbox:[],activity:'',fromCache:false});S.drafts.clear();S.bindings.clear();queueClear();S.epoch++;if(show)setTab('devices');}
 async function startDemo(){if(S.loading){toast('正在连接，请稍候');return;}S.connectError='';if(S.device&&!S.demo){confirmAction('断开并体验演示？','演示不连接任何电脑，也不会给 Agent 发消息。','进入演示',async()=>{await disconnect(false);startDemo();});return;}try{await rpc('demo');S.demo=true;S.device={id:'demo',name:'演示工作站',user:'demo',host:'workstation.local',port:22};S.account={ssh_user:'demo',hostname:'workstation'};S.session='demo';S.sessions=['demo'];S.agents=demoAgents;S.records=demoRecords;S.tab='live';S.chat=null;render();}catch(e){error(e);}}
 async function loadAccount(){const epoch=S.epoch;try{const a=await remote('account');if(epoch!==S.epoch)return;S.account=a;if(S.tab==='devices'&&!S.chat)render();}catch(e){if(epoch===S.epoch)error(e);}}
 
@@ -173,7 +172,7 @@ function livePage(main){
  const actions=el('div','row');if(S.sessions.length>1)actions.append(btn(S.session||'选择会话','pill',chooseSession,'folder'));actions.append(ib('refresh','刷新会话',loadLive));if(S.device&&S.session)actions.append(createButton());
  const unread=S.agents.filter(a=>S.unread.has(agentKey(a))).length;
  pageHead(main,'','会话',S.device?(S.agents.length?S.agents.length+' 个 Agent 在线'+(unread?' · '+unread+' 个有新进展':''):''):'',actions);
- if(!requireDevice(main))return;
+ if(!requireDevice(main))return;cacheLiveNote(main);
  if(S.liveLoading&&!S.agents.length){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并关联历史记录…');skeleton(main,3);return;}
  if(S.liveError){empty(main,'会话读取失败',S.liveError,btn('重新读取','primary',loadLive));return;}
  if(S.agents.length>6)main.append(searchBox('搜索 Agent 或项目',q=>{S.search=q;draw();},S.search));
@@ -187,10 +186,10 @@ function livePage(main){
  if(S.liveLoading)main.append(el('p','fine center','正在刷新…'));}
 function chooseSession(){const box=sheet('切换 Herdr 会话');S.sessions.forEach(name=>menuItem(box,name,()=>{S.session=name;loadLive();},name===S.session?'check':'folder'));}
 async function loadLive(){
- if(!S.device)return;const epoch=++S.epoch;S.liveLoading=S.agents.length?'agents':'sessions';S.liveError='';if(S.tab==='live'&&!S.chat)render();
- try{const r=await remote('sessions');if(epoch!==S.epoch)return;S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];return;}
+ if(!S.device)return;const epoch=++S.epoch;S.liveLoading=S.agents.length?'agents':'sessions';S.liveError='';if(!S.agents.length)cacheShowLive();if(S.tab==='live'&&!S.chat)render();
+ try{const r=await remote('sessions');if(epoch!==S.epoch)return;S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];S.fromCache=false;return;}
   S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
-  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;noteStatus(S.agents);syncWatch();if(S.pendingPane){S.liveLoading=false;openPending();return;}}
+  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;noteStatus(S.agents);syncWatch();cacheLive();if(S.pendingPane){S.liveLoading=false;openPending();return;}}
  catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
  finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
 // Lightweight status refresh: Herdr state only, keeps resolved history refs.
@@ -200,7 +199,7 @@ async function refreshStatus(){
   const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}if(old.agent_status!==a.agent_status||titleOf(old)!==titleOf(a))changed=true;return {...old,...a,history_ref:old.history_ref};});
   if(next.length!==S.agents.length)changed=true;
   const fresh=next.filter(a=>!known.has(a.pane_id)||known.get(a.pane_id).identity!==a.identity);
-  noteStatus(next);S.agents=next;if(changed)syncWatch();
+  noteStatus(next);S.agents=next;if(changed){syncWatch();cacheLive();}
   if(S.chat?.agent){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);followHint(cur);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status};onAgentStatus(was,cur.agent_status);}}
   if(fresh.length&&S.tab==='live'&&!S.chat){loadLive();return;}
   if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}
@@ -215,7 +214,7 @@ async function openAgent(a){
  if(ref?.record){S.bindings.delete(S.session+'/'+a.identity);S.chat.record=ref.record;await fetchHistory(false,true);return;}
  const remembered=S.bindings.get(S.session+'/'+a.identity);if(remembered){S.chat.record=remembered;S.chat.manual=true;await fetchHistory(false,true);return;}
  const id=ref?.thread||(a.agent_session?.kind!=='path'?a.agent_session?.value:null);
- if(id&&ref?.status!=='pending'){try{const r=await remote('catalog',{thread:id});if(epoch!==S.epoch)return;const rec=r.records.find(x=>x.provider===a.agent&&(!ref?.record_id||x.id===ref.record_id));if(rec){S.chat.record=rec;await fetchHistory(false,true);return;}}catch(e){if(epoch===S.epoch)error(e);}}
+ if(id&&ref?.status!=='pending'&&S.device){try{const r=await remote('catalog',{thread:id});if(epoch!==S.epoch)return;const rec=r.records.find(x=>x.provider===a.agent&&(!ref?.record_id||x.id===ref.record_id));if(rec){S.chat.record=rec;await fetchHistory(false,true);return;}}catch(e){if(epoch===S.epoch)error(e);}}
  if(epoch===S.epoch){S.chat.historyIssue=historyIssueText(ref);paintTimeline();if(a.agent_status==='working'||a.agent_status==='blocked')fetchTerminal(true);}}
 function historyIssueText(ref){const reason=ref?.reason;switch(ref?.status){case 'remote_error':return '远端历史读取失败：'+(reason||'连接不可用');case 'pending':return (reason||'会话刚开始，历史文件还没写出')+'。稍后会自动出现。';case 'remote_candidates':case 'ambiguous':case 'unavailable':return (reason||'没有能唯一确认的会话标识')+(ref?.candidates?.length?'，下面列出了候选。':'。');case 'remote_missing':return reason||'远端这个工作目录下还没有历史记录。';case 'remote':return '这个窗格通过 SSH 连到别的电脑，历史在那台电脑上；终端输出仍可查看。';case 'missing':return reason||'会话标识已知，但没找到对应的历史文件。';default:return reason||'没有能确认的会话标识，可以手动选择历史，或查看终端输出。';}}
 function openRecord(r,push=false){
@@ -223,9 +222,10 @@ function openRecord(r,push=false){
  resetChat({record:r,agent:null,title:r.title,provider:r.provider});S.epoch++;renderChat();fetchHistory(false,true);}
 async function fetchHistory(older=false,initial=false){
  if(!S.chat?.record||(S.polling&&S.fetchEpoch===S.epoch))return;S.polling=true;const epoch=S.epoch;S.fetchEpoch=epoch;const record=S.chat.record;
- if(initial){S.chat.historyLoading=true;paintTimeline();}
+ // A cached copy is painted first; before SSH is up the read waits for the connection.
+ if(initial){const wait=await cacheFill(record,epoch);if(epoch!==S.epoch||wait){if(S.fetchEpoch===epoch)S.polling=false;if(wait&&epoch===S.epoch)paintTimeline();return;}S.chat.historyLoading=true;paintTimeline();}
  const args={record_id:record.id};if(record.remote)args.remote=record.remote;if(older)args.before=S.before;
- try{const r=await remote('history',args);if(epoch!==S.epoch)return;const hadError=!!S.chat.historyError;S.chat.historyError=null;S.chat.historyLoading=false;const prior=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
+ try{const r=await remote('history',args);if(epoch!==S.epoch)return;const hadError=!!S.chat.historyError;S.chat.historyError=null;S.chat.historyLoading=false;S.chat.cached=0;S.chat.waiting=false;const prior=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
   const known=new Set(S.messages.map(x=>x.id));
   if(older)S.messages=r.messages.filter(m=>!known.has(m.id)).concat(S.messages);
   else if(initial)S.messages=r.messages;
@@ -238,7 +238,7 @@ async function fetchHistory(older=false,initial=false){
    const n=document.getElementById('chat-scroll');
    if(older&&n){const h=n.scrollHeight,top=n.scrollTop;renderTimeline();n.scrollTop=top+n.scrollHeight-h;}
    else{if(initial)S.stick=true;else if(!S.stick)S.unseen+=S.messages.filter(m=>!known.has(m.id)&&(m.kind==='user'||m.kind==='assistant')).length;paintTimeline();}}
-  updateChatMeta();}
+  updateChatMeta();qaRefresh();cacheChat();}
  catch(e){if(epoch===S.epoch){S.paused=true;S.chat.historyLoading=false;S.chat.historyError='历史读取失败：'+e.message;paintTimeline();}}
  finally{if(S.fetchEpoch===epoch)S.polling=false;}}
 // Re-render the timeline but keep the reader where they are: follow the bottom
@@ -279,7 +279,7 @@ function renderChat(){
 // Composer, live activity and confirmation panel. The input itself survives
 // status changes so typing (and the keyboard) is never interrupted.
 function renderComposer(){
- const footer=document.getElementById('composer');if(!footer||!S.chat)return;const a=S.chat.agent;
+ const footer=document.getElementById('composer');if(!footer||!S.chat)return;const a=S.chat.agent;if(cacheOffline(footer))return;
  if(!a||S.chat.stale){if(followFooter(footer))return;footer.replaceChildren(el('div','readonly',S.chat.stale?'这个窗格的 Agent 已变化，回到列表重新打开':S.chat.record?.parent?'子 Agent 的历史记录 · 只读，不会向父会话发送':'历史只读 · 在「会话」里打开在线 Agent 才能继续对话'));return;}
  const key=draftKey();let live=document.getElementById('live-state'),compose=footer.querySelector('.composer');
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
@@ -300,7 +300,7 @@ function buildComposer(key){
  const attach=ib('plus','添加附件',imgMenu);attach.classList.add('attach');
  compose.append(attach,input,send);requestAnimationFrame(grow);return compose;}
 function renderLiveState(live,a){
- live.replaceChildren();const st=a.agent_status;
+ live.replaceChildren();const st=a.agent_status;S.qaShown='';
  if(st==='blocked'){if(qaLive(live,a))return;const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow','等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
   const pre=el('pre','confirm-screen',S.terminalText?tail(S.terminalText,12):'正在读取终端画面…');pre.id='confirm-screen';panel.append(pre);
   const keys=el('div','confirm-keys');[['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);live.append(panel);requestAnimationFrame(()=>{pre.scrollTop=pre.scrollHeight;});}
@@ -421,8 +421,8 @@ function renderHistoryList(){
  closeHiddenNote(list);
  if(S.next!==null&&S.next!==undefined)list.append(btn('加载更多历史','secondary wide',()=>loadCatalog(S.catalogQuery||'',true)));}
 async function loadCatalog(query='',more=false){
- if(!S.device)return;const epoch=++S.epoch;S.catalogLoading=true;if(!more&&!S.records.length)renderHistoryList();
- try{const r=await remote('catalog',{offset:more?S.next||0:0,query});if(epoch!==S.epoch)return;S.records=more?S.records.concat(r.records):r.records;S.total=r.total;S.next=r.next;S.catalogQuery=query;}
+ if(!S.device)return;const epoch=++S.epoch;S.catalogLoading=true;if(!more&&!S.records.length){renderHistoryList();if(!query)cacheShowCatalog();}
+ try{const r=await remote('catalog',{offset:more?S.next||0:0,query});if(epoch!==S.epoch)return;S.records=more?S.records.concat(r.records):r.records;S.total=r.total;S.next=r.next;S.catalogQuery=query;if(!more&&!query)cacheCatalog();}
  catch(e){if(epoch===S.epoch)error(e);}
  finally{if(epoch===S.epoch){S.catalogLoading=false;if(S.tab==='history'&&!S.chat){if(more||query)renderHistoryList();else render();}}}}
 
@@ -445,7 +445,7 @@ setInterval(()=>{
  else if(S.tab==='live'&&tick%3===0)refreshStatus();
 },2500);
 
-async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;if(r.connected&&!S.device){S.device=r.connected;setTab('live');return;}render();}catch(e){error(e);}}
+async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;settingsLoad().then(updateAutoCheck);if(r.connected&&!S.device){S.device=r.connected;setTab('live');return;}render();}catch(e){error(e);}}
 // terminals.js is a later <script>: start once every script has run, or a fast native reply
 // can reach code that is not defined yet.
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();

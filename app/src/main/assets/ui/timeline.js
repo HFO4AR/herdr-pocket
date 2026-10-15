@@ -209,7 +209,7 @@ function renderTimeline(){
   const candidates=S.chat.agent?.history_ref?.candidates||[];if(candidates.length){list.append(el('div','section-label','候选历史 · 点击后确认'));const g=el('div','card list-card');candidates.forEach(rec=>{const b=btn('','card-button',()=>chooseHistory(rec,S.chat.agent));const t=el('div','grow');t.append(el('div','card-title',rec.title),el('div','card-meta',relative(rec.modified)+' · '+String(rec.thread).slice(0,8)));b.append(t,icon('chevron'));g.append(b);});list.append(g);}
   if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));list.append(el('pre','agent-terminal compact',tail(S.terminalText,14)));}
   slashRest(list);queueTimeline(list);return;}
- const more=btn(S.more?'加载更早消息':'已到记录起点','link-btn',()=>fetchHistory(true));more.disabled=!S.more;list.append(more);
+ const more=btn(S.more?'加载更早消息':'已到记录起点','link-btn',()=>fetchHistory(true));more.disabled=!S.more;list.append(more);cacheChatNote(list);
  if(S.chat.historyError){const n=el('div','note error');n.append(el('span','grow',S.chat.historyError),btn('重试','secondary small',()=>{S.paused=false;fetchHistory(false,true);}));list.append(n);}
  if(S.historyNote)list.append(el('p','note',S.historyNote));
  const commandsOnly=S.chatMode==='commands';const who=providerName(S.chat.provider);let day='';let count=0;

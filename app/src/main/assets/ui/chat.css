@@ -27,7 +27,7 @@
 /* Back-to-latest: a round arrow, or a pill when new messages arrived below. */
 .jump-btn{position:absolute;right:14px;bottom:12px;display:flex;align-items:center;justify-content:center;gap:4px;min-width:42px;min-height:42px;padding:0 10px;border-radius:21px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-lift);color:var(--ink-2);font-size:13px;font-weight:600;animation:arrive .2s}
 .jump-btn svg{width:18px;height:18px}
-.jump-btn.has-count{right:50%;transform:translateX(50%);padding:0 14px 0 12px;background:var(--primary);border-color:var(--primary);color:#fff}
+.jump-btn.has-count{right:50%;transform:translateX(50%);padding:0 14px 0 12px;background:var(--primary);border-color:var(--primary);color:var(--on-primary)}
 .jump-btn.has-count:active{transform:translateX(50%) scale(.97)}
 .jump-text:empty{display:none}
 .jump-btn.has-count .jump-text{order:-1}
@@ -39,7 +39,7 @@
 .composer:focus-within{border-color:var(--accent);background:var(--surface)}
 .composer textarea{flex:1;min-width:0;border:0;background:none;resize:none;outline:none;font-size:15px;line-height:1.5;padding:8px 0;min-height:38px;max-height:140px}
 .composer textarea::placeholder{color:var(--faint)}
-.send{width:40px;min-height:40px;border-radius:50%;background:var(--primary);color:#fff;display:grid;place-items:center;flex-shrink:0}
+.send{width:40px;min-height:40px;border-radius:50%;background:var(--primary);color:var(--on-primary);display:grid;place-items:center;flex-shrink:0}
 .send svg{width:18px;height:18px;stroke-width:2.2}
 .send:disabled{background:var(--line-strong);opacity:1}
 .send.later:not(:disabled){background:var(--muted)}
@@ -52,7 +52,7 @@
 .activity.done>svg{width:18px;height:18px}
 .activity .link-btn{color:var(--success);font-weight:600}
 .pulse{width:9px;height:9px;border-radius:50%;background:#e59a23;flex-shrink:0;animation:breathe 1.4s ease-in-out infinite}
-.confirm-panel{margin-bottom:8px;border:1px solid #f3c9c6;background:var(--danger-soft);border-radius:var(--radius-card);padding:4px 8px 8px 10px}
+.confirm-panel{margin-bottom:8px;border:1px solid var(--danger-line);background:var(--danger-soft);border-radius:var(--radius-card);padding:4px 8px 8px 10px}
 .confirm-head{display:flex;align-items:center;gap:8px;color:var(--danger);font-size:14px}
 .confirm-head strong{font-weight:650}
 .confirm-head .since{font-weight:500;font-size:12px}
@@ -61,9 +61,9 @@
 .confirm-screen{margin:2px 0 8px;max-height:132px;overflow:auto;font:11.5px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;background:var(--terminal);color:var(--terminal-ink);border-radius:8px;padding:8px 10px}
 .confirm-keys{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
 .confirm-keys button{flex:1 0 auto;min-height:40px}
-.spinner{display:inline-block;width:18px;height:18px;flex-shrink:0;border:2px solid #d7d1c8;border-top-color:#a74925;border-radius:50%;animation:connection-spin .9s linear infinite}
+.spinner{display:inline-block;width:18px;height:18px;flex-shrink:0;border:2px solid var(--spinner-track);border-top-color:var(--spinner-head);border-radius:50%;animation:connection-spin .9s linear infinite}
 .spinner.mini{width:13px;height:13px;border-width:1.5px}
-#toast{position:fixed;left:50%;bottom:92px;transform:translate(-50%,12px);background:#1d1d1f;color:#fff;padding:11px 16px;border-radius:12px;font-size:13px;line-height:1.5;max-width:88%;width:max-content;opacity:0;pointer-events:none;z-index:40;transition:opacity .2s,transform .2s,bottom .2s;box-shadow:var(--shadow-lift)}
+#toast{position:fixed;left:50%;bottom:92px;transform:translate(-50%,12px);background:var(--toast-bg);color:var(--toast-ink);padding:11px 16px;border-radius:12px;font-size:13px;line-height:1.5;max-width:88%;width:max-content;opacity:0;pointer-events:none;z-index:40;transition:opacity .2s,transform .2s,bottom .2s;box-shadow:var(--shadow-lift)}
 #toast.show{opacity:1;transform:translate(-50%,0)}
 .pane-enter{animation:arrive .2s ease-out}
 /* Narrow phones: the five confirmation keys must fit without sideways scrolling. */

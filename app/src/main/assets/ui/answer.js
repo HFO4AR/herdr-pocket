@@ -104,17 +104,23 @@ function qaReady(model,st){return model.questions.some((q,i)=>(q.multi?st.multi[
 
 // ─── Blocked on a TUI menu ──────────────────────────────────────────────────
 // fetchTerminal hands every read here; the card only redraws when the menu itself changed.
+// Compare with what the composer shows (S.qaShown), not with the previous read: the menu is often on
+// screen before Herdr reports "blocked" (the read after the switch returns that same menu), and the
+// transcript's question call, which supplies full labels, can land after the card was first drawn.
 function qaScreen(r){
- const a=S.chat?.agent;if(!a)return;const key=agentKey(a);const menu=r&&r.menu||null;const prev=S.qaMenu;
- S.qaMenu={key,menu,at:Date.now()};
- if(a.agent_status==='blocked'&&(!prev||prev.key!==key||(prev.menu?.fingerprint||'')!==(menu?.fingerprint||'')))renderComposer();}
+ const a=S.chat?.agent;if(!a)return;const key=agentKey(a);const menu=r&&r.menu||null;
+ S.qaMenu={key,menu,at:Date.now()};qaRefresh();}
+// Redraw the composer only when the card it would show differs from the one on screen.
+function qaRefresh(){const a=S.chat?.agent;if(a&&!S.chat.stale&&a.agent_status==='blocked'&&qaExpect(qaFresh(a))!==(S.qaShown||''))renderComposer();}
+function qaFresh(a){const cur=S.qaMenu;const since=statusSince(a);return cur&&cur.key===agentKey(a)&&(!since||cur.at>=since)?cur.menu:null;}
+function qaCallSig(){const call=[...S.messages].reverse().find(m=>qaIsTool(m));return call?call.id+':'+qaOutcome(call,qaParse(call),S.messages).state:'';}
+function qaExpect(menu){return menu?(S.chat?.qaRaw?'raw:':'')+menu.fingerprint+'|'+qaCallSig():'';}
 // Called first in the blocked branch of renderLiveState. Returns true when the card replaces the key panel.
 function qaLive(live,a){
- const cur=S.qaMenu;const since=statusSince(a);
- const fresh=cur&&cur.key===agentKey(a)&&(!since||cur.at>=since);
+ const since=statusSince(a);const menu=qaFresh(a);
  // No screen read since it started waiting: read now instead of on the next poll tick.
- if(!fresh&&S.qaAsked!==agentKey(a)+'@'+since){S.qaAsked=agentKey(a)+'@'+since;setTimeout(()=>fetchTerminal(true),0);}
- const menu=fresh?cur.menu:null;if(!menu)return false;
+ if(!menu&&S.qaAsked!==agentKey(a)+'@'+since){S.qaAsked=agentKey(a)+'@'+since;setTimeout(()=>fetchTerminal(true),0);}
+ S.qaShown=qaExpect(menu);if(!menu)return false;
  if(S.chat.qaRaw){const bar=el('div','qa-raw-bar');bar.append(btn('用选项回答','link-btn',()=>{S.chat.qaRaw=false;renderComposer();},'chat'));live.append(bar);return false;}
  live.append(qaCard(qaMenuModel(menu,a)));return true;}
 function qaMenuModel(menu,a){

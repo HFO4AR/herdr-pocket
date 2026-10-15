@@ -1,7 +1,7 @@
 /* New session: the 新建 action on the session list and its sheet. */
-.new-btn{display:inline-flex;align-items:center;gap:5px;min-height:44px;padding:0 14px 0 11px;border-radius:999px;background:var(--primary);color:#fff;font-size:14px;font-weight:600;white-space:nowrap}
+.new-btn{display:inline-flex;align-items:center;gap:5px;min-height:44px;padding:0 14px 0 11px;border-radius:999px;background:var(--primary);color:var(--on-primary);font-size:14px;font-weight:600;white-space:nowrap}
 .new-btn svg{width:17px;height:17px;stroke-width:2.2}
-.new-btn:active{background:#303030}
+.new-btn:active{background:var(--primary-active)}
 .empty .new-btn{margin-top:16px}
 
 .new-sheet .section-label{margin:18px 2px 8px}
@@ -35,7 +35,7 @@
 .new-status .spinner{margin-top:1px}
 .new-status.error{background:var(--danger-soft);color:var(--danger)}
 .new-status .link-btn{padding:0;min-height:44px;margin:-8px 0 -10px}
-.sheet-actions .primary .spinner{width:15px;height:15px;border-color:#ffffff55;border-top-color:#fff}
+.sheet-actions .primary .spinner{width:15px;height:15px;border-color:var(--on-primary-dim);border-top-color:var(--on-primary)}
 .new-foot{position:sticky;bottom:calc(-22px - env(safe-area-inset-bottom));margin:18px -18px calc(-22px - env(safe-area-inset-bottom));padding:2px 18px calc(14px + env(safe-area-inset-bottom));background:var(--surface);box-shadow:0 -1px 0 var(--line)}
 .new-foot .new-status{margin-top:12px}
 .new-foot .sheet-actions{margin-top:12px}

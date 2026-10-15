@@ -57,7 +57,7 @@ await page.evaluate(({menus,screens})=>{
  remote=async(op,args={})=>{fx.calls.push({op,args});await new Promise(r=>setTimeout(r,30));
   if(op==='status')return{agents:[fx.agent]};
   if(op==='history')return{record:fx.agent.history_ref.record,messages:fx.messages,children:[],before:0,has_more:false};
-  if(op==='read')return{text:screens[fx.screen],...(fx.agent.agent_status==='blocked'?{menu:menus[fx.screen]}:{})};
+  if(op==='read')return{text:screens[fx.screen],...(fx.agent.agent_status==='blocked'||fx.menuAlways?{menu:menus[fx.screen]}:{})};
   if(op==='answer'){if(fx.answerError)throw Error(fx.answerError);return{sent:true,receipt:args.id,result:{answered:true}};}
   if(op==='prompt'||op==='key')return{sent:true};
   throw Error('unexpected op '+op);};
@@ -108,6 +108,24 @@ assert.deepEqual({action:sent.action,option:sent.option,label:sent.label,fingerp
  {action:'select',option:2,label:'写到系统临时目录',fingerprint:menus.q1.fingerprint,target:'w1:p9',identity:'id-claude'});
 assert.match(sent.id,/^[a-f0-9-]{36}$/);
 console.log('PASS: Claude question card with transcript details, raw-key fallback, failure in place, answer request');
+// Regression: the menu is on screen (and parsed) while Herdr still says "working"; when the status
+// flips to blocked, the next read returns the same menu. The card must show without leaving the chat.
+await page.evaluate(async()=>{fx.screen='q1';fx.menuAlways=true;fx.agent={...fx.agent,identity:'id-claude-2',agent_status:'working'};S.agents=[fx.agent];S.qaMenu=null;
+ await openAgent(fx.agent);await fetchTerminal(true);});
+assert.equal(await page.getByRole('group',{name:'Agent 的提问',exact:true}).count(),0,'no card while working');
+await page.evaluate(async()=>{fx.agent={...fx.agent,agent_status:'blocked'};S.statusBusy=false;S.liveLoading=false;await refreshStatus();});
+await page.getByRole('group',{name:'Agent 的提问',exact:true}).waitFor({timeout:3000});
+console.log('PASS: question card appears in place when the same menu was already read while working');
+// The transcript's question call lands after the card was first drawn from the screen: the card
+// picks up the full descriptions and step without leaving the chat.
+await page.evaluate(async()=>{const live=fx.messages.pop();fx.lateCall=live;fx.agent={...fx.agent,identity:'id-claude-3',agent_status:'blocked'};fx.menuAlways=false;S.agents=[fx.agent];S.qaMenu=null;
+ await openAgent(fx.agent);await fetchTerminal(true);});
+const late=page.getByRole('group',{name:'Agent 的提问',exact:true});await late.waitFor();
+assert.equal(await late.getByText('放在 logs/ 下，和代码一起忽略提交。日志轮转按天，最多保留 7 天。',{exact:true}).count(),0,'screen-only copy first');
+await page.evaluate(async()=>{fx.messages.push(fx.lateCall);await fetchHistory();});
+await late.getByText('放在 logs/ 下，和代码一起忽略提交。日志轮转按天，最多保留 7 天。',{exact:true}).waitFor({timeout:3000});
+assert.match(await page.locator('.qa-card .qa-head').textContent(),/1\/2/);
+console.log('PASS: card upgrades in place when the question call reaches the transcript');
 
 // Next question on screen: multi-select with checkboxes and free text.
 await page.evaluate(()=>{fx.screen='q2';return fetchTerminal(true);});
@@ -198,6 +216,7 @@ assert.deepEqual(await page.evaluate(()=>{
  return [qaOutcome(c,qaParse(c),[c,r]).answers,qaOutcome(c,qaParse(c),[c,typed]).answers,qaOutcome(x,qaParse(x),[x,xr]).answers,qaOutcome(c,qaParse(c),[c,rej]).state,qaOutcome(c,qaParse(c),[c]).state,qaNotice(c).text];}),
  [['清理 (A), 重建 (B)','保持老行为'],['都不要，先问清楚','保持老行为'],['只要 Linux (Recommended)'],'cancelled','waiting','范围 · 用在哪些操作上？ 等 2 个问题']);
 console.log('PASS: answers parsed from Claude and Codex transcript formats');
+
 
 assert.deepEqual(errors,[]);
 await browser.close();

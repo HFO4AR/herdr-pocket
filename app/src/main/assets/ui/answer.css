@@ -1,7 +1,7 @@
 /* Answering agent questions (answer.js): the question card above the composer, the inline card
  * for Codex async questions and the compact "你的回答" rows in the timeline. Tokens from app.css. */
 .qa-card{display:flex;flex-direction:column;margin-bottom:8px;border:1px solid var(--soft-line);border-radius:var(--radius-card);background:var(--surface);overflow:hidden;max-height:min(64vh,560px);box-shadow:var(--shadow)}
-.qa-card.approval{border-color:#f3c9c6}
+.qa-card.approval{border-color:var(--danger-line)}
 .qa-head{display:flex;align-items:center;gap:8px;min-height:40px;padding:2px 6px 2px 12px;background:var(--soft);color:var(--accent);font-size:14px}
 .qa-card.approval .qa-head{background:var(--danger-soft);color:var(--danger)}
 .qa-card.approval .qa-head .link-btn{color:var(--danger)}

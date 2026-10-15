@@ -8,7 +8,7 @@ android {
         targetSdk = 35
         testInstrumentationRunner = "dev.herdr.pocket.SecureProfilesTest"
         versionCode = System.getenv("POCKET_VERSION_CODE")?.toInt() ?: 4
-        versionName = System.getenv("POCKET_VERSION_NAME") ?: "0.5.0"
+        versionName = System.getenv("POCKET_VERSION_NAME") ?: "0.6.0"
     }
     signingConfigs {
         if (System.getenv("POCKET_KEYSTORE") != null) create("distribution") {

@@ -35,6 +35,8 @@ object PocketCore {
         private set
     lateinit var bridge: ByteArray
         private set
+    lateinit var cache: LocalCache
+        private set
     val transport = SshTransport()
     @Volatile var connectedDevice: JSONObject? = null
         private set
@@ -52,6 +54,7 @@ object PocketCore {
         vault = SecureProfiles(app)
         pins = app.getSharedPreferences("connection", Context.MODE_PRIVATE)
         settings = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        cache = LocalCache(app)
         bridge = app.assets.open("pocket_bridge.py").use { it.readBytes() }
         watchNetwork(app)
     }
