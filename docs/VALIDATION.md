@@ -1,3 +1,20 @@
+# v0.3.0 chat and Host-style validation (2026-10-15)
+
+Validated source: `9edfe3c`. [CI and automatic release](https://github.com/HFO4AR/herdr-pocket/actions/runs/38696764336).
+
+- Host App default light/coral style: warm paper background, coral selections, ink primary actions, shared font order and 10/14/20 px geometry; mobile chat layout and touch targets remain. Dark theme selection is not included.
+- PASS: 24 Python bridge regressions covering read-only history parsing/pagination, parent-child links, path boundaries, tool results and existing mutation safeguards.
+- PASS: Browser tests for saved-device form, chat, older history, tools/results, independent child records, draft retention, explicit history binding when Herdr session ID is absent, 320 px width, landscape/tablet and reduced motion. Browser screenshots were visually inspected.
+- PASS: Local Android debug and instrumentation APK builds.
+- Local read-only checks parsed Codex and Claude records including tool outputs and parent-child metadata. The bridge only reads history roots; account information is SSH username/hostname only. No provider login files were read and no real Agent received prompts or keys.
+- NOT VERIFIED: Physical phone, real APK SSH/SFTP operations, prompt/key delivery or foreground polling over the user's Sakura Frp tunnel. The offline tests do not certify those paths.
+- Saved devices and opted-in passwords survive process restart using Android Keystore AES-GCM. Active SSH connections and in-memory drafts still end on process death. Child/archive views are read-only; sending requires a validated live pane.
+
+- PASS: CI Android lint/debug/release builds and API 35 emulator: two real Keystore tests, process restart with saved device/password, chat/history pagination, command results, child isolation, draft retention, keyboard, rotation and SSH info. Native chat, keyboard and landscape screenshots inspected.
+- PASS: Automatic signed [preview-14 release](https://github.com/HFO4AR/herdr-pocket/releases/tag/preview-14). APK SHA-256: `956bc8566bcc180bf8750fee493b9454692f79efb0362ab12b65a95afd36603d`; signing certificate matches the persistent release key documented in SECURITY.md.
+
+---
+
 # v0.2.0 redesign validation (2026-10-14)
 
 Validated source: `97ded4a`. [Successful CI and automatic release](https://github.com/HFO4AR/herdr-pocket/actions/runs/38563814065).

@@ -12,6 +12,8 @@ Not affiliated with Herdr or other similarly named mobile apps.
 
 Screenshots use offline fixtures, never real conversations or credentials.
 
+视觉采用 Host App 默认亮色 / coral 设计规则：暖白底、珊瑚橙选中态、黑色主按钮，10 / 14 / 20 px 圆角与相同字体顺序。移动端保留至少 44 px 主要触控目标和聊天布局；当前不包含 Host 的深色主题选择器。
+
 ## 这版能做什么
 
 - **设备与密码保存**：多台设备的名称、主机、端口和 SSH 用户名；勾选记住密码后，使用 Android Keystore 的 AES-GCM 密钥加密，重启应用仍可使用。编辑时不回显密码，取消记住或删除设备会移除保存的密码；改变目的主机或用户名不会沿用旧密码。
@@ -72,5 +74,3 @@ APK：`app/build/outputs/apk/debug/app-debug.apk`。浏览器测试只使用离�
 ## License
 
 MIT. Dependencies retain their licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-视觉采用 Host App 默认亮色 / coral 设计规则：暖白底、珊瑚橙选中态、黑色主按钮，10 / 14 / 20 px 圆角与相同字体顺序。移动端保留至少 44 px 主要触控目标和聊天布局；当前不包含 Host 的深色主题选择器。
