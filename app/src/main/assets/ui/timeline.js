@@ -324,7 +324,7 @@ function fileSheet(ref){
  const path=String(ref).replace(/:\d+(?:[-:,]\d+)*$/,''),rel=tlRel(path),name=rel.split('/').pop()||rel;
  const hits=[];const tail=rel.replace(/^(\.\/|~\/)/,'');
  for(const m of S.messages){if(m.kind!=='tool')continue;const info=toolInfo(m,null);for(const d of info.diffs){const f=String(d.file||'');if(f===path||f.endsWith('/'+tail)||tlRel(f)===tail)hits.push({m,d});}}
- const box=sheet(name);box.classList.add('file-sheet');box.append(el('p','file-sheet-path',hits[0]?.d.file||path));
+ const box=sheet(name);box.classList.add('file-sheet');box.append(el('p','file-sheet-path',hits[0]?.d.file||path));if(typeof fileViewButton==='function')box.append(fileViewButton(ref));
  const row=el('div','sheet-actions');row.append(btn('复制路径','secondary',()=>{closeSheet();copyText(ref);},'copy'),btn('复制文件名','secondary',()=>{closeSheet();copyText(name);},'file'));box.append(row);
  if(!hits.length){box.append(el('p','fine',S.more?'已加载的记录里没改过这个文件。':'这段对话里没改过这个文件。'));return;}
  const add=hits.reduce((a,h)=>a+h.d.add,0),del=hits.reduce((a,h)=>a+h.d.del,0);

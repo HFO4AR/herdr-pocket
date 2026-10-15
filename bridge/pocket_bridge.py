@@ -767,6 +767,7 @@ def remote_dispatch(request):
         try: return remote_transcript_image(request)
         except BridgeError as exc: return {"image_error": str(exc)[:200]}
     if op == "catalog": return {"records": [public_record(x) for x in scoped_records(request.get("provider", "claude"), request["workspace"], 100)]}
+    if op == "fileView": return view_file(request.get("path"), request.get("cwd"), view_roots(request.get("record_id"), request.get("provider", "claude"), request.get("workspace")))
     return {"error": "unknown remote op"}
 
 
@@ -2009,6 +2010,108 @@ def file_info(request):
     return {"files": found}
 
 
+# ─── Read-only file viewer ───────────────────────────────────────────────────
+# Tapping 「查看文件内容」 on a path in a message reads that one text file, only then, never
+# ahead of time. Only files inside the home folder or the conversation's project folder (after
+# resolving symlinks), never key/credential/.env-style files, devices or pipes; at most
+# VIEW_LIMIT bytes travel. A ch route reads on the other computer through the same stored,
+# hash-checked adapter with the same rules there. See SECURITY.md.
+VIEW_LIMIT = 512 * 1024
+VIEW_SECRET_DIRS = {".ssh", ".gnupg", ".aws", ".password-store", ".kube", ".docker"}
+VIEW_SECRET_PAIRS = ((".config", "gh"), (".local/share", "keyrings"))
+VIEW_SECRET_NAME = re.compile(r"(?i)^(?:\.env.*|.*id_(?:rsa|dsa|ecdsa|ed25519).*|.*\.(?:pem|key|p12|pfx|jks|keystore|kdbx|ppk)"
+                              r"|.*keystore.*|\.netrc|\.pgpass|\.git-credentials|\.npmrc|\.pypirc|\.?credentials(?:\..*)?)$")
+
+
+def view_secret(path):
+    """Key, credential and .env-style locations, anywhere in the path."""
+    parts = Path(path).parts
+    if any(p in VIEW_SECRET_DIRS for p in parts): return True
+    text = "/" + "/".join(parts[1:] if parts and parts[0] == "/" else parts) + "/"
+    if any("/" + a + "/" + b + "/" in text for a, b in VIEW_SECRET_PAIRS): return True
+    name, parent = parts[-1] if parts else "", parts[-2] if len(parts) > 1 else ""
+    # Provider sign-in and config files (config may carry API keys in env blocks).
+    low = name.lower()
+    if parent == ".codex" and low.startswith(("auth", "config")): return True
+    if parent == ".claude" and (low.startswith(".credentials") or low.startswith("settings")): return True
+    if low == ".claude.json" or low.startswith(".claude.json."): return True
+    return bool(VIEW_SECRET_NAME.match(name))
+
+
+def view_inside(path, roots):
+    return any(path == r or path.startswith(r.rstrip(os.sep) + os.sep) for r in roots)
+
+
+def view_file(raw, base=None, extra_roots=()):
+    """One text file under the home folder or the project folder, read-only, at most VIEW_LIMIT bytes."""
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > 4096 or "\0" in raw: raise BridgeError("路径无效")
+    home = os.path.realpath(str(Path.home()))
+    roots = [home] + [os.path.realpath(r) for r in extra_roots if isinstance(r, str) and os.path.isabs(r)]
+    roots = [r for r in dict.fromkeys(roots) if r != os.sep]
+    if not roots: raise BridgeError("找不到可以查看的目录")
+    path = raw.strip()
+    if path.startswith("file://"): path = path[7:]
+    if path == "~" or path.startswith("~/"): path = str(Path.home()) + path[1:]
+    if not os.path.isabs(path):
+        start = base if isinstance(base, str) and os.path.isabs(base) else str(Path.home())
+        path = os.path.join(start, path)
+    lexical = os.path.normpath(path)
+    secret = "这是密钥、凭据或 .env 一类的敏感文件，不在手机上显示"
+    if view_secret(lexical): raise BridgeError(secret)
+    real = os.path.realpath(lexical)
+    if not view_inside(real, roots):
+        raise BridgeError("这个链接指向项目和主目录之外，不读取" if view_inside(lexical, roots) else "只能查看项目目录或主目录里的文件")
+    if view_secret(real): raise BridgeError(secret)
+    try: info = os.stat(real)
+    except FileNotFoundError: raise BridgeError("文件不存在：" + os.path.basename(lexical)) from None
+    except OSError as exc: raise BridgeError("读不到这个文件") from exc
+    if stat_module.S_ISDIR(info.st_mode): raise BridgeError("这是文件夹，不是文件")
+    if not stat_module.S_ISREG(info.st_mode): raise BridgeError("这不是普通文件（设备、管道或套接字），不读取")
+    try: fd = os.open(real, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
+    except PermissionError: raise BridgeError("没有权限读取这个文件") from None
+    except OSError as exc: raise BridgeError("读不到这个文件") from exc
+    with os.fdopen(fd, "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat_module.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            raise BridgeError("文件刚刚变了，请重试")
+        data = stream.read(VIEW_LIMIT)
+    size, truncated = opened.st_size, opened.st_size > len(data)
+    result = {"path": real, "name": os.path.basename(real), "size": size, "shown": len(data), "truncated": truncated, "mtime": opened.st_mtime}
+    head = data[:8192]
+    text = data.decode("utf-8", "replace")
+    if truncated: text = text.rstrip("�")
+    odd = sum(1 for c in text[:20000] if c == "�" or (ord(c) < 32 and c not in "\t\n\r\f\b\x1b"))
+    if b"\0" in head or odd > max(8, len(text[:20000]) // 50):
+        result.update(binary=True); return result
+    result.update(binary=False, text=text)
+    return result
+
+
+def view_request(request):
+    """fileView: this computer, or the other computer of a ch route (same rules there)."""
+    path = request.get("path"); base = request.get("cwd")
+    if base is not None and (not isinstance(base, str) or len(base) > 4096): raise BridgeError("Invalid cwd")
+    provider = request.get("provider", "claude")
+    if provider not in ("claude", "codex"): raise BridgeError("Invalid provider")
+    record = request.get("record_id")
+    if request.get("remote") is not None:
+        context = request["remote"]; route = route_for_context(context); prefix = "remote:" + route["key"] + ":"
+        data = {"op": "fileView", "path": path, "cwd": base, "workspace": route["workspace"], "provider": context.get("provider", provider)}
+        if isinstance(record, str) and record.startswith(prefix) and re.fullmatch(r"[a-f0-9]{64}", record[len(prefix):]): data["record_id"] = record[len(prefix):]
+        return remote_read(route, data, 20)
+    return view_file(path, base, view_roots(record, provider))
+
+
+def view_roots(record, provider, workspace=None):
+    """The conversation's project folder (from its transcript), next to the home folder."""
+    roots = [str(Path(workspace).expanduser())] if isinstance(workspace, str) else []
+    if isinstance(record, str) and re.fullmatch(r"[a-f0-9]{64}", record):
+        try: entry = next((x for x in catalog_for_history(record, provider) if x["id"] == record), None)
+        except OSError: entry = None
+        if entry and isinstance(entry.get("cwd"), str): roots.append(entry["cwd"])
+    return roots
+
+
 def pane_place(request, prefix, agent):
     """'local' or the ch route; refuses panes whose files would mean nothing to the agent."""
     probe = probe_pane(agent, prefix, agent.get("agent") or "")
@@ -2549,6 +2652,7 @@ def handle(request, state_dir=None):
     if op == "fileCheck": return file_check(request)
     if op == "glance": return glance(request)
     if op == "fileInfo": return file_info(request)
+    if op == "fileView": return view_request(request)
     if op in ("catalog", "history"):
         if request.get("remote") is not None: return remote_history_request(request)
         catalog = transcript_catalog()

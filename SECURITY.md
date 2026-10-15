@@ -56,7 +56,7 @@ Cached content is display only: while SSH is still connecting the cached chat is
 
 ## History and bundled UI
 
-History access is limited to JSONL files within the SSH user's `~/.codex/sessions` and `~/.claude/projects`. Remote requests use catalog-issued SHA-256 record IDs, not filesystem paths. Symlinks escaping the roots are rejected. To tell which conversation a live Codex pane is showing, the bridge also reads thread names from `~/.codex/session_index.jsonl` and the file names (thread IDs) in `~/.codex/thread-writer-locks/`; it never opens the lock files or any Codex auth/config file. The account endpoint returns only SSH username and hostname; no provider authentication/config files are read.
+History access is limited to JSONL files within the SSH user's `~/.codex/sessions` and `~/.claude/projects`. (The one exception, a file opened on explicit request in the read-only viewer, is described under "Viewing project files" below.) Remote requests use catalog-issued SHA-256 record IDs, not filesystem paths. Symlinks escaping the roots are rejected. To tell which conversation a live Codex pane is showing, the bridge also reads thread names from `~/.codex/session_index.jsonl` and the file names (thread IDs) in `~/.codex/thread-writer-locks/`; it never opens the lock files or any Codex auth/config file. The account endpoint returns only SSH username and hostname; no provider authentication/config files are read.
 
 Adapters exclude system/developer messages, private reasoning and internal guardian records. Commands/results are historical evidence, never executable UI. Text uses DOM text nodes, not HTML interpolation. Transcript sources are private third-party formats and remain version-sensitive.
 
@@ -80,6 +80,19 @@ To keep remote reads fast (a fresh SSH login over a slow link takes seconds), tw
 Account display remains the primary SSH connection's username/hostname.
 
 Remote record identifiers are bound to a rediscovered live route; the app cannot supply an arbitrary SSH destination or filesystem path. A unique dedicated ch-cli route workspace can identify its one native conversation. Generic cwd matches and ambiguous routes provide explicit read-only choices. Selecting history does not resume a provider session or send input. Temporary SSH/read failures remain visible and do not authorize mutation replay.
+
+## Viewing project files (read-only, 0.6)
+
+Besides history, the bridge can read one **project file** for display. This is opt-in per tap: a path in a message opens a sheet, and only tapping 「查看文件内容」 there sends a `fileView` request for that one file. Nothing is read ahead of time, in the background or for previews, the content is not written to the phone's cache, and the operation never writes, executes or lists anything. Searching inside a conversation runs on the phone over messages already loaded; it reads no files.
+
+The `fileView` operation enforces, on the computer that has the file:
+
+- **Where:** the path (absolute, `~/…`, or relative to the conversation's working directory) is resolved with `realpath`, so every symlink is followed, and the result must lie inside the SSH user's home folder or the conversation's project folder (the `cwd` recorded in the transcript the app has open, looked up by its record ID; a working directory sent by the app is only a base for relative paths, never an allowed root). `/` is never a root. A link that leads out of these folders is refused ("链接指向项目和主目录之外").
+- **Never secrets:** refused by the requested path and again by the resolved path: anything under `.ssh`, `.gnupg`, `.aws`, `.password-store`, `.kube`, `.docker`, `~/.config/gh`, `~/.local/share/keyrings`; provider sign-in/config files (`~/.codex/auth*`, `~/.codex/config*`, `~/.claude/.credentials*`, `~/.claude/settings*`, `~/.claude.json`); and files named `.env*`, `*id_rsa*` / `*id_ed25519*` / `*id_ecdsa*` / `*id_dsa*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*keystore*`, `*.kdbx`, `*.ppk`, `.netrc`, `.pgpass`, `.git-credentials`, `.npmrc`, `.pypirc`, `credentials*`. The app shows "这是密钥、凭据或 .env 一类的敏感文件，不在手机上显示". This list cannot recognise every secret: a token pasted into an ordinary source file is shown like the rest of that file.
+- **Only regular files:** directories, devices, pipes and sockets are refused before opening; the file is opened with `O_NOFOLLOW | O_NONBLOCK` and must still be the same regular file.
+- **Bounded:** at most the first 512 KB are read and sent (the app says the file was cut and how big it is). Files with NUL bytes or mostly undecodable/control bytes are reported as binary and their content is not sent.
+
+For a pane on another computer (ch-cli route), the same request goes through the remote read path described above (the stored, hash-checked adapter over the bridge's own SSH connection, request on stdin), and the same checks run on that computer against that SSH user's home folder, the route's workspace folder and the transcript's working directory there.
 
 ## Permissions and pane input (0.6)
 

@@ -64,7 +64,7 @@ function keyPassphrase(problem=''){
   try{await rpc('identityImportConfirm',{passphrase:value});toast('私钥导入好了');keysSheet();}
   catch(e){ok.disabled=false;if(e.code==='passphrase'){obError(pass,e.message);pass.focus();}else{closeSheet();error(e);}}});
  pass.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();ok.click();}});
- actions.append(btn('取消','secondary',()=>{rpc('identityImportCancel').catch(()=>{});closeSheet();}),ok);box.append(actions);setTimeout(()=>pass.focus(),50);}
+ actions.append(btn('取消','secondary',()=>{rpc('identityImportCancel').catch(()=>{});closeSheet();}),ok);box.append(actions);obAutofocus(box,pass);}
 
 // ─── Device form: login method ─────────────────────────────────────────────
 // Adds 「登录方式 密码/密钥」 above the password field. Returns {get(), key()}.

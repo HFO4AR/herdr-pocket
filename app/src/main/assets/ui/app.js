@@ -438,6 +438,7 @@ function agentSwitcher(){
  if(S.children.length>6){fill(S.children.slice(-5));const all=btn('显示全部 '+S.children.length+' 个','link-btn',()=>{all.remove();fill(S.children);});box.append(all);}else fill(S.children);}
 function chatMenu(){
  const box=sheet('对话操作');
+ menuItem(box,'在对话里搜索',findOpen,'search','消息、过程和命令输出');
  menuItem(box,'刷新对话',()=>{S.paused=false;fetchHistory(false,true);},'refresh');
  menuItem(box,S.paused?'恢复自动更新':'暂停自动更新',()=>{S.paused=!S.paused;toast(S.paused?'自动更新已暂停':'自动更新已恢复');},S.paused?'refresh':'pause');
  menuItem(box,'选择其他历史记录',pickHistory,'history');

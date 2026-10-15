@@ -1,0 +1,57 @@
+/* Find bar (find.js) and the read-only file viewer (fileview.js). */
+:root{--find-hit:#ffe49a;--find-hit-ink:#2a1d00;--find-current:#f57b4a;--find-current-ink:#1a0d06;--find-target:#fff4d6}
+:root[data-theme="dark"]{--find-hit:#5b4614;--find-hit-ink:#fff1cc;--find-current:#f39a72;--find-current-ink:#1a0d06;--find-target:#2e2716}
+
+/* Bar: under the chat header (or the viewer's tools); one row, a second one to load earlier pages. */
+.find-bar{background:var(--surface);border-bottom:1px solid var(--line);padding:6px 4px 6px 12px;animation:find-in .16s var(--ease-out)}
+@keyframes find-in{from{opacity:0;transform:translateY(-4px)}}
+.find-row{display:flex;align-items:center;gap:2px}
+.find-field{flex:1;min-width:0;margin:0;font-weight:400;display:flex;align-items:center;gap:6px;height:38px;padding:0 10px;border-radius:var(--radius-control);background:var(--sunken);border:1px solid transparent;color:var(--muted);transition:border-color .15s var(--ease),background-color .15s var(--ease)}
+.find-field:focus-within{border-color:var(--line-strong);background:var(--raised)}
+.find-field svg{width:17px;height:17px}
+.find-field input{flex:1;min-width:0;height:100%;border:0;outline:0;background:none;padding:0;font-size:var(--fs-base);color:var(--ink)}
+.find-field input::placeholder{color:var(--faint)}
+.find-count{min-width:42px;padding:0 4px;text-align:center;font-size:var(--fs-xs);font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.find-count:empty{min-width:0;padding:0}
+.find-count.none{color:var(--faint);font-weight:500}
+.find-bar .icon-btn{min-width:42px}
+.find-bar .icon-btn svg{width:20px;height:20px}
+.find-more{display:flex;align-items:center;gap:8px;margin:6px 0 0;padding:2px 2px 2px 10px;border-radius:var(--radius-control);background:var(--soft);color:var(--accent);font-size:var(--fs-sm)}
+.find-more svg{width:16px;height:16px}
+.find-more .grow{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.find-more-btn{flex-shrink:0;min-height:44px;padding:0 10px;font-weight:600;color:var(--accent);border-radius:var(--radius-control)}
+.find-more-btn:active{background:var(--press)}
+@media(max-width:359px){.find-bar{padding-left:8px}.find-bar .icon-btn{min-width:40px}.find-count{min-width:34px;padding:0 2px}.find-field{padding:0 8px}.find-field svg{display:none}.find-more .grow{font-size:var(--fs-xs)}}
+
+/* Hits: text stays text; only a background and the current one stronger. */
+mark.find-hit{background:var(--find-hit);color:var(--find-hit-ink);border-radius:3px;box-shadow:0 0 0 1px var(--find-hit);padding:0}
+mark.find-hit.current{background:var(--find-current);color:var(--find-current-ink);box-shadow:0 0 0 2px var(--find-current)}
+
+/* Path sheet entry (timeline.js fileSheet). */
+.fv-entry{display:flex;flex-direction:column;gap:6px;margin:4px 0 2px}
+.fv-open{width:100%}
+.fv-hint{text-align:center}
+
+/* Viewer: a tall sheet, the code area scrolls on its own. */
+.sheet.fv-sheet{height:92%;max-height:92%;max-width:900px;display:flex;flex-direction:column;overflow:hidden;padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+.fv-sheet>*{flex-shrink:0}
+.fv-path{font:12px/1.5 var(--mono);color:var(--muted);overflow-wrap:anywhere;margin:-4px 0 6px;-webkit-user-select:text;user-select:text;max-height:3em;overflow:hidden}
+.fv-status{display:flex;align-items:center;gap:8px;font-size:var(--fs-xs);color:var(--muted);min-height:20px;margin-bottom:8px}
+.fv-error{color:var(--danger);font-size:var(--fs-sm);line-height:1.6}
+.fv-sheet .note{margin-bottom:8px;font-size:var(--fs-xs)}
+.fv-tools{display:flex;gap:8px;margin-bottom:10px}
+.fv-tools button{flex:1 1 auto;min-width:0;white-space:nowrap}
+.fv-tools svg{width:17px;height:17px}
+.fv-wrap.on{background:var(--soft);border-color:var(--soft-line);color:var(--accent)}
+.fv-sheet .find-bar{border:0;padding:0 0 0 0;margin:-2px -6px 8px 0;background:none}
+.fv-code{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;background:var(--code-block);border:1px solid var(--line);border-radius:var(--radius-card);-webkit-user-select:text;user-select:text}
+.fv-code:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+.fv-lines{--fv-digits:3;display:inline-block;min-width:100%;padding:8px 0;font:12.5px/1.6 var(--mono);color:var(--ink)}
+.fv-lines.wrap{display:block}
+.fv-line{display:flex;align-items:flex-start;min-height:1.6em}
+.fv-no{position:sticky;left:0;flex:0 0 auto;width:calc(var(--fv-digits) * 1ch + 22px);padding:0 10px 0 8px;text-align:right;color:var(--faint);background:var(--code-block);-webkit-user-select:none;user-select:none;font-variant-numeric:tabular-nums}
+.fv-text{flex:1 0 auto;padding-right:14px;white-space:pre;tab-size:4}
+.fv-lines.wrap .fv-text{flex:1 1 0;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.fv-line.target,.fv-line.target .fv-no{background:var(--find-target)}
+.fv-line.target .fv-no{color:var(--accent);font-weight:600}
+.fv-empty{padding:16px;color:var(--muted);font:var(--fs-sm) var(--mono)}

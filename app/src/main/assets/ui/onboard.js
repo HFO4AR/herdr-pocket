@@ -86,6 +86,9 @@ function connectionCard(){
  card.append(el('p','fine','只显示 SSH 连接信息，不读取 Codex / Claude 的登录资料。'));return card;}
 
 // ─── Device form ────────────────────────────────────────────────────────────
+// Focus a field once the sheet is up, unless the person already tapped into one: on a slow phone the
+// timer can fire late and would otherwise pull the cursor (and what is being typed) into another field.
+function obAutofocus(box,field){setTimeout(()=>{const a=document.activeElement;if(box.isConnected&&(!a||a===document.body||!box.contains(a)))field.focus();},60);}
 function deviceForm(d={}){
  rpc('protect').catch(error);const editing=!!d.id;const box=sheet(editing?'编辑设备':'添加设备');box.classList.add('ob-form');
  const name=obField(box,'设备名称',{value:d.name||'',placeholder:'例如：家里的电脑',enter:'next'});
@@ -117,7 +120,7 @@ function deviceForm(d={}){
  if(editing)buttons=[btn('取消','secondary',closeSheet),btn('保存设备','primary',()=>save(false))];
  else buttons=[btn('保存设备','secondary',()=>save(false)),btn('保存并连接','primary',()=>save(true))];
  actions.append(...buttons);box.append(actions);
- if(!editing)setTimeout(()=>(d.host?pass:host).focus(),60);}
+ if(!editing)obAutofocus(box,d.host?pass:host);}
 
 // ─── Password prompt ────────────────────────────────────────────────────────
 function connectionPassword(d,problem=''){
@@ -126,7 +129,7 @@ function connectionPassword(d,problem=''){
  const label=el('label','check');const remember=el('input');remember.type='checkbox';remember.checked=true;remember.setAttribute('aria-label','记住本次登录密码');label.append(remember,document.createTextNode('记住密码 · 登录成功后加密保存'));box.append(label);
  const actions=el('div','sheet-actions');
  const go=()=>{if(!pass.value){obError(pass,'先输入密码');pass.focus();return;}const value=pass.value,save=remember.checked;pass.value='';closeSheet();doConnect(d,value,save);};
- pass.onkeydown=e=>{if(e.key==='Enter')go();};actions.append(btn('取消','secondary',closeSheet),btn('连接','primary',go));box.append(actions);setTimeout(()=>pass.focus(),50);}
+ pass.onkeydown=e=>{if(e.key==='Enter')go();};actions.append(btn('取消','secondary',closeSheet),btn('连接','primary',go));box.append(actions);obAutofocus(box,pass);}
 
 // ─── Connecting ─────────────────────────────────────────────────────────────
 function connectDevice(d){if(S.loading){toast('正在连接，请稍候');return;}if(S.device?.id===d.id&&!S.demo){setTab('live');return;}if(d.auth!=='key'&&!d.remember)connectionPassword(d);else doConnect(d);}
