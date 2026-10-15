@@ -22,6 +22,9 @@ function demoHistory(id,older){
   demoMessage(30,'user',log),demoNote(31,'看日志是时间线把两轮合成了一轮，我先复现。'),demoMessage(32,'tool','node scripts/test_ui.cjs','exec_command','demo-call-6'),demoMessage(33,'result','FAIL: chat timeline\nError: 1 test failed\nProcess exited with code 1','执行结果','demo-call-6'),
   demoNote(34,'复现了：用户消息没有作为轮次边界。改好后重跑。'),demoMessage(35,'tool','*** Begin Patch\n*** Update File: app/src/main/assets/ui/timeline.js\n*** End Patch','apply_patch','demo-call-7'),demoMessage(36,'result','Success.','执行结果','demo-call-7'),demoMessage(37,'tool','node scripts/test_ui.cjs','exec_command','demo-call-8'),demoMessage(38,'result','PASS: chat timeline\nProcess exited with code 0','执行结果','demo-call-8'),
   demoReply(39,'测试都通过了。点开「工作过程」可以看到每条命令和输出，或者点右上角切换到「布局检查」子 Agent。\n\n```bash\nnpm test\n```')];}
+// What the bridge's parse_menu returns for the blocked demo screen below.
+const demoMenu={kind:'approval',multi:false,cursor:1,question:'Would you like to run the following command?',context:['Would you like to run the following command?','','$ rm -rf dist .cache'],tabs:[],submit:null,fingerprint:'ed05eda4267b6f92559a',
+ options:[{n:1,label:'Yes, proceed',description:'',checked:null,chosen:false,input:false,chat:false},{n:2,label:'No, and tell Codex what to do differently',description:'',checked:null,chosen:false,input:false,chat:false}]};
 async function demoRequest(op,r){
  await new Promise(resolve=>setTimeout(resolve,160));
  if(op==='sessions')return{sessions:[{name:'demo',running:true}]};
@@ -33,6 +36,6 @@ async function demoRequest(op,r){
  if(op==='history'){const rec=demoRecords.find(x=>x.id===r.record_id);let messages;
   messages=demoHistory(rec.id,r.before!==undefined);
   return{record:rec,messages,children:demoRecords.filter(x=>x.parent===rec.thread),before:r.before!==undefined?0:10,has_more:r.before===undefined&&rec.id==='demo-root'};}
- if(op==='read')return{text:r.target==='demo:3'?'  Would you like to run the following command?\n\n  $ rm -rf dist .cache\n\n› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n\n  Press enter to confirm or esc to cancel':'$ python3 -m unittest discover -s tests -v\nRan 24 tests\nOK\n\n离线演示，不是真实终端。'};
- if(op==='prompt'||op==='key')return{sent:false};
+ if(op==='read')return{menu:r.target==='demo:3'?demoMenu:undefined,text:r.target==='demo:3'?'  Would you like to run the following command?\n\n  $ rm -rf dist .cache\n\n› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n\n  Press enter to confirm or esc to cancel':'$ python3 -m unittest discover -s tests -v\nRan 24 tests\nOK\n\n离线演示，不是真实终端。'};
+ if(op==='prompt'||op==='key'||op==='answer')return{sent:false};
  throw Error('演示不支持此操作');}

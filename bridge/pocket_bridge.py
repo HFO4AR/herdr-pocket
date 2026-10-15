@@ -126,6 +126,11 @@ def mutate(request, prefix, agent, state_dir):
             if key not in ("up", "down", "left", "right", "enter", "esc", "ctrl+c"):
                 raise BridgeError("Unsupported key")
             args = ["agent", "send-keys", agent["pane_id"], key]
+        elif op == "answer":
+            if agent.get("agent_status") != "blocked":
+                raise BridgeError("Agent is not waiting on a menu; refresh and inspect it first")
+            validate_answer(request)
+            args = None
         elif op in ("paneRun", "paneText", "paneKey"):
             if agent.get("agent"):
                 raise BridgeError("Pane now contains an Agent; reload before sending input")
@@ -142,7 +147,7 @@ def mutate(request, prefix, agent, state_dir):
         # 在写入终端之前持久化请求；中断后相同 ID 也不能再次执行。
         db.execute("INSERT INTO receipts VALUES (?, ?, NULL)", (req_id, digest))
         db.commit()
-        value = call(prefix + args)
+        value = answer_question(request, prefix, agent) if op == "answer" else call(prefix + args)
         result = {"sent": True, "receipt": req_id, "result": value}
         db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
         db.commit()
@@ -929,6 +934,286 @@ def follow_pane(request, prefix):
     return {"follow": True, "state": "exited", "agents": [], "pane": public}
 
 
+# ─── Agent questions and approval menus ──────────────────────────────────────
+# Claude's AskUserQuestion / permission dialogs and Codex's approval / question
+# pickers are numbered TUI menus with a pointer on the focused row. The phone
+# picks an option; the bridge walks the cursor there with ↑/↓, re-reads the
+# screen to confirm the pointer really sits on that option, and only then
+# presses Enter. Anything unexpected stops before Enter.
+# Scrolling lists may put ↑/↓ in the pointer column of the first/last visible row.
+MENU_ROW = re.compile(r"^(?:[↑↓][ \t]*)?(?P<ptr>[❯›>▶➤])?[ \t]*(?:[↑↓][ \t]*)?(?P<n>\d{1,2})\.[ \t]+(?P<rest>\S.*)$")
+MENU_SUBMIT = re.compile(r"^(?P<ptr>[❯›>▶➤])?[ \t]*(?P<label>Submit answers|Submit|Next)[ \t]*$")
+MENU_CHECK = re.compile(r"^(?:\[(?P<box>[ ✔✓×xX√])\]|(?P<sym>[☐☒◻◼]))[ \t]*")
+MENU_FOOTER = re.compile(r"(?i)(enter to |esc to |to navigate|tab to |to cancel|ctrl\+\w to |press enter|↑/↓|←/→)")
+MENU_MORE = re.compile(r"^[↑↓]\s*(\d+\s*more (above|below).*)?$")
+MENU_INPUT = re.compile(r"(?i)^(type something|type your answer|other)\b")
+BOX_EDGE = "│┃║"
+BOX_INNER = "│┃║┌┐└┘├┤┬┴┼╭╮╰╯"
+ANSWER_KEYS_LIMIT = 24
+ANSWER_PAUSE, ANSWER_PATIENCE = 0.2, 4.0  # screen re-read interval / how long a TUI may take to redraw
+
+
+def menu_rule(line):
+    stripped = line.strip()
+    return len(stripped) >= 8 and sum(c in "─━═╌┄-_" for c in stripped) >= len(stripped) * 0.8
+
+
+def menu_clean(line):
+    line = line.rstrip()
+    # Only a dialog border at the left edge; a side panel (Claude's option preview) stays and is cut later.
+    line = re.sub(r"^[ \t]{0,2}[" + BOX_EDGE + r"][ \t]?", "", line)
+    return re.sub(r"[ \t]*[" + BOX_EDGE + r"]$", "", line)
+
+
+def menu_norm(text):
+    return re.sub(r"\s+", "", str(text or "")).lower()
+
+
+def menu_loose_match(a, b):
+    """Screen labels may be truncated or wrapped; compare a stable prefix."""
+    a, b = menu_norm(a).rstrip("…."), menu_norm(b).rstrip("….")
+    if not a or not b: return False
+    size = min(len(a), len(b), 12)
+    return a[:size] == b[:size]
+
+
+def parse_menu(text, provider=""):
+    """Find the newest numbered menu at the bottom of an agent screen; None if unsure."""
+    lines = [menu_clean(x) for x in str(text or "").split("\n")][-70:]
+    runs = []
+    for index, raw in enumerate(lines):
+        match = MENU_ROW.match(raw.strip())
+        if not match: continue
+        n = int(match["n"])
+        if not runs or n != runs[-1][-1]["n"] + 1: runs.append([])
+        runs[-1].append({"n": n, "line": index, "ptr": bool(match["ptr"]), "rest": match["rest"]})
+    # The live menu is the last run; earlier runs are numbered lists in the transcript.
+    runs = [r for r in runs if len(r) >= 2]
+    if not runs: return None
+    run = runs[-1]
+    last_line = run[-1]["line"]
+    # A live menu sits at the bottom: only a submit row, hints and blank lines may follow.
+    if sum(1 for x in lines[last_line + 1:] if x.strip()) > 14: return None
+    submit, cursor = None, None
+    for index in range(last_line + 1, min(len(lines), last_line + 12)):
+        match = MENU_SUBMIT.match(lines[index].strip())
+        if match:
+            submit = {"label": match["label"], "line": index}
+            if match["ptr"]: cursor = "submit"
+            break
+    for row in run:
+        rest = row["rest"]
+        cut = min([rest.find(c) for c in BOX_INNER if c in rest] or [len(rest)])
+        rest = rest[:cut].rstrip()
+        check = MENU_CHECK.match(rest)
+        checked = None
+        if check:
+            checked = (check["box"] or "").strip() != "" if check["box"] is not None else check["sym"] in "☒◼"
+            rest = rest[check.end():]
+        chosen = bool(re.search(r"\s[✔✓]$", rest))
+        rest = re.sub(r"\s[✔✓]$", "", rest).strip()
+        # Codex prints the description on the same line after a wide gap.
+        parts = re.split(r"\s{2,}", rest, maxsplit=1)
+        row.update(label=parts[0].strip(), checked=checked, chosen=chosen, description=parts[1].strip() if len(parts) > 1 else "")
+        if row["ptr"]:
+            if cursor is not None: return None  # two pointers: not a menu we understand
+            cursor = row["n"]
+    # Description lines sit under each row until the next row or the footer.
+    ends = [r["line"] for r in run[1:]] + [submit["line"] if submit else len(lines)]
+    for row, end in zip(run, ends):
+        extra = []
+        for raw in lines[row["line"] + 1:end]:
+            value = raw.strip()
+            if not value: continue
+            if menu_rule(raw) or MENU_FOOTER.search(value) or MENU_MORE.match(value) or MENU_SUBMIT.match(value): break
+            value = value[:min([value.find(c) for c in BOX_INNER if c in value] or [len(value)])].strip()
+            if value: extra.append(value)
+        description = " ".join(([row["description"]] if row["description"] else []) + extra)
+        row["description"] = description[:600]
+    if cursor is None: return None
+    # Context: the dialog text above the options (question, command to approve…).
+    context, tabs = [], []
+    for raw in reversed(lines[max(0, run[0]["line"] - 16):run[0]["line"]]):
+        value = raw.strip()
+        if menu_rule(raw) and context: break
+        if menu_rule(raw) or MENU_MORE.match(value): continue
+        if "←" in value and "→" in value and re.search(r"[☐☒✔√]", value):
+            tabs = [{"label": m[2].strip(), "done": m[1] in "☒✔√"}
+                    for m in re.finditer(r"([☐☒✔√])\s+([^☐☒✔√←→]+)", value)]
+            break
+        context.insert(0, value[:300])
+    while context and not context[0]: context.pop(0)
+    while context and not context[-1]: context.pop()
+    context = context[-14:]
+    question = next((x for x in reversed(context) if x.endswith(("?", "？"))), next((x for x in reversed(context) if x), ""))
+    words = " ".join(context + [r["label"] for r in run]).lower()
+    labels = [r["label"] for r in run]
+    if "review your answers" in words or "submit answers" in [x.lower() for x in labels]: kind = "review"
+    elif re.search(r"do you want to|would you like to|allow |approve|permission|proceed\?", words): kind = "approval"
+    else: kind = "question"
+    chat = next((r["n"] for r in run if r["label"].lower().startswith("chat about this")), None)
+    multi = any(r["checked"] is not None for r in run)
+    for row in run:
+        row["chat"] = row["n"] == chat
+        # Only Claude question dialogs have a text row; elsewhere typed letters may be shortcuts (y/n/p).
+        row["input"] = provider == "claude" and kind == "question" and (
+            bool(MENU_INPUT.match(row["label"])) or row["n"] == (chat or 0) - 1 or bool(multi and submit and row is run[-1]))
+    stable = [kind, multi, context, [(r["n"], r["label"]) for r in run if not r["input"]]]
+    return {"kind": kind, "multi": multi, "cursor": cursor, "question": question, "context": context,
+            "tabs": [t for t in tabs if t["label"].lower() != "submit"],
+            "options": [{k: r[k] for k in ("n", "label", "description", "checked", "chosen", "input", "chat")} for r in run],
+            "submit": submit["label"] if submit else None,
+            "fingerprint": hashlib.sha256(json.dumps(stable, ensure_ascii=False).encode()).hexdigest()[:20]}
+
+
+def with_menu(screen, agent):
+    """Attach the parsed menu to a read while the agent waits on one."""
+    if agent.get("agent_status") == "blocked":
+        screen["menu"] = parse_menu(screen.get("text", ""), agent.get("agent", ""))
+    return screen
+
+
+def validate_answer(request):
+    action = request.get("action")
+    if action not in ("select", "multi", "text"): raise BridgeError("Unsupported answer action")
+    if not isinstance(request.get("fingerprint"), str) or not re.fullmatch(r"[a-f0-9]{20}", request["fingerprint"]):
+        raise BridgeError("Answer requires the menu fingerprint")
+    def number(value):
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 20: raise BridgeError("Invalid option number")
+        return value
+    if action in ("select", "text"): number(request.get("option"))
+    if action == "multi":
+        options = request.get("options")
+        if not isinstance(options, list) or len(options) > 20: raise BridgeError("Invalid option list")
+        for value in options: number(value)
+        if request.get("text") is not None: number(request.get("option"))
+    labels = request.get("labels", {})
+    if not isinstance(labels, dict) or len(labels) > 20 or any(
+            not re.fullmatch(r"\d{1,2}", k) or not isinstance(v, str) or len(v) > 400 for k, v in labels.items()):
+        raise BridgeError("Invalid option labels")
+    label = request.get("label", "")
+    if not isinstance(label, str) or len(label) > 400: raise BridgeError("Invalid option label")
+    text = request.get("text")
+    if action == "text" or text is not None:
+        # Typed into the TUI byte for byte: a newline or control character would act as a key.
+        if not isinstance(text, str) or not text.strip() or len(text) > 2000 or re.search(r"[\x00-\x1f\x7f]", text):
+            raise BridgeError("回答文字要在一行内，最多 2000 字，不能含换行或控制字符")
+
+
+def menu_consistent(base, current):
+    """Same dialog: scrolling may hide/reveal rows, but no visible row may change meaning."""
+    if (current["kind"], current["multi"], current["context"]) != (base["kind"], base["multi"], base["context"]): return False
+    seen = {r["n"]: r for r in base["options"]}
+    return all(r["input"] or r["n"] not in seen or seen[r["n"]]["input"] or r["label"] == seen[r["n"]]["label"]
+               for r in current["options"])
+
+
+def answer_question(request, prefix, agent):
+    """Drive a blocked agent's menu to the chosen option(s); Enter only on a verified cursor.
+
+    Every key is sent on its own and followed by a screen read: the cursor must move exactly
+    one row in the expected direction inside the same dialog, otherwise we stop before Enter.
+    """
+    target = agent["pane_id"]
+    steps = []
+
+    def screen():
+        text = call(prefix + ["agent", "read", target, "--source", "recent-unwrapped", "--lines", "80"]).get("text", "")
+        return parse_menu(text, agent.get("agent", ""))
+
+    def press(name):
+        if len(steps) >= ANSWER_KEYS_LIMIT * 2: raise BridgeError("按键太多，已停下")
+        call(prefix + ["agent", "send-keys", target, name])
+        steps.append(name)
+
+    base = screen()
+    if not base: raise BridgeError("屏幕上没有找到可选择的菜单，用按键操作看看")
+    if base["fingerprint"] != request["fingerprint"]: raise BridgeError("选项已经变了，刷新后再选")
+    labels = {int(k): v for k, v in request.get("labels", {}).items()}
+    if request.get("label") and request.get("option"): labels.setdefault(request["option"], request["label"])
+
+    def wait(check, failure):
+        deadline = time.monotonic() + ANSWER_PATIENCE
+        while True:
+            current = screen()
+            if current and not menu_consistent(base, current):
+                raise BridgeError("操作途中菜单变了，已停下，没有按确认")
+            if current and check(current): return current
+            if time.monotonic() > deadline: raise BridgeError(failure)
+            time.sleep(ANSWER_PAUSE)
+
+    def row(current, n):
+        return next((r for r in current["options"] if r["n"] == n), None)
+
+    def walk(current, goal):
+        for _ in range(ANSWER_KEYS_LIMIT):
+            cursor = current["cursor"]
+            if cursor == goal: return current
+            down = goal == "submit" or (cursor != "submit" and goal > cursor)
+            press("down" if down else "up")
+            ok = (lambda c: c == "submit" or c == cursor + 1) if down else (
+                lambda c: isinstance(c, int) and (cursor == "submit" or c == cursor - 1))
+            current = wait(lambda m: m["cursor"] != cursor, "光标没有移动，已停下，没有按确认")
+            if not ok(current["cursor"]): raise BridgeError("光标移动和预期不一致，已停下，没有按确认")
+        raise BridgeError("要移动的距离太远，已停下")
+
+    def land(current, n, want_input=False):
+        if row(current, n) and row(current, n)["chat"]: raise BridgeError("没有这个选项")
+        current = walk(current, n)
+        found = row(current, n)
+        if not found or found["chat"]: raise BridgeError("没有这个选项")
+        if want_input != found["input"]:
+            raise BridgeError("这个选项不能填写文字" if want_input else "这是填写选项，请输入文字后再提交")
+        if not want_input and labels.get(n) and not menu_loose_match(found["label"], labels[n]):
+            raise BridgeError("光标所在选项和你选的不一致，已停下，没有按确认")
+        return current
+
+    def precheck(n, want_input=False):
+        # Refuse obvious mismatches on visible rows before any key is sent.
+        found = row(base, n)
+        if found and (found["chat"] or found["input"] != want_input):
+            raise BridgeError("没有这个选项" if found["chat"] else "这个选项不能填写文字" if want_input else "这是填写选项，请输入文字后再提交")
+
+    action = request["action"]
+    menu = base
+    if action == "select":
+        n = request["option"]
+        precheck(n)
+        menu = land(menu, n)
+        press("enter")
+        return {"answered": True, "option": n, "steps": steps}
+    if action == "multi":
+        if not base["multi"] or not base["submit"]: raise BridgeError("这不是多选菜单")
+        for n in request["options"]: precheck(n)
+    if action == "text" or request.get("text") is not None:
+        n = request["option"]
+        precheck(n, True)
+        menu = land(menu, n, True)
+        text = request["text"]
+        call(prefix + ["pane", "send-text", target, text])
+        steps.append("text")
+        probe = menu_norm(text)[:8]
+        menu = wait(lambda m: m["cursor"] == n and row(m, n) and probe in menu_norm(row(m, n)["label"] + row(m, n)["description"]),
+                    "文字已经输进去了，但在屏幕上没核对到，已停下，没有按确认")
+        if action == "text":
+            press("enter")
+            return {"answered": True, "option": n, "steps": steps}
+    wanted = set(request["options"]) | ({request["option"]} if request.get("text") is not None else set())
+    visible = {r["n"] for r in menu["options"] if not r["chat"]}
+    for n in sorted(visible | wanted):
+        current = row(menu, n)
+        if current and current["checked"] is not None and bool(current["checked"]) == (n in wanted): continue
+        if not current and n not in wanted: continue
+        menu = land(menu, n, bool(current["input"]) if current else (n == request.get("option") and request.get("text") is not None))
+        if bool(row(menu, n)["checked"]) != (n in wanted):
+            press("enter")
+            menu = wait(lambda m, n=n: row(m, n) and bool(row(m, n)["checked"]) == (n in wanted),
+                        "勾选状态没有按预期变化，已停下，没有提交")
+    menu = walk(menu, "submit")
+    press("enter")
+    return {"answered": True, "options": sorted(wanted), "steps": steps}
+
+
 def ssh_info():
     import getpass
     import socket
@@ -971,7 +1256,7 @@ def handle(request, state_dir=None):
         if op == "paneRead":
             return call(prefix + ["pane", "read", target, "--source", "recent-unwrapped", "--lines", "400"])
         return mutate(request, prefix, pane, state_dir or Path.home() / ".local/state/herdr-pocket")
-    if op not in ("agents", "status", "read", "prompt", "key"):
+    if op not in ("agents", "status", "read", "prompt", "key", "answer"):
         raise BridgeError("Unknown operation")
     prefix = select_session(request)
     if op == "status":
@@ -989,7 +1274,7 @@ def handle(request, state_dir=None):
     if not agent or request.get("identity") != agent["identity"]:
         raise BridgeError("Agent changed or disappeared; reload the agent list")
     if op == "read":
-        return call(prefix + ["agent", "read", target, "--source", "recent-unwrapped", "--lines", "160"])
+        return with_menu(call(prefix + ["agent", "read", target, "--source", "recent-unwrapped", "--lines", "160"]), agent)
     return mutate(request, prefix, agent, state_dir or Path.home() / ".local/state/herdr-pocket")
 
 

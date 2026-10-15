@@ -59,6 +59,7 @@ function buildTurns(messages,live){
   if(m.kind==='user'){const n=userNotice(m.text);if(!n){start(m,m,null);continue;}
    if(!t||settled()){start(m,null,{m,n});continue;}t.entries.push({type:'notice',m,n,id:m.id});continue;}
   if(!t){start(m,null,null);t.partial=true;}
+  if(qaIsTool(m)){t.entries.push({type:'notice',m,n:qaNotice(m),id:m.id,question:true});continue;}
   if(m.kind==='tool'||m.kind==='result')t.entries.push({type:'tool',id:m.id,entry:{tool:m.kind==='tool'?m:null,result:m.kind==='tool'?results.get(m.call_id):m,id:m.id,timestamp:m.timestamp}});
   else if(m.kind==='agent')t.entries.push({type:'agent',m,id:m.id});
   else t.entries.push({type:'text',m,id:m.id});}
@@ -177,6 +178,7 @@ function turnView(turn,who,open){
  if(turn.prompt)sec.append(promptRow(turn.prompt));else if(turn.notice)sec.append(noticeRow(turn.notice.m,turn.notice.n,open));
  if(turn.work.length)sec.append(workBlock(turn,open));
  const kids=turnChildren(turn);if(kids.length)sec.append(childStrip(kids));
+ qaTurnRows(sec,turn);
  if(turn.final)sec.append(replyRow(turn.final.m,who,turn));
  else if(turn.live||turn.last){const last=turn.work.filter(e=>e.type==='text').at(-1);if(last)sec.append(progressRow(last.m,who));}
  return sec;}

@@ -297,7 +297,7 @@ function buildComposer(key){
  compose.append(input,send);requestAnimationFrame(grow);return compose;}
 function renderLiveState(live,a){
  live.replaceChildren();const st=a.agent_status;
- if(st==='blocked'){const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow','等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
+ if(st==='blocked'){if(qaLive(live,a))return;const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow','等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
   const pre=el('pre','confirm-screen',S.terminalText?tail(S.terminalText,12):'正在读取终端画面…');pre.id='confirm-screen';panel.append(pre);
   const keys=el('div','confirm-keys');[['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);live.append(panel);requestAnimationFrame(()=>{pre.scrollTop=pre.scrollHeight;});}
  else if(st==='working'){const strip=el('div','activity');strip.append(el('span','pulse'));const t=el('div','grow');const label=el('strong','','执行中');const at=statusSince(a)||S.chat.sentAt;if(at)label.append(' ',since(at));t.append(label);const line=el('span','activity-line',S.activity||'正在读取终端…');line.id='activity-line';t.append(line);strip.append(t,btn('中断','secondary small',()=>confirmAction('中断 Agent？','向 '+titleOf(a)+' 发送 Ctrl+C，会打断它正在执行的操作。','发送 Ctrl+C',()=>sendKey('ctrl+c','Ctrl+C'),true)));live.append(strip);}
@@ -333,7 +333,7 @@ function onAgentStatus(was,now){
  if(was==='working'&&now!=='working'){S.activity='';fetchHistory();}}
 async function fetchTerminal(quiet=false){
  if(!S.chat?.agent){if(!quiet)toast('这条历史没有在线终端');return;}const epoch=S.epoch;
- try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;
+ try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;qaScreen(r);
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
   const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;const c=document.getElementById('confirm-screen');if(c){c.textContent=tail(r.text,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
   if(!S.chat.record&&S.chatMode==='conversation')paintTimeline();}
