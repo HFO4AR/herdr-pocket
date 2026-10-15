@@ -112,7 +112,9 @@ def main():
     expect('工作过程');expect('测试都通过了')
     screenshot('agent')
     run('shell','input','swipe','540','700','540','1900','300')
-    tap('加载更早消息')
+    # Scrolling to the top loads the older page by itself; the button is only a fallback.
+    time.sleep(1.5)
+    if find('加载更早消息') is not None: tap('加载更早消息')
     time.sleep(.5)
     run('shell','input','swipe','540','700','540','1900','300')
     expect('先把连接设备和密码保存做好。')
