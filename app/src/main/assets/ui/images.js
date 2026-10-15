@@ -11,12 +11,12 @@ const IMG=new Map();// draft key → [{id,thumb,width,height,bytes,type,name?,sh
 function imgAttached(key=draftKey()){return IMG.get(key)||[];}
 function imgSet(key,list){if(list.length)IMG.set(key,list);else IMG.delete(key);}
 function imgMenu(){
- const key=draftKey();const left=IMG_MAX-imgAttached(key).length;
- if(left<=0){toast('一条消息最多带 4 张图片');return;}
- const box=sheet('添加图片');
- menuItem(box,'从相册选',()=>imgPick('gallery',key),'image','还能加 '+left+' 张');
- menuItem(box,'拍照',()=>imgPick('camera',key),'camera');
- box.append(el('p','fine','发送前会在手机上压缩，并去掉拍摄地点等信息。'));}
+ const key=draftKey();const left=IMG_MAX-imgAttached(key).length,docs=FILE_MAX-fileAttached(key).length;
+ const box=sheet('添加附件');
+ const gallery=menuItem(box,'从相册选',()=>imgPick('gallery',key),'image',left>0?'还能加 '+left+' 张':'图片已满 4 张');
+ const camera=menuItem(box,'拍照',()=>imgPick('camera',key),'camera');gallery.disabled=camera.disabled=left<=0;
+ menuItem(box,'文件',()=>filePick(key),'file',docs>0?'PDF、日志、压缩包等，单个不超过 25 MB · 还能加 '+docs+' 个':'文件已满 4 个').disabled=docs<=0;
+ box.append(el('p','fine','图片会在手机上压缩，并去掉拍摄地点等信息；文件原样上传，保留文件名。'));}
 async function imgPick(source,key){
  if(S.demo){toast('演示模式：不能添加图片');return;}
  const left=IMG_MAX-imgAttached(key).length;if(left<=0)return;
@@ -55,10 +55,10 @@ function imgRef(ref){
  if(/^ch-file:\/\/[a-f0-9]{64}\.(?:png|jpe?g|gif|webp)$/.test(ref))return {kind:'ch',address:ref};return null;}
 // A prompt's own words, and the pictures it carries (reference lines and embedded transcript pictures).
 function imgSplit(m){
- const specs=[];const rec=S.chat?.record;
- const text=String(m.text||'').split('\n').filter(line=>{const x=line.match(IMG_LINE);const spec=x&&imgRef(x[1]);if(spec)specs.push(spec);return !spec;}).join('\n').trim();
+ const specs=[],files=[];const rec=S.chat?.record;
+ const text=String(m.text||'').split('\n').filter(line=>{const f=fileLine(line);if(f){files.push(f);return false;}const x=line.match(IMG_LINE);const spec=x&&imgRef(x[1]);if(spec)specs.push(spec);return !spec;}).join('\n').trim();
  if(Array.isArray(m.images)&&rec)m.images.forEach(i=>specs.push({kind:'transcript',record_id:rec.id,item:m.id,block:i.block,...(rec.remote?{remote:rec.remote}:{})}));
- return {text,specs};}
+ return {text,specs,files};}
 // Reassignable on purpose: offline tests serve fixture pictures.
 let imgFetch=(spec,variant)=>S.demo?Promise.reject(new Error('演示里没有图片')):rpc('image',{...spec,variant}).then(r=>r.url);
 const imgDone=new Map(),imgFailed=new Map(),imgWaiting=new Map();let imgActive=0;const imgQueue=[];

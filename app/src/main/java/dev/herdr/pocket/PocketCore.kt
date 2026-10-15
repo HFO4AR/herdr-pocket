@@ -170,6 +170,32 @@ object PocketCore {
         }
     }
 
+    /**
+     * Uploads a picked file (retried once on a fresh session, like pictures), then lets the bridge
+     * re-hash it. A copy that does not match is removed there and uploaded once more.
+     */
+    fun uploadFile(file: Picked, resolver: android.content.ContentResolver, day: String, progress: (Long) -> Unit): JSONObject {
+        val open = {
+            try { resolver.openInputStream(file.uri) } catch (_: Exception) { null } ?: error("「${file.name}」读不到了，删掉重新选一下")
+        }
+        val send = {
+            ensureConnected()
+            val started = transport.generation
+            try { transport.uploadFile(open, file.name, day, progress) } catch (e: Exception) {
+                val gen = (e as? NotSent)?.generation ?: started
+                if (e !is NotSent && transport.isConnected()) throw e
+                synchronized(lock) { if (transport.generation == gen) reconnect() }
+                transport.uploadFile(open, file.name, day, progress)
+            }
+        }
+        repeat(2) {
+            val sent = send()
+            val check = request(JSONObject().put("op", "fileCheck").put("name", sent.getString("name")).put("sha256", sent.getString("sha256")))
+            if (check.optBoolean("match")) return sent
+        }
+        error("「${file.name}」上传后校验不一致")
+    }
+
     fun terminal(op: String, req: JSONObject): JSONObject {
         ensureConnected()
         return transport.terminal(op, req)

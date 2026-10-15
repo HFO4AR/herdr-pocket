@@ -32,10 +32,11 @@ import java.util.concurrent.Executors
 private const val UNATTENDED_PAUSE_MS = 60_000L
 private const val PICK_GALLERY = 41
 private const val PICK_CAMERA = 42
+private const val PICK_FILES = 43
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/app.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/app.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -220,6 +221,17 @@ class MainActivity : Activity() {
                             val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
                             success(id, core.upload(picture, day))
                         }
+                        "pickFiles" -> runOnUiThread { pickFiles(id, req.optInt("max", FileAttach.MAX_FILES).coerceIn(1, FileAttach.MAX_FILES)) }
+                        "dropFiles" -> {
+                            val ids = req.optJSONArray("ids") ?: JSONArray()
+                            for (i in 0 until ids.length()) FileAttach.drop(ids.optString(i))
+                            success(id, JSONObject())
+                        }
+                        "uploadFile" -> {
+                            val file = FileAttach.get(req.getString("id")) ?: error("这个文件已失效，删掉重新选一下")
+                            val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
+                            success(id, core.uploadFile(file, contentResolver, day) { sent -> progress(id, sent.toString()) })
+                        }
                         "image" -> {
                             // The bridge serves at most ~1.35 MB; the WebView only gets a small JPEG.
                             val query = JSONObject().put("op", "image")
@@ -230,7 +242,7 @@ class MainActivity : Activity() {
                         }
                         "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> success(id, core.terminal(op, req))
                         "remote" -> {
-                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey")) { "不支持的操作" }
+                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "createInfo", "create")) { "不支持的操作" }
                             success(id, core.request(req))
                         }
                         else -> error("不支持的操作")
@@ -263,8 +275,39 @@ class MainActivity : Activity() {
         }
     }
 
+    /** System document picker (Storage Access Framework): any type, several at once, no storage permission. */
+    private fun pickFiles(id: String, max: Int) {
+        if (pickId != null) { failure(id, IllegalStateException("正在选文件，先把上一个选完")); return }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, max > 1)
+        try {
+            pickId = id; pickMax = max
+            startActivityForResult(intent, PICK_FILES)
+        } catch (e: ActivityNotFoundException) {
+            pickId = null
+            failure(id, IllegalStateException("手机上没找到文件选择器"))
+        }
+    }
+
+    private fun onFilesPicked(resultCode: Int, data: Intent?) {
+        val id = pickId ?: return
+        pickId = null
+        val uris = if (resultCode != RESULT_OK) emptyList()
+            else data?.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data?.data)
+        val extra = (uris.size - pickMax).coerceAtLeast(0)
+        executor.execute {
+            val files = JSONArray(); var failed = 0; var reason = ""
+            for (uri in uris.take(pickMax)) {
+                try { files.put(FileAttach.describe(FileAttach.describe(contentResolver, uri))) }
+                catch (e: Exception) { failed++; reason = e.message ?: "" }
+            }
+            success(id, JSONObject().put("files", files).put("failed", failed).put("reason", reason).put("extra", extra))
+        }
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == PICK_FILES) { onFilesPicked(resultCode, data); return }
         if (requestCode != PICK_GALLERY && requestCode != PICK_CAMERA) return
         val id = pickId ?: return
         pickId = null

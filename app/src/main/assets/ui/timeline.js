@@ -134,8 +134,9 @@ function userText(text){const box=el('div','md');text.split('\n').forEach((line,
 const expandedPrompts=new Set();
 // Long prompts (pasted logs, task specs) are clamped; the person can expand them.
 function promptRow(m){
- const {text,specs}=imgSplit({...m,text:promptText(m.text)});const row=messageRow({...m,text},'你');row.classList.add('prompt');const bubble=row.querySelector('.bubble');
+ const {text,specs,files}=imgSplit({...m,text:promptText(m.text)});const row=messageRow({...m,text},'你');row.classList.add('prompt');const bubble=row.querySelector('.bubble');
  // Pictures sit under the words (outside the bubble, so clamping a long prompt never hides them).
+ if(files.length){const list=fileList(files);list.oncontextmenu=e=>{e.preventDefault();messageMenu(m);};bubble.after(list);if(!text&&!specs.length)bubble.remove();}
  if(specs.length){const strip=imgStrip(specs);strip.oncontextmenu=bubble.oncontextmenu;bubble.after(strip);if(!text)bubble.remove();}
  bubble.oncontextmenu=e=>{e.preventDefault();messageMenu(m);};
  const lines=text.split('\n').length;if(text.length>420||lines>8){const label='展开全文 · '+(lines>8?lines+' 行':text.length+' 字');
@@ -197,7 +198,7 @@ function renderTimeline(){
   if(S.chat.historyIssue)box.append(btn('选择历史记录','primary',pickHistory));list.append(box);
   const candidates=S.chat.agent?.history_ref?.candidates||[];if(candidates.length){list.append(el('div','section-label','候选历史 · 点击后确认'));const g=el('div','card list-card');candidates.forEach(rec=>{const b=btn('','card-button',()=>chooseHistory(rec,S.chat.agent));const t=el('div','grow');t.append(el('div','card-title',rec.title),el('div','card-meta',relative(rec.modified)+' · '+String(rec.thread).slice(0,8)));b.append(t,icon('chevron'));g.append(b);});list.append(g);}
   if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));list.append(el('pre','agent-terminal compact',tail(S.terminalText,14)));}
-  return;}
+  queueTimeline(list);return;}
  const more=btn(S.more?'加载更早消息':'已到记录起点','link-btn',()=>fetchHistory(true));more.disabled=!S.more;list.append(more);
  if(S.chat.historyError){const n=el('div','note error');n.append(el('span','grow',S.chat.historyError),btn('重试','secondary small',()=>{S.paused=false;fetchHistory(false,true);}));list.append(n);}
  if(S.historyNote)list.append(el('p','note',S.historyNote));
@@ -206,6 +207,7 @@ function renderTimeline(){
  if(commandsOnly){const items=buildItems(S.messages,true);count=items.length;for(const it of items){dayMark(it.entry.timestamp);list.append(toolRow(it.entry,true));}}
  else{// A just-sent prompt means the newest transcript turn is already finished.
   const live=tlWorking()&&!S.outbox.some(o=>o.key===draftKey()&&o.state!=='failed');const turns=buildTurns(S.messages,live);count=turns.length;for(const turn of turns){dayMark(turn.start);list.append(turnView(turn,who,open));}}
- for(const o of S.outbox.filter(o=>o.key===draftKey())){const row=el('article','message user pending'+(o.state==='failed'||o.state==='rejected'?' failed':''));const meta=el('div','message-label');meta.append(el('span','',o.state==='rejected'?'没发出去':o.state==='failed'?'发送未确认':o.state==='sending'?o.stage||'发送中…':'已送达 Agent'));row.append(meta);if(o.text.trim()){const b=el('div','bubble');b.append(userText(o.text));row.append(b);}if(o.images?.length)row.append(imgStrip(o.images));list.append(row);}
+ for(const o of S.outbox.filter(o=>o.key===draftKey())){const row=el('article','message user pending'+(o.state==='failed'||o.state==='rejected'?' failed':''));const meta=el('div','message-label');meta.append(el('span','',o.state==='rejected'?'没发出去':o.state==='failed'?'发送未确认':o.state==='sending'?o.stage||'发送中…':'已送达 Agent'));row.append(meta);if(o.text.trim()){const b=el('div','bubble');b.append(userText(o.text));row.append(b);}if(o.images?.length)row.append(imgStrip(o.images));if(o.files?.length)row.append(fileList(o.files));list.append(row);}
+  queueTimeline(list);
  if(!count&&!S.chat.historyError)list.append(el('div','empty small',S.chat.historyLoading?'正在读取对话记录…':commandsOnly?'这段记录里还没有执行过命令。':S.more?'这一页没有可显示的消息，继续加载更早记录。':'这条记录暂无可显示的消息。'));}
 function tail(text,n){return text.replace(/\s+$/,'').split('\n').slice(-n).join('\n');}

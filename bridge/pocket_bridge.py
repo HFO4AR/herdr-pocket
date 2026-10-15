@@ -47,12 +47,12 @@ def herdr_error(raw):
     return None
 
 
-def call(args):
+def call(args, timeout=20):
     binary = shutil.which("herdr") or str(Path.home() / ".local/bin/herdr")
     env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
     try:
         result = subprocess.run([binary, *args], capture_output=True, text=True,
-                                timeout=20, env=env)
+                                timeout=timeout, env=env)
     except subprocess.TimeoutExpired as exc:
         raise BridgeError("Herdr timeout; mutation outcome may be unknown. Do not resend blindly.") from exc
     except OSError as exc:
@@ -144,11 +144,13 @@ def mutate(request, prefix, agent, state_dir):
             if agent.get("agent_status") not in ("idle", "done"):
                 raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
             images = request.get("images")
-            if not isinstance(text, str) or (not text.strip() and not images) or len(text.encode()) > 15000 or "\x00" in text:
+            files = request.get("files")
+            if not isinstance(text, str) or (not text.strip() and not images and not files) or len(text.encode()) > 15000 or "\x00" in text:
                 raise BridgeError("Prompt must contain 1–15000 UTF-8 bytes without NUL")
-            if images is not None:
+            if images is not None or files is not None:
                 # Checked and (for ch routes) shared before the receipt: a failure here sent nothing.
-                text = compose_prompt(text, prompt_images(images, request, prefix, agent))
+                text = compose_prompt(text, (prompt_images(images, request, prefix, agent) if images is not None else [])
+                                      + (prompt_files(files, request, prefix, agent) if files is not None else []))
             args = ["agent", "prompt", agent["pane_id"], text]
         elif op == "key":
             if key not in ("up", "down", "left", "right", "enter", "esc", "ctrl+c"):
@@ -184,7 +186,7 @@ def mutate(request, prefix, agent, state_dir):
             db.commit()
             raise BridgeError(NOT_SENT[exc.code]) from exc
         result = {"sent": True, "receipt": req_id, "result": value}
-        if op == "prompt" and request.get("images") is not None: result["text"] = text
+        if op == "prompt" and (request.get("images") is not None or request.get("files") is not None): result["text"] = text
         db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
         db.commit()
         return result
@@ -1345,7 +1347,7 @@ def share_image(path, sha):
 
 def compose_prompt(text, refs):
     # One short line per picture after the person's words, so the agent knows to open it.
-    lines = ["[图片] " + ref if kind == "local" else "[图片 · ch-local fetch] " + ref for kind, ref in refs]
+    lines = [{"local": "[图片] ", "remote": "[图片 · ch-local fetch] ", "file": "[文件] "}[kind] + ref for kind, ref in refs]
     body = text.rstrip()
     return (body + "\n\n" if body.strip() else "") + "\n".join(lines)
 
@@ -1467,10 +1469,445 @@ def prune_uploads(now=None):
     for day in root.iterdir():
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day.name) or day.name >= cutoff or day.is_symlink() or not day.is_dir(): continue
         for item in day.iterdir():
-            if re.fullmatch(r"[a-f0-9]{64}(\.thumb)?\.(jpg|png)(\.[\w-]+\.tmp)?", item.name) and not item.is_symlink() and item.is_file():
+            if re.fullmatch(r"[a-f0-9]{64}(\.thumb)?\.(jpg|png)(\.[\w-]+\.tmp)?|\.[a-f0-9]{32}\.part", item.name) and not item.is_symlink() and item.is_file():
                 item.unlink()
+            elif re.fullmatch(r"[a-f0-9]{16}", item.name) and not item.is_symlink() and item.is_dir():
+                # A file's folder (see Files): everything in it was written by the phone or by stage_file.
+                for doc in item.iterdir():
+                    if not doc.is_symlink() and doc.is_file(): doc.unlink()
+                try: item.rmdir()
+                except OSError: pass
         try: day.rmdir()
         except OSError: pass
+
+
+# ─── Files ──────────────────────────────────────────────────────────────────
+# Any other file (PDF, logs, archives, code…) goes up over SFTP, streamed and hashed on the phone,
+# to ~/.herdr-pocket/uploads/<day>/<first 16 hex of sha256>/<original name>, so the agent sees the
+# real name. The phone sanitizes the name; the bridge checks it again (one path segment, no
+# leading dot, no control/format characters, ≤ 180 bytes) and re-hashes the file before use.
+# A local pane gets "[文件] <absolute path>". For a ch-cli route the file is copied to the other
+# computer through the same SSH route remote history uses, into that user's same uploads folder
+# (stage_file, run by the phone before the prompt), and the prompt names the remote path after a
+# remote hash check. Nothing else on either computer is written.
+FILE_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})/([a-f0-9]{16})/([^/]+)")
+FILE_LIMIT = 25_000_000
+FILE_MAX = 4
+# The phone gives up on one bridge call after 35 s; leave room for the pane lookup.
+REMOTE_FILE_TIMEOUT = 25
+# Reads a length-prefixed program from stdin; the rest of stdin is the file's bytes.
+REMOTE_FILE_COMMAND = "python3 -c 'import sys;b=sys.stdin.buffer;exec(b.read(int(b.readline())))'"
+SAFE_SSH = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ControlMaster=no",
+            "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=8"]
+
+
+def file_name_ok(name):
+    import unicodedata
+    if not isinstance(name, str) or not 1 <= len(name.encode("utf-8", "surrogatepass")) <= 180: return False
+    if name != name.strip() or name.startswith(".") or "/" in name or "\\" in name: return False
+    return not any(unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co", "Zl", "Zp") for c in name)
+
+
+def file_ref(name, sha=None):
+    """Validated (match, sha) for '<day>/<prefix>/<name>'; the sha must carry the folder's prefix."""
+    match = FILE_NAME.fullmatch(name) if isinstance(name, str) else None
+    if not match or not file_name_ok(match.group(3)): raise BridgeError("Invalid file name")
+    if sha is not None and (not isinstance(sha, str) or not re.fullmatch(r"[a-f0-9]{64}", sha) or not sha.startswith(match.group(2))):
+        raise BridgeError("Invalid file hash")
+    return match
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1 << 20): digest.update(chunk)
+    return digest.hexdigest()
+
+
+def uploaded_file(item):
+    """The phone's upload named by {name, sha256}, re-hashed; refusals mean nothing was sent."""
+    if not isinstance(item, dict): raise BridgeError("Invalid file")
+    match = file_ref(item.get("name"), item.get("sha256"))
+    label = match.group(3)[:60]
+    path = owned_file(uploads_root() / match.group(0), uploads_root(), FILE_LIMIT)
+    if not path: raise BridgeError("没发出去：文件「" + label + "」还没传到电脑上，删掉重新选一下")
+    if file_sha256(path) != item["sha256"]:
+        raise BridgeError("没发出去：电脑上的「" + label + "」和手机上的不一致，删掉重新选一下")
+    return path, match
+
+
+def upload_folder(parts, make):
+    """~/.herdr-pocket/uploads/<parts…>, each a real folder of this user (created 0700); never follows links."""
+    path = Path.home()
+    for part in (".herdr-pocket", "uploads", *parts):
+        path = path / part
+        try: info = path.lstat()
+        except FileNotFoundError:
+            if not make: return None
+            try: path.mkdir(mode=0o700)
+            except FileExistsError: pass
+            info = path.lstat()
+        if not stat_module.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            raise BridgeError("上传目录异常：" + part + " 不是普通文件夹")
+    return path
+
+
+def file_check(request):
+    """After an upload: does the file hash right? A wrong copy is removed so the phone can upload again."""
+    match = file_ref(request.get("name"), request.get("sha256"))
+    path = owned_file(uploads_root() / match.group(0), uploads_root(), FILE_LIMIT)
+    if not path: return {"match": False, "missing": True}
+    if file_sha256(path) == request["sha256"]: return {"match": True, "size": path.stat().st_size}
+    path.unlink()
+    return {"match": False}
+
+
+def file_info(request):
+    """Size of each named upload on this computer, or that it is gone (cleaned up)."""
+    names = request.get("names")
+    if not isinstance(names, list) or len(names) > 60: raise BridgeError("Invalid file list")
+    found = {}
+    for name in names:
+        try: match = file_ref(name)
+        except BridgeError: continue
+        path = owned_file(uploads_root() / match.group(0), uploads_root(), FILE_LIMIT)
+        found[name] = {"size": path.stat().st_size} if path else {"gone": True}
+    return {"files": found}
+
+
+def pane_place(request, prefix, agent):
+    """'local' or the ch route; refuses panes whose files would mean nothing to the agent."""
+    probe = probe_pane(agent, prefix, agent.get("agent") or "")
+    if not probe["ok"]: raise BridgeError("没发出去：看不清这个窗格运行在哪台电脑上，刷新后再试")
+    if probe["route"]: return probe["route"]
+    if probe["remote"] or request.get("remote"):
+        raise BridgeError("没发出去：这个窗格连着别的电脑，又不是 ch 路由，文件传不过去")
+    return "local"
+
+
+def stage_file(request, prefix, agent):
+    """Before a prompt: make one uploaded file reachable for the pane's agent. Idempotent, no agent input."""
+    path, match = uploaded_file(request)
+    place = pane_place(request, prefix, agent)
+    if place == "local": return {"remote": False, "path": str(path)}
+    data = remote_files(place, {"op": "put", "name": match.group(0), "sha256": request["sha256"], "size": path.stat().st_size}, path)
+    return {"remote": True, "path": data["path"]}
+
+
+def prompt_files(files, request, prefix, agent):
+    if not isinstance(files, list) or not 1 <= len(files) <= FILE_MAX:
+        raise BridgeError("一条消息最多带 4 个文件")
+    try: prune_uploads()
+    except OSError: pass
+    checked = [uploaded_file(item) for item in files]
+    place = pane_place(request, prefix, agent)
+    if place == "local": return [("file", str(path)) for path, _ in checked]
+    data = remote_files(place, {"op": "check", "items": [{"name": m.group(0), "sha256": item["sha256"]} for (_, m), item in zip(checked, files)]})
+    if not isinstance(data.get("paths"), list) or len(data["paths"]) != len(files):
+        raise BridgeError("没发出去：文件还没传到远端电脑，再发一次试试")
+    return [("file", p) for p in data["paths"]]
+
+
+def remote_files(route, params, path=None):
+    """Runs remote_files_main on the other computer over the ch route; the file's bytes follow on stdin."""
+    source = Path(__file__).read_text().rsplit('\nif __name__ == "__main__":', 1)[0]
+    code = (source + "\nremote_files_main(" + repr(json.dumps(params)) + ")\n").encode()
+    payload = str(len(code)).encode() + b"\n" + code + (path.read_bytes() if path else b"")
+    try:
+        result = subprocess.run([*SAFE_SSH, *route["ssh"], REMOTE_FILE_COMMAND], input=payload, capture_output=True, timeout=REMOTE_FILE_TIMEOUT)
+    except subprocess.TimeoutExpired as exc: raise BridgeError("没发出去：文件传到远端电脑超时，网络慢或文件太大") from exc
+    except OSError as exc: raise BridgeError("没发出去：无法启动 SSH 连接远端电脑") from exc
+    if result.returncode: raise BridgeError("没发出去：连不上远端电脑（SSH 认证、网络或 Python 不可用）")
+    try: data = json.loads(result.stdout[:100_000])
+    except ValueError as exc: raise BridgeError("没发出去：远端电脑返回格式异常") from exc
+    if not isinstance(data, dict): raise BridgeError("没发出去：远端电脑返回格式异常")
+    if data.get("missing"): raise BridgeError("没发出去：文件「" + str(data["missing"])[:60] + "」还没传到远端电脑，再发一次试试")
+    if data.get("error"): raise BridgeError("没发出去：" + str(data["error"])[:200])
+    return data
+
+
+# Runs on the other computer (sent through stdin by remote_files): writes only inside that user's
+# ~/.herdr-pocket/uploads/<day>/<prefix>/, never replaces a different file, never follows links.
+def remote_files_main(raw):
+    os.umask(0o077)
+    try: result = remote_files_op(json.loads(raw), sys.stdin.buffer)
+    except BridgeError as exc: result = {"error": str(exc)[:200]}
+    except OSError as exc: result = {"error": "远端写入失败：" + str(exc.strerror or exc)[:80]}
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+
+
+def remote_files_op(params, stream):
+    try: prune_uploads()
+    except OSError: pass
+    if params.get("op") == "check":
+        paths = []
+        for item in params.get("items", [])[:FILE_MAX]:
+            match = file_ref(item.get("name"), item.get("sha256"))
+            path = owned_file(uploads_root() / match.group(0), uploads_root(), FILE_LIMIT) if upload_folder(match.groups()[:2], False) else None
+            if not path or file_sha256(path) != item["sha256"]: return {"missing": match.group(3)}
+            paths.append(str(path))
+        return {"paths": paths}
+    if params.get("op") != "put": raise BridgeError("unknown file op")
+    match = file_ref(params.get("name"), params.get("sha256")); size = params.get("size")
+    if not isinstance(size, int) or isinstance(size, bool) or not 0 <= size <= FILE_LIMIT: raise BridgeError("文件大小不对")
+    folder = upload_folder(match.groups()[:2], True)
+    target = folder / match.group(3)
+    temp = folder.parent / ("." + os.urandom(16).hex() + ".part")
+    digest, total = hashlib.sha256(), 0
+    try:
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "wb") as out:
+            while chunk := stream.read(1 << 16):
+                total += len(chunk)
+                if total > size: raise BridgeError("远端收到的文件比预期大")
+                digest.update(chunk); out.write(chunk)
+        if total != size or digest.hexdigest() != params["sha256"]: raise BridgeError("远端收到的文件不完整")
+        try: os.link(temp, target)  # atomic and never replaces an existing name
+        except FileExistsError: pass
+        except OSError:
+            if not os.path.lexists(target): os.rename(temp, target)
+        same = owned_file(target, uploads_root(), FILE_LIMIT)
+        if not same or file_sha256(same) != params["sha256"]: raise BridgeError("远端已有同名的不同文件，没有覆盖")
+    finally:
+        try: temp.unlink()
+        except FileNotFoundError: pass
+    return {"path": str(target)}
+
+
+# ─── New agent sessions ───────────────────────────────────────────────────────
+# Starting an agent from the phone. The phone only picks a kind from a fixed list, a
+# directory and where to open it; every command line is chosen here. Herdr creates the
+# tab (or workspace) in that directory without stealing focus; `herdr agent start`
+# launches the canonical codex/claude executable, and for ch the fixed text `ch new` is
+# typed into the brand-new shell pane. Nothing the phone sends is ever run as a command.
+CREATE_KINDS = ("codex", "claude", "ch")
+CREATE_KEYS = {"v", "op", "session", "id", "kind", "cwd", "workspace"}
+CREATE_BUDGET = 26.0   # seconds for one create; the app waits 35 s for any request
+CH_NEW = "ch new"      # ch-cli: new Claude for the shell's current directory (default account)
+# Herdr refuses these before typing anything into the pane.
+CREATE_PRE_START = {"agent_pane_unavailable", "agent_pane_not_found", "agent_name_taken", "invalid_agent",
+                    "invalid_agent_name", "invalid_agent_argument", "invalid_agent_timeout", "pane_not_found"}
+
+
+def find_executable(name):
+    """Best-effort: SSH exec shells often miss user PATH entries such as ~/.local/bin or nvm."""
+    found = shutil.which(name)
+    if found: return found
+    home = Path.home()
+    folders = [home / ".local/bin", home / "bin", home / ".cargo/bin", home / ".npm-global/bin", home / ".bun/bin",
+               home / ".volta/bin", home / ".deno/bin", Path("/usr/local/bin"), Path("/opt/homebrew/bin")]
+    folders += sorted((home / ".nvm/versions/node").glob("*/bin"), reverse=True)
+    for folder in folders:
+        path = folder / name
+        if path.is_file() and os.access(path, os.X_OK): return str(path)
+    return None
+
+
+def create_workspaces(prefix):
+    """Workspaces with the directories their panes sit in (shell cwd, most used first)."""
+    result = []
+    for workspace in call(prefix + ["workspace", "list"]).get("workspaces", []):
+        wid = workspace.get("workspace_id")
+        if not isinstance(wid, str) or not re.fullmatch(r"w[A-Za-z0-9]+", wid): continue
+        dirs = {}
+        for pane in call(prefix + ["pane", "list", "--workspace", wid]).get("panes", []):
+            cwd = pane.get("cwd")
+            if not isinstance(cwd, str) or not cwd.startswith("/"): continue
+            entry = dirs.setdefault(cwd, {"panes": 0, "agents": 0})
+            entry["panes"] += 1
+            if pane.get("agent"): entry["agents"] += 1
+        ordered = sorted(dirs.items(), key=lambda x: (-x[1]["agents"], -x[1]["panes"]))
+        result.append({"workspace_id": wid, "label": str(workspace.get("label") or ""), "focused": bool(workspace.get("focused")),
+                       "dirs": [{"path": k, **v} for k, v in ordered]})
+    return result
+
+
+def suggestable_dir(path):
+    """Directories worth offering: exist, not temp or hidden-tool folders."""
+    try: p = Path(path)
+    except TypeError: return False
+    if not p.is_absolute(): return False
+    home = Path.home()
+    inside = p.is_relative_to(home)
+    if any(part.startswith(".") for part in (p.relative_to(home).parts if inside else p.parts[1:])): return False
+    if not inside and (p.parts[1:2] in (("tmp",), ("proc",), ("sys",), ("dev",)) or str(p).startswith("/var/tmp")): return False
+    try: return p.is_dir()
+    except OSError: return False
+
+
+def history_dirs(limit=12):
+    seen, found = set(), []
+    for record in transcript_catalog():
+        cwd = record.get("cwd")
+        if not isinstance(cwd, str) or cwd in seen: continue
+        seen.add(cwd)
+        if suggestable_dir(cwd): found.append({"path": cwd, "modified": record.get("modified"), "provider": record.get("provider")})
+        if len(found) >= limit: break
+    return found
+
+
+def create_info(prefix):
+    workspaces = create_workspaces(prefix)
+    dirs, seen = [], set()
+    for workspace in workspaces:
+        for d in workspace["dirs"]:
+            # A pane is using it right now, so it is offered even outside $HOME (but must still exist).
+            if os.path.realpath(d["path"]) in seen or not Path(d["path"]).is_dir(): continue
+            seen.add(os.path.realpath(d["path"]))
+            dirs.append({"path": d["path"], "source": "pane", "agents": d["agents"], "workspace_id": workspace["workspace_id"]})
+    try: recent = history_dirs()
+    except OSError: recent = []
+    for d in recent:
+        if os.path.realpath(d["path"]) in seen: continue
+        seen.add(os.path.realpath(d["path"]))
+        dirs.append({"path": d["path"], "source": "history", "modified": d["modified"]})
+    kinds = [{"kind": k, "found": bool(find_executable(k))} for k in CREATE_KINDS]
+    return {"kinds": kinds, "workspaces": workspaces, "dirs": dirs[:24], "home": str(Path.home())}
+
+
+def create_dir(raw, known):
+    """A real directory: under $HOME, or one a pane or recent history already uses. No `..`, no tricks."""
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > 1024 or any(ord(c) < 32 or ord(c) == 127 for c in raw):
+        raise BridgeError("没创建：目录路径不对")
+    text = raw.strip()
+    home = Path.home()
+    if text == "~" or text.startswith("~/"): text = str(home) + text[1:]
+    path = Path(text)
+    if not path.is_absolute(): raise BridgeError("没创建：目录要写完整路径（以 / 或 ~/ 开头）")
+    if ".." in path.parts: raise BridgeError("没创建：目录里不能有 ..")
+    try: resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError): raise BridgeError("没创建：这个目录不存在") from None
+    if not resolved.is_dir(): raise BridgeError("没创建：这不是一个目录")
+    home = home.resolve()
+    if str(resolved) in known() or (resolved.is_relative_to(home) and not any(p.startswith(".") for p in resolved.relative_to(home).parts)):
+        return str(resolved)
+    raise BridgeError("没创建：只能用家目录下的目录，或已经有窗格在用的目录")
+
+
+def receipt_open(state_dir, req_id, digest):
+    """Same receipts as other mutations: written before anything happens, never executed twice."""
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    db = sqlite3.connect(state_dir / "receipts.sqlite", timeout=5)
+    db.execute("CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, digest TEXT, result TEXT)")
+    db.execute("BEGIN IMMEDIATE")
+    previous = db.execute("SELECT digest, result FROM receipts WHERE id=?", (req_id,)).fetchone()
+    if previous:
+        db.rollback(); db.close()
+        if previous[0] != digest: raise BridgeError("Request id reused with different content")
+        if previous[1] is None: raise BridgeError("上次新建的结果未知：先刷新列表看看，别直接重试")
+        return None, json.loads(previous[1])
+    db.execute("INSERT INTO receipts VALUES (?, ?, NULL)", (req_id, digest))
+    db.commit()
+    return db, None
+
+
+def receipt_save(db, req_id, result):
+    db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
+    db.commit()
+
+
+def pane_agent_state(pane, kind):
+    """ready / blocked / starting from what Herdr sees in the pane now."""
+    expected = "claude" if kind == "ch" else kind
+    if pane.get("agent") != expected: return None
+    status = pane.get("agent_status")
+    return "ready" if status in ("idle", "done") else "blocked" if status == "blocked" else "starting"
+
+
+def start_in_pane(prefix, pane_id, kind, name, deadline):
+    tries = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining < 5: return {"state": "starting"}
+        wait_ms = int(min(remaining - 2, 22) * 1000)
+        try:
+            call(prefix + ["agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", str(wait_ms)],
+                 timeout=wait_ms / 1000 + 3)
+            return {"state": "ready", "agent_name": name}
+        except HerdrRejected as exc:
+            # A fresh shell may still be starting up; Herdr typed nothing, so trying again is safe.
+            if exc.code == "agent_pane_unavailable" and tries < 6:
+                tries += 1; time.sleep(0.8); continue
+            if exc.code == "agent_not_ready": return {"state": "blocked", "agent_name": name}
+            if "timeout" in exc.code: return {"state": "starting", "agent_name": name}
+            return {"state": "failed", "code": exc.code, "detail": exc.detail[:300], "typed": exc.code not in CREATE_PRE_START}
+        except BridgeError:
+            return {"state": "starting", "agent_name": name}
+
+
+def start_ch(prefix, pane_id, deadline):
+    try:
+        call(prefix + ["pane", "run", pane_id, CH_NEW])
+    except HerdrRejected as exc:
+        return {"state": "failed", "code": exc.code, "detail": exc.detail[:300], "typed": exc.code not in CREATE_PRE_START}
+    except BridgeError:
+        return {"state": "starting"}
+    seen = None
+    while time.monotonic() < deadline - 1:
+        time.sleep(1)
+        try: pane = call(prefix + ["pane", "get", pane_id]).get("pane") or {}
+        except BridgeError: continue
+        seen = pane_agent_state(pane, "ch") or seen
+        if seen in ("ready", "blocked"): break
+    return {"state": seen or "starting", "detected": bool(seen)}
+
+
+def create_agent(request, prefix, state_dir):
+    started_at = time.monotonic()
+    deadline = started_at + CREATE_BUDGET
+    extra = set(request) - CREATE_KEYS
+    if extra: raise BridgeError("没创建：请求里有不认识的字段")
+    req_id = request.get("id", "")
+    if not isinstance(req_id, str) or not re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", req_id):
+        raise BridgeError("Mutation requires a UUID request id")
+    kind = request.get("kind")
+    if kind not in CREATE_KINDS: raise BridgeError("没创建：不支持的 Agent 类型")
+    place = request.get("workspace")
+    if not isinstance(place, str) or not (place == "new" or re.fullmatch(r"w[A-Za-z0-9]{1,16}", place)):
+        raise BridgeError("没创建：位置不对")
+    if not find_executable(kind):
+        raise BridgeError("没创建：这台电脑上没找到 " + kind + " 命令")
+    workspaces = create_workspaces(prefix)
+    if place != "new" and not any(w["workspace_id"] == place for w in workspaces):
+        raise BridgeError("没创建：那个工作区已经不在了，刷新一下")
+    pane_dirs = {d["path"] for w in workspaces for d in w["dirs"]}
+    known = lambda: pane_dirs | {d["path"] for d in history_dirs(40)}
+    cwd = create_dir(request.get("cwd"), known)
+    digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    db, previous = receipt_open(state_dir, req_id, digest)
+    if previous is not None: return previous
+    try:
+        args = (["workspace", "create"] if place == "new" else ["tab", "create", "--workspace", place]) + ["--cwd", cwd, "--no-focus"]
+        try:
+            made = call(prefix + args)
+        except HerdrRejected as exc:
+            receipt_save(db, req_id, {"created": False, "code": exc.code})
+            raise BridgeError("没创建：Herdr 没接受（" + exc.code + "）") from exc
+        except BridgeError as exc:
+            raise BridgeError("新建结果未知：Herdr 没及时回应。先刷新列表看看，别直接重试") from exc
+        root = made.get("root_pane") or {}
+        pane_id = root.get("pane_id")
+        if not isinstance(pane_id, str) or not re.fullmatch(r"w[A-Za-z0-9]+:p[A-Za-z0-9]+", pane_id):
+            raise BridgeError("新建结果未知：Herdr 没返回新窗格。先刷新列表看看，别直接重试")
+        result = {"created": True, "kind": kind, "cwd": cwd, "pane_id": pane_id,
+                  "tab_id": (made.get("tab") or {}).get("tab_id") or root.get("tab_id"),
+                  "workspace_id": (made.get("workspace") or {}).get("workspace_id") or root.get("workspace_id") or place,
+                  "new_workspace": place == "new", "state": "starting"}
+        # Saved before starting: even if this process dies now, a retry reports the pane, not a new one.
+        receipt_save(db, req_id, result)
+        name = "pocket-" + req_id[:8]
+        outcome = start_ch(prefix, pane_id, deadline) if kind == "ch" else start_in_pane(prefix, pane_id, kind, name, deadline)
+        if outcome["state"] != "ready":
+            # One last look: what is actually in the pane now.
+            try:
+                now = pane_agent_state(call(prefix + ["pane", "get", pane_id]).get("pane") or {}, kind)
+                if now: outcome = dict(outcome, state=now, detected=True)
+            except BridgeError: pass
+        result.update(outcome)
+        receipt_save(db, req_id, result)
+        return result
+    finally:
+        db.close()
 
 
 def ssh_info():
@@ -1492,6 +1929,8 @@ def handle(request, state_dir=None):
         try: prune_uploads()
         except OSError: pass
         return image_request(request)
+    if op == "fileCheck": return file_check(request)
+    if op == "fileInfo": return file_info(request)
     if op in ("catalog", "history"):
         if request.get("remote") is not None: return remote_history_request(request)
         catalog = transcript_catalog()
@@ -1519,7 +1958,11 @@ def handle(request, state_dir=None):
         if op == "paneRead":
             return call(prefix + ["pane", "read", target, "--source", "recent-unwrapped", "--lines", "400"])
         return mutate(request, prefix, pane, state_dir or Path.home() / ".local/state/herdr-pocket")
-    if op not in ("agents", "status", "read", "prompt", "key", "answer"):
+    if op in ("createInfo", "create"):
+        prefix = select_session(request)
+        if op == "createInfo": return create_info(prefix)
+        return create_agent(request, prefix, state_dir or Path.home() / ".local/state/herdr-pocket")
+    if op not in ("agents", "status", "read", "prompt", "key", "answer", "stageFile"):
         raise BridgeError("Unknown operation")
     prefix = select_session(request)
     if op == "status":
@@ -1536,6 +1979,8 @@ def handle(request, state_dir=None):
     agent = next((a for a in found if a.get("pane_id") == target), None)
     if not agent or request.get("identity") != agent["identity"]:
         raise BridgeError("Agent changed or disappeared; reload the agent list")
+    if op == "stageFile":
+        return stage_file(request, prefix, agent)
     if op == "read":
         return with_menu(call(prefix + ["agent", "read", target, "--source", "recent-unwrapped", "--lines", "160"]), agent)
     return mutate(request, prefix, agent, state_dir or Path.home() / ".local/state/herdr-pocket")

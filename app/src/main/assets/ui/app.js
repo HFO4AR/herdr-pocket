@@ -147,7 +147,7 @@ async function doConnect(d,password='',remember){
  }catch(e){S.loading=false;S.device=null;S.connectError=e.message||String(e);render();if(/auth fail|authentication/i.test(e.message))connectionPassword(d);}
  finally{S.loading=false;}}
 function setupBridge(){confirmAction('安装配套桥接程序','把随 App 分发的开源程序安装到当前 SSH 用户的 ~/.herdr-pocket。历史功能只读 ~/.codex/sessions 和 ~/.claude/projects，不读服务商登录资料。需要 Python 3.9+。','安装并进入',async()=>{if(S.loading)return;S.loading=true;S.connectError='';S.connectStage='SSH 已连接，正在安装与校验桥接程序…';render();try{await rpc('install');S.loading=false;S.statusSupported=true;setTab('live');}catch(e){S.loading=false;S.connectError=e.message;render();}});}
-async function disconnect(show=true){await rpc('disconnect');clearTerminals();Object.assign(S,{device:null,loading:false,connecting:null,connectError:'',liveLoading:false,liveError:'',demo:false,records:[],agents:[],account:null,chat:null,outbox:[],activity:''});S.drafts.clear();S.bindings.clear();S.epoch++;if(show)setTab('devices');}
+async function disconnect(show=true){await rpc('disconnect');clearTerminals();Object.assign(S,{device:null,loading:false,connecting:null,connectError:'',liveLoading:false,liveError:'',demo:false,records:[],agents:[],account:null,chat:null,outbox:[],activity:''});S.drafts.clear();S.bindings.clear();queueClear();S.epoch++;if(show)setTab('devices');}
 async function startDemo(){if(S.loading){toast('正在连接，请稍候');return;}S.connectError='';if(S.device&&!S.demo){confirmAction('断开并体验演示？','演示不连接任何电脑，也不会给 Agent 发消息。','进入演示',async()=>{await disconnect(false);startDemo();});return;}try{await rpc('demo');S.demo=true;S.device={id:'demo',name:'演示工作站',user:'demo',host:'workstation.local',port:22};S.account={ssh_user:'demo',hostname:'workstation'};S.session='demo';S.sessions=['demo'];S.agents=demoAgents;S.records=demoRecords;S.tab='live';S.chat=null;render();}catch(e){error(e);}}
 async function loadAccount(){const epoch=S.epoch;try{const a=await remote('account');if(epoch!==S.epoch)return;S.account=a;if(S.tab==='devices'&&!S.chat)render();}catch(e){if(epoch===S.epoch)error(e);}}
 
@@ -159,7 +159,7 @@ function agentRow(a){
  const n=btn('','card-button agent-row tone-'+tone+(unread?' unread':''),()=>openAgent(a));
  const text=el('div','grow');text.append(el('div','card-title',titleOf(a)));
  const meta=el('div','card-meta');meta.append(el('span','',providerName(a.agent)));const project=projectOf(a);if(project)meta.append(el('span','sep',project));
- const ref=a.history_ref;if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(el('span','sep warn','历史未关联'));
+ const ref=a.history_ref;if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(el('span','sep warn','历史未关联'));queueBadge(meta,a);
  text.append(meta);
  const side=el('div','row-side');const at=statusSince(a);
  if(st==='blocked'||st==='working'){side.append(el('span','badge '+tone,stateLabel(a)));if(at)side.append(since(at,'ago'));}
@@ -170,7 +170,7 @@ function agentRow(a){
 // Within a group: unseen results first, then whatever changed most recently.
 function sortAgents(items){return items.map((a,i)=>({a,i,u:S.unread.has(agentKey(a))?1:0,t:lastActivity(a)})).sort((x,y)=>y.u-x.u||y.t-x.t||x.i-y.i).map(x=>x.a);}
 function livePage(main){
- const actions=el('div','row');if(S.sessions.length>1)actions.append(btn(S.session||'选择会话','pill',chooseSession,'folder'));actions.append(ib('refresh','刷新会话',loadLive));
+ const actions=el('div','row');if(S.sessions.length>1)actions.append(btn(S.session||'选择会话','pill',chooseSession,'folder'));actions.append(ib('refresh','刷新会话',loadLive));if(S.device&&S.session)actions.append(createButton());
  const unread=S.agents.filter(a=>S.unread.has(agentKey(a))).length;
  pageHead(main,'','会话',S.device?(S.agents.length?S.agents.length+' 个 Agent 在线'+(unread?' · '+unread+' 个有新进展':''):''):'',actions);
  if(!requireDevice(main))return;
@@ -179,7 +179,7 @@ function livePage(main){
  if(S.agents.length>6)main.append(searchBox('搜索 Agent 或项目',q=>{S.search=q;draw();},S.search));
  const list=el('div','agent-list');main.append(list);
  function draw(){list.replaceChildren();const q=S.search.toLowerCase();const matches=S.agents.filter(a=>(titleOf(a)+' '+a.agent+' '+projectOf(a)).toLowerCase().includes(q));
-  if(!matches.length){empty(list,'暂时没有会话',S.search?'没有匹配的 Agent。':'在电脑的 Herdr 里启动 Codex 或 Claude，再刷新。');return;}
+  if(!matches.length){empty(list,'暂时没有会话',S.search?'没有匹配的 Agent。':'点「新建」开一个 Codex 或 Claude，或者在电脑的 Herdr 里启动。',S.search?undefined:createButton());return;}
   const groups=[['等你确认',a=>a.agent_status==='blocked'],['执行中',a=>a.agent_status==='working'],['空闲',a=>!['blocked','working'].includes(a.agent_status)]];
   for(const [label,test] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;list.append(el('div','section-label',label+' · '+items.length));const g=el('div','card list-card');items.forEach(a=>g.append(agentRow(a)));list.append(g);}}
  draw();
@@ -284,17 +284,17 @@ function renderComposer(){
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
  renderLiveState(live,a);
  const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status;
- input.placeholder=st==='working'?'执行中，可以先写好，停下后再发':st==='blocked'?'先处理上面的确认':'说点什么，继续这段对话…';
+ input.placeholder=st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':'说点什么，继续这段对话…';
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
- send.classList.toggle('later',st==='working'||st==='blocked');imgTray(compose,key);send.disabled=!input.value.trim()&&!imgAttached(key).length;}
+ send.classList.toggle('later',st==='working'||st==='blocked');imgTray(compose,key);fileTray(compose,key);send.disabled=!input.value.trim()&&!attCount(key);}
 function buildComposer(key){
  const compose=el('div','composer');compose.dataset.key=key;const input=el('textarea');input.rows=1;input.setAttribute('aria-label','消息输入框');input.setAttribute('enterkeyhint','enter');input.value=S.drafts.get(key)||'';
  const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');
  const grow=()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,innerHeight<560?96:140)+'px';};compose.grow=grow;
  // Enter is a newline on phones; Ctrl/⌘+Enter sends with a hardware keyboard.
  input.onkeydown=e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMessage(input);}};
- input.oninput=()=>{if(input.value)S.drafts.set(key,input.value);else S.drafts.delete(key);send.disabled=!input.value.trim()&&!imgAttached(key).length;grow();};
- const attach=ib('image','添加图片',imgMenu);attach.classList.add('attach');
+ input.oninput=()=>{if(input.value)S.drafts.set(key,input.value);else S.drafts.delete(key);send.disabled=!input.value.trim()&&!attCount(key);grow();};
+ const attach=ib('plus','添加附件',imgMenu);attach.classList.add('attach');
  compose.append(attach,input,send);requestAnimationFrame(grow);return compose;}
 function renderLiveState(live,a){
  live.replaceChildren();const st=a.agent_status;
@@ -305,23 +305,26 @@ function renderLiveState(live,a){
  else if(S.chat.doneAt&&Date.now()-S.chat.doneAt<8000){const strip=el('div','activity done');strip.setAttribute('role','status');strip.append(icon('check'));const t=el('strong','grow','做完了'+(S.chat.took>=5000?' · 用时 '+dur(S.chat.took):''));strip.append(t);if(!S.stick)strip.append(btn('看结果','link-btn',()=>{S.stick=true;S.unseen=0;scrollBottom();updateJump();}));live.append(strip);}}
 async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'已发送 '+label);setTimeout(()=>{refreshStatus();fetchTerminal(true);},700);}catch(e){toast('按键未确认：'+e.message+'。不会自动重发。');}}
 async function sendMessage(input){
- const text=input.value;const a=S.chat?.agent;const key=draftKey();const pics=imgAttached(key).slice();if((!text.trim()&&!pics.length)||!a)return;
+ const text=input.value;const a=S.chat?.agent;const key=draftKey();const pics=imgAttached(key).slice(),docs=fileAttached(key).slice();if((!text.trim()&&!pics.length&&!docs.length)||!a)return;
  if(followHoldsSend())return;
- if(['working','blocked'].includes(a.agent_status)&&!S.demo){toast(a.agent_status==='working'?'还在执行，等它停下再发（草稿已保留）':'它在等你确认，先处理上面的提示');return;}
+ // Busy, or something already waiting: it goes into the send queue (queue.js), in order.
+ if(queueWants(a,key)){queueCompose(input,key,a,text,pics,docs);return;}
  const epoch=S.epoch;const button=document.querySelector('.send');button.disabled=true;
- const item={key,text,images:pics.map(p=>({url:p.thumb})),at:Date.now(),state:'sending'};
+ const item={key,text,images:pics.map(p=>({url:p.thumb})),files:docs.map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sending'};
  if(!S.demo){S.outbox.push(item);S.stick=true;paintTimeline();}
  try{
   // Pictures go up first; only then is the one prompt sent (never resent automatically).
-  const images=pics.length?await imgUpload(pics,stage=>{item.stage=stage;paintTimeline();}):null;item.stage='';
-  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{})});
+  const images=pics.length?await imgUpload(pics,stage=>{item.stage=stage;paintTimeline();}):null;
+  const files=docs.length?await fileUpload(docs,a,stage=>{item.stage=stage;paintTimeline();}):null;item.stage='';
+  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
   if(S.demo){toast('演示模式：未发送，草稿已保留');return;}
   item.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
   if(pics.length){imgSet(key,imgAttached(key).filter(p=>!pics.includes(p)));rpc('dropImages',{ids:pics.map(p=>p.id)}).catch(()=>{});}
+  if(docs.length){fileSet(key,fileAttached(key).filter(f=>!docs.includes(f)));rpc('dropFiles',{ids:docs.map(f=>f.id)}).catch(()=>{});}
   if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
   S.stick=true;paintTimeline();if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);}
- catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);item.state=notSent?'rejected':'failed';item.reason=e.message;paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
- finally{button.disabled=!input.value.trim()&&!imgAttached(key).length;}}
+ catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
+ finally{button.disabled=!input.value.trim()&&!attCount(key);}}
 function scrollBottom(){const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
 // A pending bubble disappears once the transcript shows the same user text.
 function settleOutbox(){if(!S.outbox.length)return false;const count=S.outbox.length;const recent=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>{const x=imgSplit(m);return x.text+'\u0000'+(x.specs.length?1:0);});S.outbox=S.outbox.filter(o=>!(o.state==='sent'&&recent.includes(o.text.trim()+'\u0000'+(o.images?.length?1:0)))&&Date.now()-o.at<180000);return S.outbox.length!==count;}
@@ -425,4 +428,6 @@ setInterval(()=>{
 },2500);
 
 async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;if(r.connected&&!S.device){S.device=r.connected;setTab('live');return;}render();}catch(e){error(e);}}
-boot();
+// terminals.js is a later <script>: start once every script has run, or a fast native reply
+// can reach code that is not defined yet.
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();

@@ -33,7 +33,7 @@ await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
 
 // Demo mode never picks pictures.
 await page.getByRole('button',{name:/重构登录|清理构建缓存/}).first().click();
-await page.getByRole('button',{name:'添加图片',exact:true}).click();
+await page.getByRole('button',{name:'添加附件',exact:true}).click();
 await page.getByRole('button',{name:/从相册选/}).click();
 await page.getByText('演示模式：不能添加图片',{exact:true}).waitFor();
 assert(!(await page.evaluate(()=>nx.calls.some(c=>c.op==='pickImages'))),'demo must not open a picker');
@@ -56,6 +56,7 @@ await page.evaluate(({SHA,SHA2})=>{
   history_ref:{status:'matched',record:{id:'rec-img',thread:'s1',provider:'claude',title:'登录页修复',cwd:'/home/demo/site',modified:Date.now()/1000}}};
  remote=async(op,args={})=>{fx.calls.push({op,args});await new Promise(r=>setTimeout(r,20));
   if(op==='status')return{agents:[fx.agent]};
+  if(op==='agents'&&args.target)return{follow:true,state:'same',agents:[fx.agent],pane:null};
   if(op==='history')return{record:fx.agent.history_ref.record,messages:fx.messages,children:[],before:0,has_more:false};
   if(op==='read')return{text:'❯ '};
   if(op==='prompt'){if(fx.promptError){const e=fx.promptError;fx.promptError=null;throw Error(e);}return{sent:true,receipt:args.id};}
@@ -96,11 +97,11 @@ console.log('PASS: history thumbnails for uploads, ch addresses and transcript p
 
 // Composer: gallery (2) + camera (1), remove one.
 await page.evaluate(()=>{nx.picks.push([[4032,3024,20,'相册 1'],[3024,4032,180,'相册 2']],[[4000,3000,300,'拍照']]);});
-await page.getByRole('button',{name:'添加图片',exact:true}).click();
+await page.getByRole('button',{name:'添加附件',exact:true}).click();
 await page.getByRole('button',{name:/从相册选.*还能加 4 张/}).click();
 const tray=page.getByRole('list',{name:'要发送的图片',exact:true});
 await tray.getByRole('listitem').nth(1).waitFor();
-await page.getByRole('button',{name:'添加图片',exact:true}).click();
+await page.getByRole('button',{name:'添加附件',exact:true}).click();
 await page.getByRole('button',{name:/拍照/}).click();
 await tray.getByRole('listitem').nth(2).waitFor();
 assert.match(await tray.locator('.att-note').textContent(),/^3\/4 张 · /);
@@ -119,23 +120,26 @@ await shot(path.join(folder,'images-composer-320.png'));
 await page.setViewportSize({width:390,height:844});
 console.log('PASS: composer picks from gallery and camera, removes, stays inside 320 px');
 
-// Second upload fails: nothing is sent, the draft and pictures stay; trying again uploads only the missing one.
+// Second upload fails: nothing is sent; the message and its pictures wait in the send queue; trying again uploads only the missing one.
 await page.evaluate(()=>nx.uploadFail.add('att-3'));
 await page.getByRole('button',{name:'发送消息',exact:true}).click();
-await page.getByText('没发出去',{exact:true}).waitFor();
+const queued=page.locator('.message.queued');
+await queued.getByText(/上次没发出去：图片没传上去/).waitFor();
 assert.equal(await page.evaluate(()=>fx.calls.filter(c=>c.op==='prompt').length),0,'no prompt after a failed upload');
-assert.equal(await tray.getByRole('listitem').count(),2);
-assert.equal(await page.getByRole('textbox',{name:'消息输入框',exact:true}).inputValue(),'这两张是改之前的样子');
+assert.equal(await queued.locator('.img-tile').count(),2,'pictures stay with the queued message');
+assert.equal(await page.getByRole('textbox',{name:'消息输入框',exact:true}).inputValue(),'');
 // Unknown outcome of the prompt itself: shown, never resent.
 await page.evaluate(()=>{fx.promptError='等了 35 秒还没有回应；请求已经发出，结果未知。';});
-await page.getByRole('button',{name:'发送消息',exact:true}).click();
-await page.getByText('发送未确认',{exact:true}).waitFor();
+await queued.getByRole('button',{name:'现在发',exact:true}).click();
+await queued.getByText('结果未知 · 不会自动重发',{exact:true}).waitFor();
 let prompts=await page.evaluate(()=>fx.calls.filter(c=>c.op==='prompt').map(c=>c.args));
 assert.equal(prompts.length,1);
 assert.deepEqual(await page.evaluate(()=>nx.calls.filter(c=>c.op==='uploadImage').map(c=>c.args.id)),['att-1','att-3','att-3']);
-await page.waitForTimeout(400);
+await page.waitForTimeout(3000);
 assert.equal(await page.evaluate(()=>fx.calls.filter(c=>c.op==='prompt').length),1,'never auto-resent');
 // The person sends again on purpose: a new request id, the same uploaded names, no new uploads.
+await queued.getByRole('button',{name:'修改',exact:true}).click();
+assert.equal(await tray.getByRole('listitem').count(),2);
 await page.getByRole('button',{name:'发送消息',exact:true}).click();
 await page.waitForFunction(()=>fx.calls.filter(c=>c.op==='prompt').length===2);
 prompts=await page.evaluate(()=>fx.calls.filter(c=>c.op==='prompt').map(c=>c.args));

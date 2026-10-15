@@ -158,6 +158,58 @@ class SshTransport : AutoCloseable {
         check(sftp.lstat(temp).size == bytes.size.toLong()) { "图片上传不完整" }
         sftp.rename(temp, path)
     }
+    /**
+     * Streams a picked file to ~/.herdr-pocket/uploads/<day>/<first 16 hex of sha256>/<name>
+     * (folders 0700, file 0600), hashing on the way: it is written to a hidden temporary name in the
+     * day folder and moved into its folder once the hash is known. The same content and name land
+     * on the same path, so a retry after an unknown outcome is harmless. No agent is touched; the
+     * bridge re-hashes the file before it is named in a prompt.
+     */
+    fun uploadFile(open: () -> java.io.InputStream, name: String, day: String, progress: (Long) -> Unit): JSONObject {
+        val (ssh, gen) = acquire()
+        try {
+            if (!ssh.isConnected) throw NotSent(gen, true, IllegalStateException("SSH 已断开"))
+            val sftp = try { ssh.openChannel("sftp") as ChannelSftp } catch (e: JSchException) { throw NotSent(gen, !ssh.isConnected, e) }
+            try {
+                try { sftp.connect(10000) } catch (e: JSchException) { throw NotSent(gen, !ssh.isConnected, e) }
+                val dayFolder = folder(sftp, home, listOf(".herdr-pocket", "uploads", day))
+                val temp = "$dayFolder/.${java.util.UUID.randomUUID().toString().replace("-", "")}.part"
+                try {
+                    val hashing = open().use { raw -> FileAttach.Hashing(raw, progress).also { sftp.put(it, temp) } }
+                    sftp.chmod(384, temp)
+                    check(sftp.lstat(temp).size == hashing.count) { "文件上传不完整" }
+                    val sha = hashing.hex()
+                    val target = "${folder(sftp, dayFolder, listOf(sha.take(16)))}/$name"
+                    val existing = try { sftp.lstat(target) } catch (e: SftpException) { if (e.id != ChannelSftp.SSH_FX_NO_SUCH_FILE) throw e; null }
+                    if (existing != null && existing.isReg && existing.size == hashing.count) sftp.rm(temp)
+                    else {
+                        // A leftover broken copy of the same content and name; anything else is not ours to replace.
+                        if (existing != null) { check(existing.isReg) { "上传目录里有同名的文件夹或链接" }; sftp.rm(target) }
+                        sftp.rename(temp, target)
+                    }
+                    return JSONObject().put("name", "$day/${sha.take(16)}/$name").put("sha256", sha).put("size", hashing.count)
+                } catch (e: Exception) {
+                    try { sftp.rm(temp) } catch (_: Exception) {}
+                    // JSch wraps errors raised while reading the source (too big, unreadable).
+                    throw (e.cause as? IllegalStateException)?.takeIf { e is SftpException } ?: e
+                }
+            } finally { sftp.disconnect() }
+        } finally { release(ssh) }
+    }
+    /** Creates or checks each folder below [base] as a real folder (not a link), 0700. */
+    private fun folder(sftp: ChannelSftp, base: String, parts: List<String>): String {
+        var path = base
+        for (part in parts) {
+            path = "$path/$part"
+            try { sftp.lstat(path) } catch (e: SftpException) {
+                if (e.id != ChannelSftp.SSH_FX_NO_SUCH_FILE) throw e
+                sftp.mkdir(path)
+            }
+            check(sftp.lstat(path).isDir) { "上传目录异常：$part 不是普通文件夹" }
+            sftp.chmod(448, path)
+        }
+        return path
+    }
     fun useBundled(bytes: ByteArray) { bridgePath = "$home/.herdr-pocket/${bridgeName(bytes)}" }
     private fun bridgeName(bytes: ByteArray) = "bridge-" + MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } + ".py"
     fun isConnected() = session?.isConnected == true

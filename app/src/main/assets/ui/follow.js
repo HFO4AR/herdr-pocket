@@ -75,7 +75,7 @@ function followApply(c,r){
 // The same conversation under a fresh identity (or a transcript that just appeared).
 function followAdopt(c,a,record){
  const from=draftKey();c.agent={...a,agent_status:c.agent.agent_status};c.stale=false;c.following=false;c.unsure=null;c.followPending='';
- followMoveDraft(from);
+ followMoveDraft(from);queueRekey(from,'adopt');
  if(!c.record&&record){c.record=record;c.historyIssue='';S.epoch++;renderChat();fetchHistory(false,true);}else{renderChat();}
  syncWatch();}
 function followSwitch(c,a,target){
@@ -86,7 +86,7 @@ function followSwitch(c,a,target){
  c.exited=null;c.newAgent=null;c.historyError=null;c.historyLoading=false;c.sentAt=0;c.doneAt=0;
  c.historyIssue=target.record?'':historyIssueText(a.history_ref);c.title=titleOf(a);
  c.switched={at:Date.now(),prev,provider:a.agent,thread:target.thread,fresh:null};
- followMoveDraft(from);
+ followMoveDraft(from);queueRekey(from,'switch');
  S.messages=[];S.children=[];S.before=0;S.more=false;S.historyNote='';S.terminalText='';S.activity='';S.stick=true;S.unseen=0;
  S.epoch++;syncWatch();renderChat();if(target.record)fetchHistory(false,true);
  toast('这个窗格换了一段对话，已跟上');}
