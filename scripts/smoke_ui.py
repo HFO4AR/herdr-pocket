@@ -24,6 +24,13 @@ def dump():
         try:
             run("shell", "uiautomator", "dump", "/sdcard/pocket-ui.xml")
             return ET.fromstring(run("exec-out", "cat", "/sdcard/pocket-ui.xml").decode())
+        except subprocess.TimeoutExpired:
+            # uiautomator waits for the UI to go idle; a screen that keeps changing (a connection in
+            # progress) can make it hang. Stop the stuck dumper and look again.
+            if attempt == 3: raise
+            try: run("shell", "pkill", "-f", "uiautomator", timeout=10)
+            except Exception: pass
+            time.sleep(2)
         except (ET.ParseError, subprocess.CalledProcessError):
             if attempt == 3: raise
             time.sleep(1)

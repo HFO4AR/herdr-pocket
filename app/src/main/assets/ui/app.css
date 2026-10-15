@@ -265,4 +265,4 @@ label{display:block;font-size:12px;font-weight:600;margin:14px 0 6px;color:var(-
  .nav-item svg{padding:2px 8px}
 }
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
-.reduce-motion *{animation:none!important;transition:none!important}
+.reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{animation:none!important;transition:none!important}
