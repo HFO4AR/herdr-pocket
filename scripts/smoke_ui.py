@@ -8,8 +8,8 @@ import time
 import xml.etree.ElementTree as ET
 
 
-def run(*args):
-    return subprocess.check_output(["adb", *args], timeout=35)
+def run(*args, timeout=35):
+    return subprocess.check_output(["adb", *args], timeout=timeout)
 
 
 def screen():
@@ -82,7 +82,10 @@ def main():
             if subprocess.run(['adb','shell','nc','-z','-w','2','10.0.2.2','22222'],capture_output=True,timeout=10).returncode==0: break
             time.sleep(2)
         else: raise AssertionError('SSH fixture unreachable from emulator')
-    vault=run('shell','am','instrument','-w',*fixture,'dev.herdr.pocket.test/dev.herdr.pocket.SecureProfilesTest').decode()
+    # Real SSH PTY and reconnect tests (incl. a deliberate retry pause) run inside this one call.
+    started=time.monotonic()
+    vault=run('shell','am','instrument','-w',*fixture,'dev.herdr.pocket.test/dev.herdr.pocket.SecureProfilesTest',timeout=240).decode()
+    print('instrumented tests took %.0f s'%(time.monotonic()-started),flush=True)
     if fixture: assert 'ssh-pty: PASS' in vault and 'ssh-reconnect: PASS' in vault,vault
     assert 'terminal-buffer: PASS' in vault,vault
     assert 'vault-tests: PASS (2 tests)' in vault,vault
