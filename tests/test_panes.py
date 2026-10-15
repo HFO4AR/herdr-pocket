@@ -42,3 +42,11 @@ class PaneTests(unittest.TestCase):
         with self.assertRaises(bridge.BridgeError):bridge.handle(r)
         r=self.req('paneKey');r['key']='ctrl+unknown'
         with self.assertRaises(bridge.BridgeError):bridge.handle(r,Path(self.tmp.name))
+
+    def test_command_text_cannot_be_mistaken_for_cli_group(self):
+        from types import SimpleNamespace
+        self.mock.stop()
+        response=SimpleNamespace(returncode=0,stdout='{"result":{"sent":true}}',stderr='')
+        with patch.object(bridge.subprocess,'run',return_value=response):
+            self.assertEqual(bridge.call(['--session','default','pane','run','w2:p7','agent']),{'sent':True})
+            self.assertEqual(bridge.call(['--session','default','pane','run','w2:p7','pane']),{'sent':True})

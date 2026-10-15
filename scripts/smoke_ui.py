@@ -13,8 +13,16 @@ def run(*args):
 
 
 def screen():
-    run("shell", "uiautomator", "dump", "/sdcard/pocket-ui.xml")
-    return ET.fromstring(run("exec-out", "cat", "/sdcard/pocket-ui.xml").decode())
+    # A newly launched WebView may not publish an accessibility root immediately.
+    # Retry observation only; never repeat an input action after an unknown result.
+    for attempt in range(4):
+        run("shell", "rm", "-f", "/sdcard/pocket-ui.xml")
+        try:
+            run("shell", "uiautomator", "dump", "/sdcard/pocket-ui.xml")
+            return ET.fromstring(run("exec-out", "cat", "/sdcard/pocket-ui.xml").decode())
+        except (ET.ParseError, subprocess.CalledProcessError):
+            if attempt == 3: raise
+            time.sleep(1)
 
 
 def find(text, editable=False):

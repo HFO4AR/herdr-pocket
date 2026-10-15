@@ -33,7 +33,8 @@ def call(args):
     if result.returncode:
         raise BridgeError((result.stderr or result.stdout or "Herdr command failed")[:2000])
     # Herdr 0.8.x agent read emits plain text, while list/control emit JSON.
-    if any(group in args and args[args.index(group) + 1] == "read" for group in ("agent", "pane")):
+    command_args = args[2:] if args[:1] == ["--session"] else args
+    if command_args[:2] in (["agent", "read"], ["pane", "read"]):
         return {"text": result.stdout}
     try:
         data = json.loads(result.stdout)
