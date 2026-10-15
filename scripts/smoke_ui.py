@@ -12,7 +12,7 @@ def run(*args, timeout=35):
     return subprocess.check_output(["adb", *args], timeout=timeout)
 
 
-def screen():
+def dump():
     # A newly launched WebView may not publish an accessibility root immediately.
     # Retry observation only; never repeat an input action after an unknown result.
     for attempt in range(4):
@@ -23,6 +23,19 @@ def screen():
         except (ET.ParseError, subprocess.CalledProcessError):
             if attempt == 3: raise
             time.sleep(1)
+
+
+def screen():
+    # CI emulators sometimes show a system ANR dialog (e.g. "Pixel Launcher isn't responding")
+    # over the app. It is not ours; dismiss it with "Wait" and observe again.
+    for _ in range(5):
+        root = dump()
+        if not any("isn't responding" in (n.get('text', '') or '') for n in root.iter('node')): return root
+        wait = next((n for n in root.iter('node') if n.get('text') == 'Wait'), None)
+        if wait is None: return root
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', wait.attrib['bounds']))
+        run('shell', 'input', 'tap', str((x1 + x2) // 2), str((y1 + y2) // 2)); time.sleep(1)
+    return dump()
 
 
 def find(text, editable=False):
@@ -92,6 +105,7 @@ def main():
     if fixture: print('PASS: SSH fixture PTY, UTF-8, persistent cwd, resize, Ctrl+C, stale target and duplicate input',flush=True)
     if fixture: print('PASS: silent reconnect after a dropped session; refused after a host-key change',flush=True)
     print('PASS: Keystore save/reload/no plaintext/destination change/forget/delete',flush=True)
+    run('shell','am','broadcast','-a','android.intent.action.CLOSE_SYSTEM_DIALOGS')
     run('shell','am','start','-W','-n','dev.herdr.pocket/.MainActivity')
     tap('添加第一台设备')
     fill('设备名称','Test-workstation')
