@@ -70,7 +70,8 @@ assert.deepEqual(await page.evaluate(()=>fx.keys.map(k=>k.key)),['esc']);
 assert.deepEqual(await prompts(),['先停下，改成处理这个']);
 // The interrupt went out before the prompt, and the agent was seen idle in between.
 const order=await page.evaluate(()=>fx.calls.map(c=>c.op));
-assert(order.lastIndexOf('status')>order.indexOf('key')&&order.lastIndexOf('prompt')>order.lastIndexOf('status'));
+// A status read happened after the Esc and before the prompt (status polls may also run later).
+const k=order.indexOf('key'),p=order.indexOf('prompt',k);assert(k>=0&&p>k&&order.slice(k+1,p).includes('status'),'status read between Esc and prompt: '+order.join(','));
 await page.locator('.message.user.pending').filter({hasText:'先停下，改成处理这个'}).getByText('已送达 Agent').waitFor();
 assert.equal(await bubble('先停下，改成处理这个').count(),0);
 await shot('sent-390');

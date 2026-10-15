@@ -63,6 +63,8 @@ async function fresh(width=390,height=844,dark=false){
  return page;}
 const keyCalls=page=>page.evaluate(()=>fx.calls.filter(c=>c.op==='key').map(c=>c.args));
 const chips=page=>page.locator('#mode-bar .mode-chip').allTextContents();
+// Chips come from a screen read that may still be on its way (another read in flight, slow CI): wait for them.
+const waitChips=async(page,want)=>{try{await page.waitForFunction(w=>JSON.stringify([...document.querySelectorAll('#mode-bar .mode-chip')].map(n=>n.textContent))===w,JSON.stringify(want),{timeout:8000});}catch(_){}assert.deepEqual(await chips(page),want);};
 const switchBtn=page=>page.getByRole('button',{name:'切换模式（Shift+Tab）',exact:true});
 const overflow=page=>page.evaluate(()=>document.documentElement.scrollWidth-innerWidth);
 const open=async(page,i)=>{await page.evaluate(i=>openAgent(fx.agents[i]),i);await page.getByText('好了，改完了。',{exact:true}).first().waitFor();await page.evaluate(()=>fetchTerminal(true));};
@@ -71,7 +73,7 @@ const open=async(page,i)=>{await page.evaluate(i=>openAgent(fx.agents[i]),i);awa
 let page=await fresh();
 await open(page,0);
 await page.locator('#mode-bar').waitFor();
-assert.deepEqual(await chips(page),['手动确认']);
+await waitChips(page,['手动确认']);
 await switchBtn(page).click();
 await page.waitForFunction(()=>[...document.querySelectorAll('#mode-bar .mode-chip')].map(n=>n.textContent).join()==='自动接受编辑');
 let keys=await keyCalls(page);
@@ -85,7 +87,7 @@ await switchBtn(page).click();
 await page.locator('.mode-switch.busy').waitFor();
 assert.ok(await switchBtn(page).isDisabled(),'disabled while switching');
 await page.waitForFunction(()=>document.querySelector('#mode-bar .mode-chip')?.textContent==='计划模式',null,{timeout:5000});
-assert.deepEqual(await chips(page),['计划模式','目标进行中 · 12m']);
+await waitChips(page,['计划模式','目标进行中 · 12m']);
 keys=await keyCalls(page);assert.equal(keys.length,2);assert.notEqual(keys[0].id,keys[1].id);
 await page.screenshot({path:path.join(folder,'mode-claude-plan.png')});
 console.log('PASS: ch Claude shows its mode, Shift+Tab goes out as key op and the chip follows the re-read screen');
@@ -113,7 +115,7 @@ await page.getByText('没发出去：Agent 还没准备好，等它空闲了再�
 await page.waitForTimeout(800);
 assert.equal((await keyCalls(page)).length,4);
 assert.equal(await switchBtn(page).isDisabled(),false);
-assert.deepEqual(await chips(page),['跳过权限确认']);
+await waitChips(page,['跳过权限确认']);
 await page.evaluate(()=>{fx.keyError=null;});
 
 // Blocked on a question, or a message being sent: no Shift+Tab (it could approve a dialog).
@@ -126,7 +128,7 @@ await page.evaluate(()=>{S.outbox=[];renderComposer();});
 assert.equal(await switchBtn(page).isDisabled(),false);
 // A menu covering the footer (modes: null) keeps the last seen mode.
 await page.evaluate(async()=>{fx.hide=true;await fetchTerminal(true);fx.hide=false;});
-assert.deepEqual(await chips(page),['跳过权限确认']);
+await waitChips(page,['跳过权限确认']);
 assert.equal((await keyCalls(page)).length,4,'nothing sent by the checks');
 console.log('PASS: refused key reported once; disabled while blocked or sending; hidden footer keeps the last mode');
 
@@ -134,7 +136,7 @@ console.log('PASS: refused key reported once; disabled while blocked or sending;
 await page.evaluate(()=>{glanceOf(fx.agents[1]);GL.map.set(agentKey(fx.agents[1]),{status:'idle',modified:Date.now()/1000,modes:{source:'transcript',collaboration:'default',approval:'never',sandbox:'danger-full-access',goal:{state:'paused',objective:'把整套测试补齐'}}});});
 await open(page,1);
 await page.waitForFunction(()=>document.querySelector('#mode-bar .mode-chip')?.textContent==='默认模式');
-assert.deepEqual(await chips(page),['默认模式','完全访问']);
+await waitChips(page,['默认模式','完全访问']);
 await switchBtn(page).click();
 await page.waitForFunction(()=>document.querySelector('#mode-bar .mode-chip')?.textContent==='计划模式');
 assert.deepEqual((await keyCalls(page)).at(-1).target,'w1:p2');

@@ -156,7 +156,9 @@ await page.screenshot({path:path.join(folder,'answer-approval.png')});
 for(const [width,height] of [[320,640],[844,390],[1024,768]]){
  await page.setViewportSize({width,height});
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'horizontal overflow at '+width);
- const b=await approval.locator('.qa-submit').boundingBox();assert(b&&b.y+b.height<=height,'submit clipped at '+width+'x'+height);
+ // The layout settles after a resize (two-pane switch, card transition): measure once it stops moving.
+ let b=null;for(let i=0;i<30;i++){const n=await approval.locator('.qa-submit').boundingBox();if(b&&n&&Math.abs(n.y-b.y)<0.5&&Math.abs(n.height-b.height)<0.5){b=n;break;}b=n;await page.waitForTimeout(100);}
+ assert(b&&b.y+b.height<=height,'submit clipped at '+width+'x'+height);
  const top=(await approval.boundingBox()).y,head=await page.locator('#chat-head').boundingBox();assert(top>=head.y+head.height-1,'card overlaps the header at '+width+'x'+height);
  await page.screenshot({path:path.join(folder,`answer-approval-${width}.png`)});}
 await page.setViewportSize({width:390,height:844});
