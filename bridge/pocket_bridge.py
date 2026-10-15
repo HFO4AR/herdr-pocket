@@ -1150,6 +1150,198 @@ def history_page(request, catalog):
             "children": [public_record(x) for x in catalog if x["parent"] == entry["thread"] and x["provider"] == entry["provider"]]}
 
 
+# ─── Glance: one-line previews for the session list ─────────────────────────
+# The list shows what each agent is doing without opening it. The phone already
+# knows each local agent's record (id + native thread); this reads only the tail
+# of that transcript, never the whole file, and skips files that did not change.
+GLANCE_ITEMS = 40
+GLANCE_WINDOWS = (262_144, 1_048_576)  # bytes from the end; the larger one only when the tail had no reply
+GLANCE_TEXT = 160
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"}
+
+
+def glance_line(text, limit=GLANCE_TEXT):
+    """First readable line of a message, without Markdown punctuation."""
+    fence = False
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            fence = not fence; continue
+        if fence or not line or re.fullmatch(r"[-*_=|:\s]{3,}", line): continue
+        line = re.sub(r"^(#{1,6}\s+|>\s*|[-*+]\s+(\[[ xX]\]\s+)?|\d{1,3}[.)]\s+)", "", line)
+        line = re.sub(r"\*\*|__|`|~~", "", line)
+        line = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line: return line[:limit]
+    return ""
+
+
+PATCH_FILE_RE = re.compile(r"\*\*\* (?:Update|Add|Delete) File: ([^\n\\\"]+)")
+CODE_TOOL_RE = re.compile(r"tools\.(\w{1,60})\(")
+
+
+def code_tool(text):
+    """Newer Codex runs tools from a small script (`exec`): find the first tools.<name>({…}) call."""
+    found = CODE_TOOL_RE.search(str(text))
+    if not found: return None, {}
+    name, raw = found.group(1), str(text)[found.end():found.end() + 8000]
+    args = {}
+    command = re.search(r"^\s*\{\s*\"?(?:cmd|command)\"?\s*:\s*(\"(?:[^\"\\]|\\.)*\")", raw)
+    if command:
+        try: args["cmd"] = json.loads(command.group(1))
+        except ValueError: pass
+    for field in ("query", "message", "path", "file_path", "question"):
+        value = re.search(r"^\s*[\[{][^}]{0,400}?\b" + field + r"\"?\s*:\s*(\"(?:[^\"\\]|\\.)*\")", raw)
+        if value:
+            try: args[field] = json.loads(value.group(1))
+            except ValueError: pass
+    return name, args
+
+
+def glance_tool(title, text):
+    """A tool call as {verb, text}: what it does and its target, short."""
+    name = str(title or "")
+    if name == "exec":
+        inner, inner_args = code_tool(text)
+        if inner == "apply_patch": return {"verb": "edit", "text": ", ".join(Path(f.strip()).name for f in PATCH_FILE_RE.findall(str(text))[:3])}
+        if inner: return glance_tool(inner, json.dumps(inner_args, ensure_ascii=False))
+        return {"verb": "run", "text": ""}
+    args = None
+    if isinstance(text, str) and text.lstrip().startswith("{"):
+        try: args = json.loads(text)
+        except ValueError: args = None
+    if not isinstance(args, dict): args = {}
+    def base(value): return Path(str(value)).name if value else ""
+    if name in ("Bash", "exec_command", "shell", "local_shell", "container.exec", "shell_command", "BashOutput"):
+        command = args.get("command") or args.get("cmd") or text
+        if isinstance(command, list): command = " ".join(str(x) for x in command)
+        return {"verb": "run", "text": glance_line(command, 120)}
+    if name == "apply_patch":
+        return {"verb": "edit", "text": ", ".join(base(f.strip()) for f in PATCH_FILE_RE.findall(str(text))[:3])}
+    if name in EDIT_TOOLS: return {"verb": "edit", "text": base(args.get("file_path") or args.get("notebook_path"))}
+    if name in ("Read", "NotebookRead"): return {"verb": "read", "text": base(args.get("file_path"))}
+    if name in ("Grep", "Glob", "LS"): return {"verb": "search", "text": glance_line(args.get("pattern") or args.get("path") or "", 80)}
+    if name in ("WebFetch", "WebSearch", "web_search"): return {"verb": "web", "text": glance_line(args.get("query") or args.get("url") or "", 80)}
+    if name in ("Task", "Agent", "spawn_agent", "spawn_agents"): return {"verb": "agent", "text": glance_line(args.get("description") or args.get("prompt") or args.get("message") or "", 80)}
+    if name in ("TodoWrite", "update_plan"): return {"verb": "plan", "text": ""}
+    if name in ("sleep", "wait", "TaskOutput", "write_stdin"): return {"verb": "wait", "text": ""}
+    if name in ("send_message", "followup_task"): return {"verb": "agent", "text": glance_line(args.get("message") or "", 80)}
+    if name in ("AskUserQuestion", "request_user_input", "request_user_input_async"):
+        questions = args.get("questions") if isinstance(args.get("questions"), list) else []
+        first = questions[0] if questions and isinstance(questions[0], dict) else {}
+        return {"verb": "ask", "text": glance_line(first.get("question") or first.get("title") or first.get("header") or args.get("question") or "", 140)}
+    return {"verb": "tool", "text": glance_line(name, 60)}
+
+
+def glance_edits(item, files):
+    if item["title"] in ("apply_patch", "exec"):
+        files.update(f.strip() for f in PATCH_FILE_RE.findall(item["text"])); return
+    if item["title"] not in EDIT_TOOLS: return
+    try: args = json.loads(item["text"])
+    except ValueError: return
+    if isinstance(args, dict) and (args.get("file_path") or args.get("notebook_path")):
+        files.add(str(args.get("file_path") or args.get("notebook_path")))
+
+
+def glance_tail(path, provider, window):
+    """Normalized messages from the last `window` bytes, complete lines only."""
+    size = path.stat().st_size
+    with path.open("rb") as stream:
+        start = max(0, size - window)
+        stream.seek(start)
+        if start: stream.readline()
+        data = stream.read(window)
+    items = []
+    for line in data.splitlines():
+        try:
+            row = json.loads(line)
+            if isinstance(row, dict): items.extend(normalize_record(row, provider, 0))
+        except (ValueError, TypeError, AttributeError): continue
+    return items, start == 0
+
+
+def glance_summary(items):
+    """What the newest turn looks like: the task, the reply, current activity, pending tool."""
+    turn = len(items)
+    for i in range(len(items) - 1, -1, -1):
+        if items[i]["kind"] == "user" and (items[i]["text"].strip() or items[i].get("images")):
+            turn = i; break
+    result = {}
+    if turn < len(items):
+        # Slash commands are logged as <command-name>/x</command-name>…; keep just the words.
+        task = re.sub(r"<[^>]{1,40}>", " ", items[turn]["text"]) if items[turn]["text"].startswith("<") else items[turn]["text"]
+        result["task"] = {"text": glance_line(task, 120) or ("[图片]" if items[turn].get("images") else ""), "at": items[turn].get("timestamp") or ""}
+    after = items[turn + 1:] if turn < len(items) else items
+    reply = None
+    for x in reversed(items):
+        if x["kind"] == "assistant" and x.get("phase") != "commentary" and glance_line(x["text"]):
+            reply = x; break
+    if reply: result["reply"] = {"text": glance_line(reply["text"]), "at": reply.get("timestamp") or "",
+                                 "current": any(x is reply for x in after)}
+    answered = {x["call_id"] for x in after if x["kind"] == "result" and x.get("call_id")}
+    activity, files, tools, failed = None, set(), 0, 0
+    for x in after:
+        if x["kind"] == "tool":
+            tools += 1; glance_edits(x, files)
+            activity = dict(glance_tool(x["title"], x["text"]), kind="tool", at=x.get("timestamp") or "",
+                            open=bool(x.get("call_id")) and x["call_id"] not in answered)
+        elif x["kind"] == "result" and x.get("title") == "执行失败": failed += 1
+        elif x["kind"] == "assistant" and glance_line(x["text"]):
+            activity = {"kind": "note", "text": glance_line(x["text"]), "at": x.get("timestamp") or "", "open": False}
+        elif x["kind"] == "agent" and glance_line(x["text"]):
+            activity = {"kind": "agent", "text": glance_line(x["text"]), "title": glance_line(x["title"], 40), "at": x.get("timestamp") or "", "open": False}
+    if activity: result["activity"] = activity
+    result["turn"] = {"tools": tools, "files": len(files), "failed": failed}
+    stamps = [x.get("timestamp") for x in items if x.get("timestamp")]
+    if stamps: result["at"] = stamps[-1]
+    return result
+
+
+def glance_path(item):
+    """The transcript an item names: under the provider root, matching both record id and thread."""
+    provider, thread, record_id = item.get("provider"), item.get("thread"), item.get("record_id")
+    if provider not in ("claude", "codex") or not isinstance(thread, str) or not re.fullmatch(UUID_RE, thread):
+        return None
+    if not isinstance(record_id, str) or not re.fullmatch(r"[0-9a-f]{64}", record_id): return None
+    root = provider_root(provider)
+    if not root: return None
+    if provider == "claude":
+        cwd = item.get("cwd") if isinstance(item.get("cwd"), str) else ""
+        paths = ([claude_project_dir(root, cwd) / (thread + ".jsonl")] if cwd else []) + list(root.glob("*/" + thread + ".jsonl"))
+    else:
+        paths = list(root.glob("*/*/*/rollout-*" + thread + ".jsonl"))
+    for path in paths:
+        try:
+            if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(root): continue
+            key = hashlib.sha256((provider + ":" + str(path.relative_to(root))).encode()).hexdigest()
+            if key == record_id: return path
+        except (OSError, ValueError): continue
+    return None
+
+
+def glance(request):
+    items = request.get("items")
+    if not isinstance(items, list) or len(items) > GLANCE_ITEMS: raise BridgeError("Invalid glance items")
+    out = {}
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("key"), str) or len(item["key"]) > 200: continue
+        key = item["key"]
+        try:
+            path = glance_path(item)
+            if not path: out[key] = {"missing": True}; continue
+            stat = path.stat(); stamp = "%d:%d" % (stat.st_mtime_ns, stat.st_size)
+            if item.get("stamp") == stamp: out[key] = {"same": True, "stamp": stamp}; continue
+            for window in GLANCE_WINDOWS:
+                messages, whole = glance_tail(path, item["provider"], window)
+                summary = glance_summary(messages)
+                if summary.get("reply") or whole: break
+            summary.update(stamp=stamp, modified=stat.st_mtime)
+            out[key] = summary
+        except OSError:
+            out[key] = {"missing": True}
+    return {"previews": out}
+
+
 # ─── Following one pane ─────────────────────────────────────────────────────
 # The conversation inside a pane can change under an open chat: Claude /clear or
 # /resume, Codex /new or /resume, or the agent exits and the pane is a shell again.
@@ -2337,6 +2529,7 @@ def handle(request, state_dir=None):
         except OSError: pass
         return image_request(request)
     if op == "fileCheck": return file_check(request)
+    if op == "glance": return glance(request)
     if op == "fileInfo": return file_info(request)
     if op in ("catalog", "history"):
         if request.get("remote") is not None: return remote_history_request(request)

@@ -13,7 +13,10 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/** 所有设备资料以 Android Keystore AES-GCM 加密；列表不返回保存的密码。 */
+/**
+ * 所有设备资料以 Android Keystore AES-GCM 加密；列表不返回保存的密码。
+ * auth: "password"（默认）或 "key"（用 SshIdentity 里这台手机的密钥）；改成密钥会清掉保存的密码。
+ */
 class SecureProfiles(context: Context) {
     private val prefs = context.getSharedPreferences("secure_devices", Context.MODE_PRIVATE)
     private fun key(): SecretKey {
@@ -41,6 +44,7 @@ class SecureProfiles(context: Context) {
         val rows = all()
         for (i in 0 until rows.length()) put(JSONObject(rows.getJSONObject(i).toString()).apply {
             put("remember", optString("password").isNotEmpty()); remove("password")
+            put("auth", optString("auth").ifBlank { "password" })
         })
     }
     @Synchronized fun get(id: String): JSONObject {
@@ -60,10 +64,13 @@ class SecureProfiles(context: Context) {
         }
         // Changing a destination must not silently forward the previous device's password.
         val same = old?.optString("host") == host && old?.optInt("port") == port && old?.optString("user") == user
-        val pass = if (value.optBoolean("remember")) value.optString("password").ifEmpty { if (same) old?.optString("password") ?: "" else "" } else ""
+        val auth = value.optString("auth").ifBlank { old?.optString("auth").orEmpty().ifBlank { "password" } }
+        require(auth == "password" || auth == "key") { "不支持的登录方式" }
+        // A key device keeps no password: switching to the key is also how a saved password is dropped.
+        val pass = if (auth == "password" && value.optBoolean("remember")) value.optString("password").ifEmpty { if (same) old?.optString("password") ?: "" else "" } else ""
         require(pass.length <= 4096) { "密码过长" }
         next.put(JSONObject().put("id", id).put("name", value.optString("name").trim().take(80).ifBlank { host })
-            .put("host", host).put("port", port).put("user", user).put("password", pass))
+            .put("host", host).put("port", port).put("user", user).put("password", pass).put("auth", auth))
         write(next)
         return JSONObject().put("id", id).put("devices", list())
     }

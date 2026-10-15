@@ -17,8 +17,8 @@ class Friendly(val code: String, message: String, val info: JSONObject? = null, 
 
 /** Maps raw JSch / socket / remote-command failures to [Friendly] errors. Pure, so it is unit-testable. */
 object ConnectErrors {
-    /** Failures while opening the SSH session (before any request was sent). */
-    fun connect(e: Throwable, endpoint: Endpoint): Friendly {
+    /** Failures while opening the SSH session (before any request was sent). [usingKey]: it logged in with the phone's key. */
+    fun connect(e: Throwable, endpoint: Endpoint, usingKey: Boolean = false): Friendly {
         if (e is Friendly) return e
         val where = "${endpoint.host}:${endpoint.port}"
         val chain = generateSequence(e) { it.cause }.take(8).toList()
@@ -28,8 +28,13 @@ object ConnectErrors {
             chain.any { it.message.orEmpty().startsWith("Auth ") || it.message == "Auth fail" || it.message == "Auth cancel" } -> {
                 // JSch 2.x: "Auth fail for methods 'publickey'" means the server never offered passwords.
                 val methods = Regex("for methods '([^']*)'").find(text)?.groupValues?.get(1)
-                if (methods != null && !methods.contains("password") && !methods.contains("keyboard-interactive"))
-                    Friendly("auth_method", "这台电脑没开密码登录（只允许密钥）。在电脑的 sshd 配置里打开 PasswordAuthentication 后再试。", cause = e)
+                if (usingKey) {
+                    if (methods != null && !methods.contains("publickey"))
+                        Friendly("key_method", "这台电脑没开密钥登录（只允许密码）。改回密码登录，或者在电脑的 sshd 配置里打开 PubkeyAuthentication。", cause = e)
+                    else Friendly("key_rejected", "电脑没接受这台手机的密钥。先把公钥装到 ${endpoint.user} 的 ~/.ssh/authorized_keys；装过了的话，看看 ~/.ssh 是不是 700、authorized_keys 是不是 600，家目录不能让别人可写。", cause = e)
+                }
+                else if (methods != null && !methods.contains("password") && !methods.contains("keyboard-interactive"))
+                    Friendly("auth_method", "这台电脑没开密码登录（只允许密钥）。改用这台手机的密钥登录：把公钥加到电脑上，再把设备的登录方式改成「密钥」。", cause = e)
                 else Friendly("auth", "密码不对，或者 ${endpoint.user} 这个用户名不存在。", cause = e)
             }
             chain.any { it is UnknownHostException } || has("UnknownHostException", "Unable to resolve host", "No address associated") ->

@@ -1,0 +1,41 @@
+/* SSH key login (keys.js): login-method choice, public key boxes, install sheet. Tokens only. */
+
+/* Login method in the device form */
+.key-auth{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px}
+.key-auth-label{margin:0!important;font-size:13px;font-weight:600;color:var(--ink-2)}
+.key-seg .seg-opt{min-width:64px}
+.key-panel{margin-top:12px;border:1px solid var(--line);border-radius:var(--radius-card);background:var(--sunken);padding:12px 12px 4px}
+.key-panel-head{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.55;color:var(--ink-2)}
+.key-panel-head svg{width:18px;height:18px;color:var(--accent);margin-top:2px}
+.key-panel-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.key-panel-actions .secondary{min-height:40px;gap:6px;display:inline-flex;align-items:center}
+.key-panel-actions svg{width:16px;height:16px}
+.key-panel .fine{margin:10px 2px 8px}
+.key-drop{color:var(--warn)!important}
+.key-loading{width:18px;height:18px;margin:10px auto}
+
+/* Public key */
+.key-pub{border:1px solid var(--line-strong);border-radius:var(--radius-card);padding:4px 6px 12px 14px;margin-top:12px;background:var(--surface)}
+.key-pub-value{display:block;font-family:var(--mono);font-size:12px;line-height:1.6;color:var(--ink);word-break:break-all;padding-right:8px;user-select:all}
+.key-pub.compact .key-pub-value{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.key-fp{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:6px;padding-right:8px;word-break:break-all}
+.key-meta{margin:8px 2px 0}
+.key-cmd-wrap{margin-top:14px}
+.key-cmd-wrap p{margin:0 2px 8px}
+.key-sheet .ob-facts{margin-top:10px}
+.key-sheet .ob-lead svg{flex-shrink:0}
+.ob-lead.key-ok{background:var(--success-soft);border-color:var(--line)}
+.ob-lead.key-ok svg{color:var(--success)}
+.key-next{margin-top:12px;font-size:13px}
+
+/* Connection card callout and devices-page row */
+.key-callout{display:flex;align-items:center;gap:12px;margin-top:14px;padding:12px;border-radius:var(--radius-card);background:var(--soft);border:1px solid var(--soft-line)}
+.key-callout>svg{width:20px;height:20px;color:var(--accent)}
+.key-callout strong{display:block;font-size:13px;font-weight:650}
+.key-callout span{display:block;font-size:12px;color:var(--ink-2);line-height:1.5}
+.key-callout .secondary{flex-shrink:0;min-height:40px;background:var(--surface)}
+.key-row{margin-top:var(--sp-3);padding:0;overflow:hidden}
+.key-row .card-button .grow{display:flex;flex-direction:column;gap:2px}
+.key-row-icon{width:36px;height:36px;border-radius:10px;background:var(--soft);color:var(--accent);display:grid;place-items:center;flex-shrink:0}
+.key-row-icon svg{width:19px;height:19px}
+@media (max-width:359px){.key-callout{flex-wrap:wrap}.key-callout .secondary{width:100%}}

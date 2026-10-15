@@ -1,0 +1,77 @@
+'use strict';
+// One-line previews on the 会话 list: what each agent is doing now, what it is asking,
+// or how its last reply began. The bridge `glance` op reads only the tail of each local
+// transcript and answers "same" for files that did not change. Remote (ch) panes have
+// no local transcript and simply show no preview. Text nodes only.
+const GL={map:new Map(),dev:'',busy:false,unsupported:false,at:0,restored:''};
+const GLANCE_VERBS={run:'运行',edit:'修改',read:'查看',search:'搜索',web:'查资料',agent:'子 Agent',plan:'更新计划',wait:'等输出',ask:'提问',tool:'调用'};
+
+function glanceDevice(){const d=cacheDevice()||(S.demo?'demo':'');if(d!==GL.dev){GL.dev=d;GL.map.clear();GL.at=0;GL.restored='';}return d;}
+function glanceOf(a){glanceDevice();return GL.map.get(agentKey(a))||null;}
+function glanceAt(a){const g=glanceOf(a);const d=toDate(g?.at)||(g?.modified?toDate(g.modified):null);return d?+d:0;}
+// What to ask the bridge for: local matched transcripts only (record id + native thread).
+function glanceItem(a){
+ if(S.demo)return {key:agentKey(a)};
+ const ref=a.history_ref,rec=ref?.record;if(!ref||ref.status!=='matched'||ref.remote||rec?.remote)return null;
+ const record_id=ref.record_id||rec?.id,thread=ref.thread||rec?.thread;if(!record_id||!thread||!['claude','codex'].includes(a.agent))return null;
+ const g=GL.map.get(agentKey(a));const item={key:agentKey(a),provider:a.agent,thread,record_id,cwd:rec?.cwd||a.foreground_cwd||a.cwd||''};
+ if(g?.stamp)item.stamp=g.stamp;return item;}
+// all=false (status poll): only agents that are busy, changed state or have nothing yet.
+async function glanceRefresh(all=false){
+ const dev=glanceDevice();if(GL.busy||GL.unsupported||!dev||!(S.device||S.demo)||!S.agents.length||!S.session)return;
+ const items=S.agents.filter(a=>{if(all)return true;const g=GL.map.get(agentKey(a));return !g||g.status!==(a.agent_status||'')||['working','blocked'].includes(a.agent_status);}).map(glanceItem).filter(Boolean).slice(0,40);
+ if(!items.length)return;GL.busy=true;GL.at=Date.now();const session=S.session,status=new Map(S.agents.map(a=>[agentKey(a),a.agent_status||'']));
+ try{const r=await remote('glance',{items});if(session!==S.session||dev!==GL.dev)return;let changed=false;
+  for(const [k,v] of Object.entries(r?.previews||{})){
+   if(!v||typeof v!=='object')continue;const old=GL.map.get(k);
+   if(v.same){if(old)old.status=status.get(k)||'';continue;}
+   // Nothing to show (yet): remember that too, so an idle agent is not asked every poll.
+   if(v.missing){if(old&&!old.missing)changed=true;GL.map.set(k,{missing:true,status:status.get(k)||''});continue;}
+   GL.map.set(k,{...v,status:status.get(k)||''});changed=true;}
+  if(changed){glanceSave();glancePaint();}}
+ catch(e){if(/Unknown operation|不支持的操作/.test(e?.message||''))GL.unsupported=true;}
+ finally{GL.busy=false;}}
+// The list opened: show what we had, then refresh if it is not fresh.
+function glanceKick(){glanceRestore();if(Date.now()-GL.at>4000)setTimeout(()=>glanceRefresh(!GL.map.size),0);}
+function glanceSave(){if(S.demo)return;const keep=new Set(S.agents.map(agentKey));cachePut('glance',{session:S.session,items:[...GL.map].filter(([k,g])=>keep.has(k)&&!g.missing).slice(0,60),at:Date.now()});}
+async function glanceRestore(){
+ const dev=glanceDevice();if(!dev||S.demo||GL.restored===dev)return;GL.restored=dev;
+ const v=await cacheGet('glance',dev);if(!v?.items||dev!==GL.dev)return;let added=false;
+ for(const [k,g] of v.items)if(!GL.map.has(k)&&g&&typeof g==='object'){GL.map.set(k,g);added=true;}
+ if(added)glancePaint();}
+
+// The bridge already sends one clean line; stay defensive about older or odd input.
+function glanceLine(t){return (String(t||'').split('\n').map(x=>x.replace(/^\s*(#{1,6}\s+|>\s*)/,'').trim()).find(Boolean)||'').slice(0,200);}
+// Each piece is its own span so the line can ellipsize without spilling out of the row:
+// the lead ("运行 ", "问：") never shrinks, the rest truncates.
+function gtext(box,text,cls){box.append(el('span','gt'+(cls?' '+cls:''),text));return box;}
+// "运行 npm test" / "修改 cache.js" — verb plus a short target.
+function glanceAction(act,box,lead=''){
+ if(act.kind!=='tool')return gtext(box,lead+glanceLine(act.text));
+ const verb=GLANCE_VERBS[act.verb]||'调用',target=glanceLine(act.text);
+ if(!target)return gtext(box,lead+verb);
+ gtext(box,lead+verb,'gt-lead gt-sp');return gtext(box,target,act.verb==='run'?'glance-code':'');}
+// The preview for one agent, or null. Tone: ask (needs you), work (busy), done (finished).
+function glancePreview(a){
+ const g=glanceOf(a);if(!g)return null;const st=a.agent_status,act=g.activity,reply=g.reply;const n=el('span','glance');
+ if(st==='blocked'){
+  // The open tool call is what the prompt on the computer is about; else its latest note.
+  n.classList.add('g-ask');const open=act?.kind==='tool'&&act.open;
+  if(open&&act.verb==='ask'){gtext(n,'问：','gt-lead');return gtext(n,glanceLine(act.text)||'有个问题要你选');}
+  if(open)return glanceAction(act,n,'想');
+  if(act?.kind==='note')return gtext(n,glanceLine(act.text));
+  return null;}
+ if(st==='working'){
+  if(!act)return null;n.classList.add('g-work');return glanceAction(act,n);}
+ if(reply?.text&&(reply.current||!act)){n.classList.add('g-done');return gtext(n,glanceLine(reply.text));}
+ if(act?.kind==='note'){n.classList.add('g-done');return gtext(n,glanceLine(act.text));}
+ const t=g.turn||{};const bits=[];if(t.files)bits.push('改了 '+t.files+' 个文件');if(t.tools)bits.push('执行 '+t.tools+' 步');if(t.failed)bits.push(t.failed+' 步失败');
+ if(!bits.length)return null;n.classList.add('g-done','g-sum');return gtext(n,bits.join(' · '));}
+// Repaint previews and times in place: the list keeps its scroll and any open swipe.
+function glancePaint(){
+ if(S.chat||S.tab!=='live')return;
+ document.querySelectorAll('[data-glance]').forEach(line=>{const a=S.agents.find(x=>agentKey(x)===line.dataset.glance);if(!a)return;
+  const row=line.closest('.agent-row'),old=line.querySelector('.glance'),next=glancePreview(a);
+  if(old)old.remove();if(next)line.append(next);if(row)row.classList.toggle('has-glance',!!next);
+  const time=row?.querySelector('.row-time');if(time)time.textContent=rowTimeText(a);});}
+function glanceForget(){GL.map.clear();GL.at=0;GL.restored='';}

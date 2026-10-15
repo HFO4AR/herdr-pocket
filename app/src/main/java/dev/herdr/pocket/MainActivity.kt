@@ -39,10 +39,11 @@ private const val PICK_GALLERY = 41
 private const val PICK_CAMERA = 42
 private const val PICK_FILES = 43
 private const val ASK_PHOTOS = 44
+private const val PICK_KEY = 45
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/onboard.css", "ui/native.css", "ui/lists.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/onboard.js", "ui/native.js", "ui/app.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/native.css", "ui/lists.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/onboard.js", "ui/native.js", "ui/glance.js", "ui/app.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -185,9 +186,9 @@ class MainActivity : Activity() {
             changedFor = device.getString("id")
             throw Friendly("hostkey_changed", e.message ?: "", hostInfo(endpoint, e.fingerprint, e.type).put("previous", e.previous))
         } catch (e: Exception) {
-            throw ConnectErrors.connect(e, endpoint)
+            throw ConnectErrors.connect(e, endpoint, usingKey = core.usesKey(device))
         }
-        if (request.has("remember") && request.optString("password").isNotEmpty()) {
+        if (!core.usesKey(device) && request.has("remember") && request.optString("password").isNotEmpty()) {
             core.vault.save(JSONObject(device.toString()).put("password", password).put("remember", request.getBoolean("remember")))
         }
         val remembered = core.vault.get(device.getString("id")).optString("password").isNotEmpty()
@@ -297,7 +298,7 @@ class MainActivity : Activity() {
                                 })
                             pendingPane?.let { pane -> pendingPane = null; js("window.openFromNotification(${JSONObject.quote(pane)})") }
                         }
-                        "saveDevice" -> success(id, core.vault.save(req))
+                        "saveDevice" -> success(id, core.vault.save(req).also { if (req.optString("auth") == "key") core.forgetSessionPassword(req.optString("id")) })
                         "deleteDevice" -> { core.vault.delete(req.getString("id")); core.cache.drop(req.getString("id")); success(id, JSONObject().put("devices", core.vault.list())) }
                         "connect" -> { runOnUiThread { applySecure() }; connect(id, req) }
                         "disconnect" -> { WatchService.stop(this@MainActivity); core.disconnect(); success(id, JSONObject()) }
@@ -429,8 +430,21 @@ class MainActivity : Activity() {
                             success(id, ImagePrep.shrink(bytes, if (req.optString("variant") == "full") 1600 else 360))
                         }
                         "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> success(id, core.terminal(op, req))
+                        // The phone's SSH key (SshIdentity). Only the public half ever reaches the page.
+                        "identity" -> success(id, core.identity.info())
+                        "identityCreate" -> success(id, core.identity.create(req.optBoolean("replace")))
+                        "identityImport" -> runOnUiThread { pickKey(id) }
+                        "identityImportConfirm" -> success(id, KeyImport.confirm(core.identity, req.optString("passphrase").takeIf { it.isNotEmpty() }))
+                        "identityImportCancel" -> { KeyImport.cancel(); success(id, JSONObject()) }
+                        "installKey" -> success(id, core.installKey(req.getString("id"), req.getString("line")))
+                        "useKey" -> {
+                            val device = core.vault.get(req.getString("id"))
+                            core.vault.save(JSONObject(device.toString()).put("auth", "key").put("remember", false))
+                            core.forgetSessionPassword(device.getString("id"))
+                            success(id, JSONObject().put("devices", core.vault.list()))
+                        }
                         "remote" -> {
-                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "hidden", "doctor")) { "不支持的操作" }
+                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "hidden", "doctor", "glance")) { "不支持的操作" }
                             success(id, core.request(req))
                         }
                         else -> error("不支持的操作")
@@ -488,6 +502,21 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Document picker for an existing private key; the file is read natively and never reaches the page. */
+    private fun pickKey(id: String) {
+        if (pickId != null) { failure(id, IllegalStateException("正在选文件，先把上一个选完")); return }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+        try { pickId = id; startActivityForResult(intent, PICK_KEY) }
+        catch (e: ActivityNotFoundException) { pickId = null; failure(id, IllegalStateException("手机上没找到文件选择器")) }
+    }
+    private fun onKeyPicked(resultCode: Int, data: Intent?) {
+        val id = pickId ?: return
+        pickId = null
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) { success(id, JSONObject().put("cancelled", true)); return }
+        executor.execute { try { success(id, KeyImport.read(contentResolver, uri, core.identity)) } catch (e: Exception) { failure(id, e) } }
+    }
+
     private fun onFilesPicked(resultCode: Int, data: Intent?) {
         val id = pickId ?: return
         pickId = null
@@ -507,6 +536,7 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == PICK_FILES) { onFilesPicked(resultCode, data); return }
+        if (requestCode == PICK_KEY) { onKeyPicked(resultCode, data); return }
         if (requestCode != PICK_GALLERY && requestCode != PICK_CAMERA) return
         val id = pickId ?: return
         pickId = null

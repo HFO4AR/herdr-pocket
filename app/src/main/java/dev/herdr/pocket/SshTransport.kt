@@ -4,9 +4,7 @@ import com.jcraft.jsch.*
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
-import java.security.Security
 import java.util.Base64
-import org.bouncycastle.jce.provider.BouncyCastleProvider
 
 data class Endpoint(val host: String, val port: Int, val user: String)
 class UntrustedHost(val key: String, val fingerprint: String, val type: String = "") : Exception("请核对服务器指纹")
@@ -49,10 +47,29 @@ class SshTransport : AutoCloseable {
      * Opens a new session. With [keepOld] the current session stays usable until the new one is
      * authenticated, and requests still running on it are allowed to finish (make-before-break).
      * Without it every existing session is dropped first.
+     * With [identity] the login uses that key (public-key auth only) and [password] is ignored;
+     * the key bytes are only handed to JSch for this handshake (the caller wipes them).
      */
-    fun connect(endpoint: Endpoint, password: String, pinnedKey: String?, progress: (String) -> Unit = {}, keepOld: Boolean = false) {
+    fun connect(endpoint: Endpoint, password: String, pinnedKey: String?, progress: (String) -> Unit = {}, keepOld: Boolean = false, identity: KeyMaterial? = null) {
         if (!keepOld) close()
-        if (Security.getProvider("BC") == null) Security.addProvider(BouncyCastleProvider())
+        val (candidate, path) = handshake(endpoint, password, pinnedKey, progress, identity, home = true)
+        val old = synchronized(this) {
+            val previous = session
+            session = candidate; home = path; generation++
+            previous
+        }
+        // An interactive shell belongs to the session it was opened on; it is never moved.
+        shell?.close(); shell = null
+        if (old != null) retire(old, graceful = keepOld)
+    }
+
+    /** Logs in once with [identity] on a separate session and closes it: does the computer accept this key? */
+    fun probeKey(endpoint: Endpoint, pinnedKey: String, identity: KeyMaterial) {
+        handshake(endpoint, "", pinnedKey, {}, identity, home = false).first.disconnect()
+    }
+
+    private fun handshake(endpoint: Endpoint, password: String, pinnedKey: String?, progress: (String) -> Unit, identity: KeyMaterial?, home: Boolean): Pair<Session, String> {
+        SshIdentity.bc()
         var pending: Exception? = null
         val jsch = JSch()
         jsch.setHostKeyRepository(object : HostKeyRepository {
@@ -75,9 +92,15 @@ class SshTransport : AutoCloseable {
             override fun getHostKey(host: String?, type: String?): Array<HostKey> = emptyArray()
         })
         val candidate = jsch.getSession(endpoint.user, endpoint.host, endpoint.port)
-        candidate.setPassword(password)
+        if (identity != null) {
+            // JSch parses a copy; our bytes are wiped by the caller, JSch's copy by removeAllIdentity below.
+            jsch.addIdentity("herdr-pocket", identity.prv.copyOf(), identity.pub.copyOf(), null)
+            candidate.setConfig("PreferredAuthentications", "publickey")
+        } else {
+            candidate.setPassword(password)
+            candidate.setConfig("PreferredAuthentications", "password")
+        }
         candidate.setConfig("StrictHostKeyChecking", "yes")
-        candidate.setConfig("PreferredAuthentications", "password")
         // JSch only sends a keepalive when a socket read times out, and setServerAliveInterval
         // also sets that read timeout. Setting `timeout` afterwards (as before) silently moved the
         // keepalive to 30 s; JSch's default ServerAliveCountMax of 1 then dropped the session after
@@ -85,24 +108,62 @@ class SshTransport : AutoCloseable {
         // 4 missed replies (~75 s); dead sessions are caught sooner when a channel fails to open.
         candidate.serverAliveInterval = KEEPALIVE_MS
         candidate.serverAliveCountMax = KEEPALIVE_MISSES
-        val path = try {
-            progress("正在建立 SSH 连接并验证身份…")
+        return try {
+            progress(if (identity != null) "正在建立 SSH 连接，用密钥验证身份…" else "正在建立 SSH 连接并验证身份…")
             candidate.connect(15000)
+            if (!home) return candidate to ""
             progress("SSH 身份验证成功，正在读取远端目录…")
             val sftp = candidate.openChannel("sftp") as ChannelSftp
-            try { sftp.connect(10000); sftp.realpath(".") } finally { sftp.disconnect() }
+            candidate to try { sftp.connect(10000); sftp.realpath(".") } finally { sftp.disconnect() }
         } catch (e: Exception) {
             candidate.disconnect()
             throw pending ?: e
+        } finally {
+            // Authentication is over either way; the parsed key is not kept with the session.
+            try { jsch.removeAllIdentity() } catch (_: Exception) { }
         }
-        val old = synchronized(this) {
-            val previous = session
-            session = candidate; home = path; generation++
-            previous
-        }
-        // An interactive shell belongs to the session it was opened on; it is never moved.
-        shell?.close(); shell = null
-        if (old != null) retire(old, graceful = keepOld)
+    }
+
+    /**
+     * Adds [line] to ~/.ssh/authorized_keys over SFTP: creates ~/.ssh (0700) if missing, appends one
+     * line (no duplicates: the same key type and blob already present means nothing is written), a new
+     * file gets 0600; an existing ~/.ssh or file only loses group/other write bits (sshd refuses those).
+     * Nothing else is read or changed. Returns true when the line was appended.
+     */
+    fun installAuthorizedKey(line: String): Boolean {
+        val (ssh, gen) = acquire()
+        try {
+            if (!ssh.isConnected) throw NotSent(gen, true, IllegalStateException("SSH 已断开"))
+            val sftp = ssh.openChannel("sftp") as ChannelSftp
+            try {
+                sftp.connect(10000)
+                val dir = "$home/.ssh"
+                val dirStat = try { sftp.stat(dir) } catch (e: SftpException) { if (e.id != ChannelSftp.SSH_FX_NO_SUCH_FILE) throw e; null }
+                if (dirStat == null) { sftp.mkdir(dir); sftp.chmod(448, dir) }
+                else {
+                    check(dirStat.isDir) { "~/.ssh 不是文件夹，没有改动" }
+                    if ((dirStat.permissions and GROUP_OTHER_WRITE) != 0) sftp.chmod((dirStat.permissions and 0x1ff) and GROUP_OTHER_WRITE.inv(), dir)
+                }
+                val path = "$dir/authorized_keys"
+                val stat = try { sftp.stat(path) } catch (e: SftpException) { if (e.id != ChannelSftp.SSH_FX_NO_SUCH_FILE) throw e; null }
+                if (stat != null) {
+                    check(stat.isReg) { "~/.ssh/authorized_keys 不是普通文件，没有改动" }
+                    check(stat.size <= 1_000_000) { "~/.ssh/authorized_keys 太大了，没有改动" }
+                }
+                val existing = if (stat == null) null else sftp.get(path).use { String(it.readBytes(), Charsets.UTF_8) }
+                val append = AuthorizedKeys.toAppend(existing, line) ?: return false
+                if (stat == null) {
+                    sftp.put(append.byteInputStream(), path, ChannelSftp.OVERWRITE)
+                    sftp.chmod(384, path)
+                } else {
+                    sftp.put(append.byteInputStream(), path, ChannelSftp.APPEND)
+                    if ((stat.permissions and GROUP_OTHER_WRITE) != 0) sftp.chmod((stat.permissions and 0x1ff) and GROUP_OTHER_WRITE.inv(), path)
+                }
+                val after = sftp.get(path).use { String(it.readBytes(), Charsets.UTF_8) }
+                check(AuthorizedKeys.toAppend(after, line) == null) { "写完再读，没找到这一行" }
+                return true
+            } finally { sftp.disconnect() }
+        } finally { release(ssh) }
     }
     fun install(bytes: ByteArray) {
         val ssh = session ?: error("尚未连接")
@@ -335,6 +396,7 @@ class SshTransport : AutoCloseable {
     private fun quote(value: String) = "'" + value.replace("'", "'\"'\"'") + "'"
 
     private companion object {
+        const val GROUP_OTHER_WRITE = 18 // 0o022
         const val KEEPALIVE_MS = 15_000
         const val KEEPALIVE_MISSES = 4
         // One round trip on a healthy link; longer means the session is most likely dead.

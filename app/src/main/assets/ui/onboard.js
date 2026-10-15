@@ -49,15 +49,16 @@ function devicesPage(main){
  if(!S.devices.length){main.append(firstRunGuide());return;}
  const head=el('div','section-head');head.append(el('span','section-label','保存的设备'),ib('plus','添加设备',()=>deviceForm()));main.append(head);
  for(const d of S.devices)main.append(deviceCard(d));
+ main.append(keyRow());
  main.append(btn('体验聊天演示','secondary wide',startDemo));
- main.append(el('p','fine','设备资料和勾选保存的密码用 Android Keystore 加密，只存在这台手机上。'));}
+ main.append(el('p','fine','设备资料、勾选保存的密码和登录密钥都用 Android Keystore 加密，只存在这台手机上。'));}
 
 function firstRunGuide(){
  const card=el('section','card ob-guide');const top=el('div','ob-guide-icon');top.append(icon('device'));
  card.append(top,el('h2','','连上你的电脑'),el('p','muted','Herdr Pocket 通过 SSH 连到运行 Herdr 的电脑，在手机上看 Agent 在做什么、回它的消息。'));
  const steps=el('ol','ob-steps');
  const step=(title,detail)=>{const li=el('li');const t=el('div');t.append(el('strong','',title),el('span','',detail));li.append(t);steps.append(li);return li;};
- step('电脑开着 SSH','能用用户名和密码登录。');
+ step('电脑开着 SSH','能用用户名和密码登录；只允许密钥的话，选「密钥」登录。');
  step('装好 Herdr 和 Python 3.9+','App 会在电脑上放一个小的桥接程序，靠 Python 运行。');
  const net=step('手机能访问到电脑','不知道填什么地址？看下面。');
  const more=el('details','ob-net');const sum=el('summary','','怎么填地址');more.append(sum);
@@ -70,7 +71,7 @@ function firstRunGuide(){
 function deviceCard(d){
  const current=S.device?.id===d.id&&!S.demo;const card=el('section','card device-card'+(current?' current':''));
  const row=el('div','row');row.append(avatar('',current?'ok':''));const text=el('div','grow');text.append(el('div','card-title',d.name),el('div','card-meta truncate',d.user+' @ '+d.host+':'+d.port));row.append(text,ib('edit','编辑 '+d.name,()=>deviceForm(d)));card.append(row);
- const line=el('div','device-line');line.append(icon('lock'),document.createTextNode(d.remember?'密码已加密保存':'连接时输入密码'));card.append(line);
+ const line=el('div','device-line');line.append(icon(d.auth==='key'?'key':'lock'),document.createTextNode(d.auth==='key'?'用这台手机的密钥登录':d.remember?'密码已加密保存':'连接时输入密码'));card.append(line);
  const actions=el('div','device-actions');const busy=S.loading&&S.connecting?.id===d.id;
  const connect=btn(busy?'正在连接…':current?'已连接':'连接设备',current?'secondary':'primary',()=>connectDevice(d));connect.disabled=S.loading;
  actions.append(connect,btn('删除','secondary danger',()=>confirmAction('删除设备？','会移除这台设备及其保存的密码。','删除',async()=>{try{S.devices=(await rpc('deleteDevice',{id:d.id})).devices;if(S.connectFail?.device===d.id)S.connectFail=null;render();}catch(e){error(e);}},true)));
@@ -78,7 +79,9 @@ function deviceCard(d){
 
 function connectionCard(){
  const card=el('section','card account-card');const top=el('div','row');top.append(avatar('','ok'));const t=el('div','grow');t.append(el('div','card-title',S.device.name),el('div','card-meta',S.demo?'离线演示':'SSH 已连接'));top.append(t);card.append(top);
- [['SSH 用户',S.account?.ssh_user||S.device.user],['主机地址',S.device.host],['端口',String(S.device.port)],['电脑主机名',S.account?.hostname||'读取中…'],['密码保存',S.device.remember?'已加密保存':'未保存']].forEach(([k,v])=>{const n=el('div','setting-row');n.append(el('span','',k),el('span','',v));card.append(n);});
+ const key=S.device.auth==='key';
+ [['SSH 用户',S.account?.ssh_user||S.device.user],['主机地址',S.device.host],['端口',String(S.device.port)],['电脑主机名',S.account?.hostname||'读取中…'],key?['登录方式','这台手机的密钥']:['密码保存',S.device.remember?'已加密保存':'未保存']].forEach(([k,v])=>{const n=el('div','setting-row');n.append(el('span','',k),el('span','',v));card.append(n);});
+ if(!key&&!S.demo)card.append(keyCallout());
  const actions=el('div','device-actions');actions.append(btn('更新桥接程序','secondary',()=>setupBridge({manual:true})),btn('断开连接','secondary danger',()=>confirmAction('断开当前设备？','电脑上的 Agent 会继续运行。','断开',()=>disconnect().catch(error),true)));card.append(actions);
  card.append(el('p','fine','只显示 SSH 连接信息，不读取 Codex / Claude 的登录资料。'));return card;}
 
@@ -92,7 +95,10 @@ function deviceForm(d={}){
  const user=obField(box,'SSH 用户名',{value:d.user||'',placeholder:'登录电脑用的用户名',enter:'next'});
  const pass=obField(box,'登录密码',{type:'password',placeholder:d.remember?'已保存；留空保留原密码':'SSH 密码',enter:'done'});
  const check=el('label','check');const remember=el('input');remember.type='checkbox';remember.checked=d.remember!==false;check.append(remember,document.createTextNode('记住密码 · 本机加密保存'));box.append(check);
- if(editing)box.append(el('p','fine','改了主机、端口或用户名，要重新输入密码。'));
+ const passParts=[pass.closest('label'),check];
+ if(editing){const note=el('p','fine','改了主机、端口或用户名，要重新输入密码。');box.append(note);passParts.push(note);}
+ // 密码 stays the default: it is what works on a fresh computer; 密钥 needs the public key installed first.
+ const auth=keyAuthChoice(box,passParts[0],d,passParts);
  // Pasted "user@host:port" is split into the three fields.
  const split=()=>{const s=obSplitAddress(host.value);if(!s)return;host.value=s.host;if(s.port)port.value=s.port;if(s.user&&!user.value.trim())user.value=s.user;if(s.user&&user.value.trim()!==s.user)return;toast('已拆成地址'+(s.user?'、用户名':'')+(s.port?'和端口':''));};
  host.addEventListener('change',split);host.addEventListener('paste',()=>setTimeout(split,0));
@@ -100,12 +106,12 @@ function deviceForm(d={}){
  const check1=()=>{split();const v=values();const e=obValidate(v);obError(host,e.host);obError(port,e.port);obError(user,e.user);
   const first=[['host',host],['port',port],['user',user]].find(([k])=>e[k]);if(first){first[1].focus();return null;}return v;};
  const save=async(andConnect)=>{const v=check1();if(!v)return;buttons.forEach(b=>b.disabled=true);
-  const typed=pass.value;
-  try{const r=await rpc('saveDevice',{...v,port:Number(v.port),password:typed,remember:remember.checked});pass.value='';S.devices=r.devices;closeSheet();
+  const key=auth.get()==='key';const typed=key?'':pass.value;
+  try{const r=await rpc('saveDevice',{...v,port:Number(v.port),auth:key?'key':'password',password:typed,remember:!key&&remember.checked});pass.value='';S.devices=r.devices;closeSheet();
    const saved=r.devices.find(x=>x.id===(r.id||d.id));render();
    if(andConnect&&saved){if(typed)doConnect(saved,typed,remember.checked);else connectDevice(saved);}else toast('设备已保存');}
   catch(e){toast(e.message||String(e));}finally{buttons.forEach(b=>b.disabled=false);}};
- [name,host,port,user].forEach((n,i,all)=>n.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();(all[i+1]||pass).focus();}}));
+ [name,host,port,user].forEach((n,i,all)=>n.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();if(!all[i+1]&&auth.get()==='key')save(!editing);else(all[i+1]||pass).focus();}}));
  pass.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();save(!editing);}});
  const actions=el('div','sheet-actions');let buttons;
  if(editing)buttons=[btn('取消','secondary',closeSheet),btn('保存设备','primary',()=>save(false))];
@@ -123,11 +129,12 @@ function connectionPassword(d,problem=''){
  pass.onkeydown=e=>{if(e.key==='Enter')go();};actions.append(btn('取消','secondary',closeSheet),btn('连接','primary',go));box.append(actions);setTimeout(()=>pass.focus(),50);}
 
 // ─── Connecting ─────────────────────────────────────────────────────────────
-function connectDevice(d){if(S.loading){toast('正在连接，请稍候');return;}if(S.device?.id===d.id&&!S.demo){setTab('live');return;}if(!d.remember)connectionPassword(d);else doConnect(d);}
+function connectDevice(d){if(S.loading){toast('正在连接，请稍候');return;}if(S.device?.id===d.id&&!S.demo){setTab('live');return;}if(d.auth!=='key'&&!d.remember)connectionPassword(d);else doConnect(d);}
 // Titles and next steps for the error codes the native layer sends (ConnectErrors.kt).
 const OB_FAIL={auth:'密码不对',auth_method:'这台电脑不让用密码登录',dns:'找不到这台电脑',refused:'端口没开',timeout:'连不上，超时了',unreachable:'手机到不了这台电脑',
  tunnel:'转发通了，电脑没回应',algorithm:'SSH 握手失败',network:'网络出错了',python_missing:'电脑上还差 Python',python_old:'电脑上的 Python 太旧',
- install_failed:'桥接程序没装上',hostkey_new:'等你核对指纹',hostkey_changed:'电脑指纹变了，已拒绝'};
+ install_failed:'桥接程序没装上',hostkey_new:'等你核对指纹',hostkey_changed:'电脑指纹变了，已拒绝',
+ key_rejected:'电脑没接受密钥',key_method:'这台电脑不让用密钥登录',key_missing:'还没有登录密钥'};
 async function doConnect(d,password='',remember){
  if(S.loading)return;
  if(S.device&&!S.demo&&S.device.id!==d.id){confirmAction('切换设备？','当前 SSH 连接会断开；未发送的草稿只在本次运行中保留。','切换',async()=>{await disconnect(false);doConnect(d,password,remember);});return;}
@@ -204,11 +211,15 @@ function connectionBanner(root){
  if(S.connectError){const box=el('div','connection-status failed');box.setAttribute('role','alert');box.append(icon('alert'));const t=el('div','grow');
   t.append(el('strong','',OB_FAIL[f?.code]||'连接未完成'),el('div','',S.connectError));
   const acts=el('div','ob-banner-actions');const d=f?.d;
+  const saved=d&&(S.devices.find(x=>x.id===d.id)||d);
   if(f?.code==='auth'&&d)acts.append(btn('重新输入密码','secondary small',()=>connectionPassword(d,'')));
+  else if(f?.code==='key_rejected'||f?.code==='key_missing')acts.append(btn(f.code==='key_missing'?'生成密钥':'查看公钥','secondary small',()=>keysSheet()),btn('重试','secondary small',()=>retryConnect()));
   else if(f?.code==='hostkey_new')acts.append(btn('核对指纹','secondary small',()=>trustSheet(f)));
   else if(f?.code==='hostkey_changed')acts.append(btn('查看详情','secondary small',()=>changedSheet(f)));
   else if(f||S.connecting)acts.append(btn('重试','secondary small',()=>f?retryConnect():connectDevice(S.connecting)));
-  if(d&&!S.device&&['auth_method','dns','refused','timeout','unreachable','tunnel'].includes(f.code))acts.append(btn('改设置','secondary small',()=>deviceForm(S.devices.find(x=>x.id===d.id)||d)));
+  if(d&&!S.device&&f.code==='auth_method')acts.append(btn('改用密钥登录','secondary small',()=>deviceForm({...saved,auth:'key'})));
+  if(d&&!S.device&&['key_rejected','key_method'].includes(f.code))acts.append(btn('改用密码','secondary small',()=>deviceForm({...saved,auth:'password'})));
+  if(d&&!S.device&&['auth_method','dns','refused','timeout','unreachable','tunnel'].includes(f.code))acts.append(btn('改设置','secondary small',()=>deviceForm(saved)));
   t.append(acts);box.append(t,ib('close','知道了',()=>{S.connectError='';S.connectFail=null;render();}));root.append(box);return;}
  if(S.hostIssue&&S.device&&!S.demo){const box=el('div','connection-status warn');box.setAttribute('role','status');box.append(icon('alert'));const t=el('div','grow');t.append(el('strong','',S.hostIssue.title),el('div','',S.hostIssue.text));
   const acts=el('div','ob-banner-actions');const b=btn('重新检查','secondary small',()=>recheckHost(b));acts.append(b);t.append(acts);box.append(t,ib('close','知道了',()=>{S.hostIssue=null;render();}));root.append(box);}}

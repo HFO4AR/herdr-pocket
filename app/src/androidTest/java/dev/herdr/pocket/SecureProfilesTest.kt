@@ -16,8 +16,9 @@ class SecureProfilesTest : Instrumentation() {
             testImagePrep()
             testConnectErrors()
             testShareIn()
-            if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect() }
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nconnect-errors: PASS\nshare-in: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS" else "ssh-pty: SKIPPED") })
+            testIdentity()
+            if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeyLogin() }
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-key-login: PASS" else "ssh-pty: SKIPPED") })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
@@ -85,8 +86,72 @@ class SecureProfilesTest : Instrumentation() {
         check((ConnectErrors.command(2, "python3: can't open file '/home/y/.herdr-pocket/bridge-ab.py': [Errno 2] No such file or directory") as Friendly).code == "bridge_missing") { "bridge" }
         check((ConnectErrors.command(1, "Herdr Pocket needs Python 3.9 or newer; this is 3.8.10") as Friendly).code == "python_old") { "python_old" }
         check(ConnectErrors.command(1, "Traceback: boom") !is Friendly) { "generic" }
+        check(ConnectErrors.connect(jsch("Auth fail for methods 'publickey'"), lan, usingKey = true).code == "key_rejected") { "key_rejected" }
+        check(ConnectErrors.connect(jsch("Auth fail for methods 'publickey,password'"), lan, usingKey = true).code == "key_rejected") { "key_rejected 2" }
+        check(ConnectErrors.connect(jsch("Auth fail for methods 'password'"), lan, usingKey = true).code == "key_method") { "key_method" }
         check(sshKeyType(java.util.Base64.getDecoder().decode("AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl")) == "ssh-ed25519") { "key type" }
     }
+    /**
+     * The phone's SSH key: generated Ed25519, stored only as Keystore AES-GCM ciphertext, reloads,
+     * decrypts for a handshake and wipes; import handles passphrases; authorized_keys appends once.
+     * Uses its own store so a real key on the device is never touched.
+     */
+    private fun testIdentity() {
+        val store = "test_identity"
+        val id = SshIdentity(targetContext, store)
+        id.delete()
+        try {
+            check(!id.info().getBoolean("exists")) { "identity not empty" }
+            val info = id.create()
+            val line = info.getString("publicKey")
+            check(info.getString("type") == "ssh-ed25519" && line.startsWith("ssh-ed25519 AAAA")) { "identity type" }
+            check(info.getString("fingerprint").startsWith("SHA256:")) { "identity fingerprint" }
+            check(!info.toString().contains("PRIVATE")) { "private key in info" }
+            try { id.create(); fail("second create replaced the key") } catch (_: IllegalStateException) { }
+            // Stored only as ciphertext.
+            val raw = targetContext.getSharedPreferences(store, 0).getString("private", "")!!
+            check(raw.isNotEmpty() && !String(java.util.Base64.getDecoder().decode(raw), Charsets.ISO_8859_1).contains("OPENSSH")) { "plaintext private key" }
+            // A fresh instance decrypts the same key; the bytes are an OpenSSH key whose public half matches.
+            val again = SshIdentity(targetContext, store)
+            check(again.publicLine() == line) { "identity reload" }
+            val key = again.material()
+            check(String(key.prv, Charsets.US_ASCII).startsWith("-----BEGIN OPENSSH PRIVATE KEY-----")) { "key format" }
+            SshIdentity.bc()
+            val pair = com.jcraft.jsch.KeyPair.load(com.jcraft.jsch.JSch(), key.prv.copyOf(), null)
+            check(pair.publicKeyBlob.contentEquals(key.pub)) { "key pair mismatch" }
+            pair.dispose()
+            key.wipe()
+            check(key.prv.all { it == 0.toByte() }) { "key not wiped" }
+            // Replacing makes a different key.
+            check(id.create(replace = true).getString("publicKey") != line) { "replace kept the key" }
+            // Import: public key files are refused; a passphrase-protected key needs the right passphrase.
+            try { id.parse(line.toByteArray(), null); fail("public key accepted as private") } catch (_: IllegalArgumentException) { }
+            val other = com.jcraft.jsch.KeyPair.genKeyPair(com.jcraft.jsch.JSch(), com.jcraft.jsch.KeyPair.ED25519)
+            val file = java.io.ByteArrayOutputStream().also { other.writeOpenSSHv1PrivateKey(it, "pass-627".toByteArray()) }.toByteArray()
+            val otherBlob = other.publicKeyBlob; other.dispose()
+            check(id.parse(file, null) == null) { "encrypted key opened without passphrase" }
+            check(id.parse(file, "wrong") == null) { "wrong passphrase accepted" }
+            val imported = id.import(id.parse(file, "pass-627")!!)
+            check(imported.getBoolean("imported") && imported.getString("fingerprint") == sshFingerprint(otherBlob)) { "import" }
+            check(!targetContext.getSharedPreferences(store, 0).all.values.any { it.toString().contains("pass-627") }) { "passphrase stored" }
+        } finally { id.delete() }
+        check(!SshIdentity(targetContext, store).exists()) { "identity delete" }
+        // authorized_keys: appended once, newline kept, comments/options ignored for matching.
+        val l = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl herdr-pocket@test"
+        check(AuthorizedKeys.toAppend(null, l) == l + "\n") { "ak new" }
+        check(AuthorizedKeys.toAppend("ssh-rsa AAAAB x", l) == "\n" + l + "\n") { "ak newline" }
+        check(AuthorizedKeys.toAppend("from=\"10.0.0.1\" " + l.replace("herdr-pocket@test", "other") + "\n", l) == null) { "ak duplicate" }
+        check(AuthorizedKeys.toAppend("# " + l + "\n", l) != null) { "ak comment counted" }
+        // Device auth: a key device keeps no password, and the list says how it logs in.
+        val vault = SecureProfiles(targetContext)
+        val dev = vault.save(JSONObject().put("host", "fixture.invalid").put("user", "fixture").put("password", "pw-key").put("remember", true).put("auth", "key")).getString("id")
+        try {
+            check(vault.get(dev).getString("password") == "" && vault.get(dev).getString("auth") == "key") { "key device kept a password" }
+            check(vault.list().toString().contains("\"auth\":\"key\"")) { "auth not listed" }
+            try { vault.save(JSONObject().put("id", dev).put("host", "fixture.invalid").put("user", "fixture").put("auth", "telnet")); fail("bad auth accepted") } catch (_: IllegalArgumentException) { }
+        } finally { vault.delete(dev) }
+    }
+
     /** Shared text keeps a link's title; only other apps' content URIs are read (never file:// or ours). */
     private fun testShareIn() {
         val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
@@ -159,6 +224,54 @@ class SecureProfilesTest : Instrumentation() {
             awaitText("INTERRUPTED-OK")
             ssh.terminal("shellClose", args())
         } finally { ssh.close() }
+    }
+
+    /**
+     * Over a password session the public key is added to the fixture's ~/.ssh/authorized_keys (once),
+     * the key then logs in on its own, a silent reconnect needs no password, and a foreign key is refused.
+     */
+    private fun testKeyLogin() {
+        val endpoint = Endpoint("10.0.2.2", 22222, "pocket-fixture")
+        PocketCore.init(targetContext)
+        if (!PocketCore.identity.exists()) PocketCore.identity.create()
+        val line = PocketCore.identity.publicLine()!!
+        val ssh = SshTransport()
+        try {
+            ssh.connect(endpoint, "pocket-fixture-password", fixturePin)
+            ssh.installAuthorizedKey(line)
+            check(!ssh.installAuthorizedKey(line)) { "authorized_keys line added twice" }
+            val key = PocketCore.identity.material()
+            try { ssh.probeKey(endpoint, fixturePin, key) } finally { key.wipe() }
+        } finally { ssh.close() }
+        // A key the computer does not know is refused with a clear code.
+        val stranger = SshIdentity(targetContext, "test_identity")
+        stranger.create(replace = true)
+        try {
+            val key = stranger.material()
+            var code = ""
+            try { SshTransport().probeKey(endpoint, fixturePin, key) } catch (e: Exception) { code = ConnectErrors.connect(e, endpoint, usingKey = true).code } finally { key.wipe() }
+            check(code == "key_rejected") { "Unknown key not refused: $code" }
+        } finally { stranger.delete() }
+        // Key device: connects without a password and reconnects silently after a drop.
+        val pinKey = PocketCore.pinId(endpoint)
+        val previousPin = PocketCore.pins.getString(pinKey, null)
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+        PocketCore.listener = { type, _ -> events.add(type) }
+        val id = PocketCore.vault.save(JSONObject().put("name", "fixture-key").put("host", endpoint.host).put("port", endpoint.port)
+            .put("user", endpoint.user).put("auth", "key")).getString("id")
+        try {
+            PocketCore.pins.edit().putString(pinKey, fixturePin).commit()
+            PocketCore.connect(PocketCore.vault.get(id), "") {}
+            PocketCore.transport.install(PocketCore.bridge)
+            check(PocketCore.request(JSONObject().put("op", "hello")).getInt("protocol") == 1)
+            PocketCore.transport.simulateDrop()
+            check(PocketCore.request(JSONObject().put("op", "hello")).getInt("protocol") == 1) { "No key reconnect" }
+            check(events == listOf("reconnecting", "reconnected")) { "Unexpected events $events" }
+        } finally {
+            PocketCore.disconnect(); PocketCore.listener = null
+            PocketCore.vault.delete(id)
+            PocketCore.pins.edit().apply { if (previousPin == null) remove(pinKey) else putString(pinKey, previousPin) }.commit()
+        }
     }
 
     private fun testSilentReconnect() {

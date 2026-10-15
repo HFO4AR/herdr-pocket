@@ -38,4 +38,9 @@ async function demoRequest(op,r){
   return{record:rec,messages,children:demoRecords.filter(x=>x.parent===rec.thread),before:r.before!==undefined?0:10,has_more:r.before===undefined&&rec.id==='demo-root'};}
  if(op==='read')return{menu:r.target==='demo:3'?demoMenu:undefined,text:r.target==='demo:3'?'  Would you like to run the following command?\n\n  $ rm -rf dist .cache\n\n› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n\n  Press enter to confirm or esc to cancel':'$ python3 -m unittest discover -s tests -v\nRan 24 tests\nOK\n\n离线演示，不是真实终端。'};
  if(op==='prompt'||op==='key'||op==='answer')return{sent:false};
+ if(op==='glance'){const at=new Date(Date.now()-4*60000).toISOString(),p={
+  'demo-codex':{reply:{text:'移动端聊天改好了：历史、子 Agent 和命令都能看到，测试全过。',current:true,at},turn:{tools:12,files:5,failed:0},at},
+  'demo-claude':{activity:{kind:'tool',verb:'run',text:'python3 -m unittest discover -s tests',open:true,at},at},
+  'demo-review':{activity:{kind:'tool',verb:'run',text:'rm -rf dist .cache',open:true,at},at}};
+  const previews={};for(const it of r.items||[]){const id=String(it.key).split('/').pop();if(p[id])previews[it.key]=p[id];}return{previews};}
  throw Error('演示不支持此操作');}

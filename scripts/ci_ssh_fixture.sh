@@ -15,6 +15,8 @@ ListenAddress 127.0.0.1
 HostKey $fixture_dir/host_key
 PidFile $fixture_dir/sshd.pid
 PasswordAuthentication yes
+# Key login is tested too: the app installs its public key over the password session (StrictModes stays on).
+PubkeyAuthentication yes
 KbdInteractiveAuthentication no
 PermitRootLogin no
 AllowUsers pocket-fixture

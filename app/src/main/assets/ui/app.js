@@ -87,7 +87,8 @@ function since(at,fmt='dur',prefix=''){const n=el('span','since',prefix+sinceTex
 // unread dot until you open them (or start them again from the computer).
 function agentKey(a){return S.session+'/'+a.identity;}
 function statusSince(a){return a?S.since.get(agentKey(a))?.at||null:null;}
-function lastActivity(a){const at=statusSince(a);if(at)return at;const m=Number(a.history_ref?.record?.modified);return m?m*1000:0;}
+// Newest of: the state change seen here, the transcript's last entry (glance), the record's mtime.
+function lastActivity(a){const at=statusSince(a)||0,g=typeof glanceAt==='function'?glanceAt(a):0;if(at||g)return Math.max(at,g);const m=Number(a.history_ref?.record?.modified);return m?m*1000:0;}
 function viewingKey(){return S.chat?.agent&&!S.chat.stale?agentKey(S.chat.agent):'';}
 function noteStatus(list){
  const viewing=viewingKey(),now=Date.now();
@@ -148,44 +149,50 @@ function agentRow(a){
  const k=agentKey(a),unread=S.unread.has(k),tone=stateTone(a),st=a.agent_status;
  const n=btn('','card-button agent-row tone-'+tone+(unread?' unread':''),()=>openAgent(a));
  const text=el('div','grow');text.append(el('div','card-title',titleOf(a)));
- // The avatar already says Claude / Codex; the meta line is where it runs.
- const meta=el('div','card-meta');const project=projectOf(a);meta.append(el('span','project',project||providerName(a.agent)));
+ // The avatar already says Claude / Codex; the meta line is where it runs, then a one-line
+ // preview (glance.js): the current step, the question waiting for you, or the last reply.
+ const meta=el('div','card-meta');meta.dataset.glance=k;const project=projectOf(a);meta.append(el('span','project',project||providerName(a.agent)));
  if(closeIsCh(a))meta.append(el('span','tag remote-tag','远端'));
  const ref=a.history_ref;if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(el('span','sep warn','历史未关联'));queueBadge(meta,a);
+ const preview=glancePreview(a);if(preview){meta.append(preview);n.classList.add('has-glance');}
  text.append(meta);
  const side=el('div','row-side');const at=statusSince(a);
- if(st==='blocked'||st==='working'){side.append(el('span','badge '+tone,stateLabel(a)));if(at)side.append(since(at,'ago'));}
- else{const last=lastActivity(a);side.append(el('span','row-time',last?(at?ago(Date.now()-at)+'前':relative(last/1000)).replace('刚刚前','刚刚'):''));
+ // The group header, the avatar dot and the tint already say 执行中 / 等你确认: the side keeps
+ // just how long, so the preview gets the width.
+ if(st==='blocked'||st==='working'){const t=at?since(at,'ago'):el('span','',rowTimeText(a));t.classList.add('row-time','state-time','t-'+tone);side.append(t);t.title=stateLabel(a);}
+ else{side.append(el('span','row-time',rowTimeText(a)));
   if(unread){const d=el('span','unread-dot');d.title='做完了，还没看';side.append(d,el('span','sr-only','有新进展'));}
   else if(st==='done')side.append(el('span','row-state','已完成'));}
  n.append(avatar(a.agent,tone),text,side);closeHold(n,()=>agentActions(a));
  return closeSwipe(n,[['关闭','x','danger',()=>closeSession(a)],['更多','more','',()=>agentActions(a)]]);}
+function rowTimeText(a){const at=statusSince(a),last=lastActivity(a);if(!last)return '';return (at&&at>=last?ago(Date.now()-at)+'前':relative(last/1000)).replace('刚刚前','刚刚');}
 // Within a group: unseen results first, then whatever changed most recently.
 function sortAgents(items){return items.map((a,i)=>({a,i,u:S.unread.has(agentKey(a))?1:0,t:lastActivity(a)})).sort((x,y)=>y.u-x.u||y.t-x.t||x.i-y.i).map(x=>x.a);}
 function liveProjects(){const m=new Map();for(const a of S.agents){const p=projectOf(a)||'其他';m.set(p,(m.get(p)||0)+1);}return [...m].sort((x,y)=>y[1]-x[1]||x[0].localeCompare(y[0]));}
 function liveMatch(a,q){return !q||(titleOf(a)+' '+providerName(a.agent)+' '+projectOf(a)+' '+(a.foreground_cwd||a.cwd||'')).toLowerCase().includes(q);}
 // A filter chip whose count is visual only, so its accessible name stays the plain label.
 function chip(label,count,on,fn){const b=btn(label,'pill chip'+(on?' active':''),fn);b.setAttribute('aria-pressed',String(!!on));if(count!==undefined&&count!==''){const c=el('span','chip-count',String(count));c.setAttribute('aria-hidden','true');b.append(c);}return b;}
-// "22 个在线 · 2 个等你确认 …… 12 秒前更新": what needs you first, and how fresh the list is.
-function liveStatus(main){
- const line=el('div','list-status');const facts=el('span','grow list-facts');
+// Left of the toolbar: "22 个在线 · 2 个有新进展" over "12 秒前更新" — what needs you, how fresh.
+function liveStatus(){
+ const box=el('div','grow live-status');const facts=el('span','list-facts');
  const unread=S.agents.filter(a=>S.unread.has(agentKey(a))).length;
- facts.append(el('span','',S.agents.length+' 个在线'));
+ facts.append(el('span','fact-count',S.agents.length+' 个在线'));
  if(unread)facts.append(el('span','sep fact-new',unread+' 个有新进展'));
- line.append(facts);
- if(S.fromCache)line.append(el('span','list-fresh cache-note',(S.device?'上次读取':'正在连接 · 显示上次读取的列表')+' · '+cacheAge(S.fromCache)));
- else if(S.liveLoading)line.append(el('span','list-fresh','正在刷新…'));
- else if(S.liveAt){const f=el('span','list-fresh');f.append(since(S.liveAt,'upd'));line.append(f);}
- main.append(line);}
+ box.append(facts);
+ if(S.fromCache)box.append(el('span','list-fresh cache-note',(S.device?'上次读取':'正在连接 · 显示上次读取的列表')+' · '+cacheAge(S.fromCache)));
+ else if(S.liveLoading)box.append(el('span','list-fresh','正在刷新…'));
+ else if(S.liveAt){const f=el('span','list-fresh');f.append(since(S.liveAt,'upd'));box.append(f);}
+ return box;}
 function livePage(main){
  if(!requireDevice(main))return;
  const actions=el('div','row list-actions');
  if(S.sessions.length>1){const s=btn('','pill session-pill',chooseSession,'folder');s.append(el('span','truncate',S.session||'选择会话'),icon('down'));s.setAttribute('aria-label','切换 Herdr 会话 · 当前 '+(S.session||'未选'));actions.append(s);}
- actions.append(el('span','grow'),ib('refresh','刷新会话',loadLive));if(S.device&&S.session)actions.append(createButton());
+ const counts=S.agents.length&&!S.liveError&&!(S.liveLoading&&!S.agents.length);
+ actions.append(counts?liveStatus():el('span','grow'),ib('refresh','刷新会话',loadLive));if(S.device&&S.session)actions.append(createButton());
  main.append(actions);
  if(S.liveLoading&&!S.agents.length){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并关联历史记录…');skeleton(main,3);return;}
  if(S.liveError){empty(main,'会话读取失败',S.liveError,btn('重新读取','primary',loadLive));return;}
- if(S.agents.length)liveStatus(main);
+ if(S.agents.length)glanceKick();
  const projects=liveProjects();if(S.liveProject&&!projects.some(p=>p[0]===S.liveProject))S.liveProject='';
  if(S.agents.length>8)main.append(searchBox('搜索标题、项目或 Agent',q=>{S.search=q;draw();},S.search));
  if(projects.length>1&&S.agents.length>5){const row=el('div','tabs chips');row.setAttribute('aria-label','按项目筛选');
@@ -213,7 +220,7 @@ async function loadLive(){
  if(!S.device)return;const epoch=++S.epoch;S.liveLoading=S.agents.length?'agents':'sessions';S.liveError='';if(!S.agents.length)cacheShowLive();if(S.tab==='live'&&!S.chat)render();
  try{const r=await remote('sessions');if(epoch!==S.epoch)return;S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];S.fromCache=false;return;}
   S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
-  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();if(S.pendingPane){S.liveLoading=false;openPending();return;}}
+  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();glanceRefresh(true);if(S.pendingPane){S.liveLoading=false;openPending();return;}}
  catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
  finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
 // Lightweight status refresh: Herdr state only, keeps resolved history refs.
@@ -518,7 +525,7 @@ setInterval(()=>{
  if(!S.active||S.demo||!S.device)return;tick++;
  const busy=S.chat?.agent&&!S.chat.stale&&['working','blocked'].includes(S.chat.agent.agent_status);
  if(S.chat){if(!S.paused&&!S.polling&&S.chatMode!=='terminal'&&historyDue(busy,tick))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);refreshStatus();}
- else if(S.tab==='live'&&tick%3===0)refreshStatus();
+ else if(S.tab==='live'&&tick%3===0)refreshStatus().then(()=>glanceRefresh());
 },2500);
 
 async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;settingsLoad().then(updateAutoCheck);if(r.connected&&!S.device){S.device=r.connected;setTab('live');return;}render();}catch(e){error(e);}}
