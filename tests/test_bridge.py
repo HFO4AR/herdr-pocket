@@ -33,6 +33,14 @@ class BridgeTests(unittest.TestCase):
                     identity=bridge.identity(self.agent), text="你好; $(touch /tmp/never)",
                     id="12345678-1234-1234-1234-123456789012", **extra)
 
+    def test_status_is_cheap_and_keeps_identity(self):
+        result = bridge.handle({"v": 1, "op": "status", "session": "default"})
+        self.assertEqual(result["agents"][0]["identity"], bridge.identity(self.agent))
+        self.assertEqual(result["agents"][0]["agent_status"], "idle")
+        self.assertNotIn("history_ref", result["agents"][0])
+        # Only the Herdr list call: no process walk or transcript scan.
+        self.assertFalse(any("process-info" in c for c in self.commands))
+
     def test_sessions_only_exposes_public_fields(self):
         self.assertEqual(bridge.handle({"v": 1, "op": "sessions"}),
                          {"sessions": [{"name": "default", "running": True, "default": None}]})

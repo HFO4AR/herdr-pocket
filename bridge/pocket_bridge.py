@@ -15,7 +15,7 @@ import stat as stat_module
 from urllib.parse import quote as uri_quote
 from contextlib import closing
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 LIMIT = 65536
 
 
@@ -865,9 +865,14 @@ def handle(request, state_dir=None):
         if op == "paneRead":
             return call(prefix + ["pane", "read", target, "--source", "recent-unwrapped", "--lines", "400"])
         return mutate(request, prefix, pane, state_dir or Path.home() / ".local/state/herdr-pocket")
-    if op not in ("agents", "read", "prompt", "key"):
+    if op not in ("agents", "status", "read", "prompt", "key"):
         raise BridgeError("Unknown operation")
     prefix = select_session(request)
+    if op == "status":
+        # Cheap poll: Herdr state only, no process walk or history resolution.
+        fields = ("pane_id", "agent", "agent_status", "agent_session", "terminal_id", "terminal_title",
+                  "terminal_title_stripped", "title", "cwd", "foreground_cwd", "workspace_id", "tab_id", "identity")
+        return {"agents": [{k: a.get(k) for k in fields} for a in agents(prefix)]}
     found = agents(prefix, include_history=op == "agents")
     if op == "agents":
         return {"agents": found}

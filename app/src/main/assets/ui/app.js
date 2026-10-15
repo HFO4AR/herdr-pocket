@@ -1,88 +1,433 @@
 'use strict';
-const paths={chat:'M4 4h16v12H8l-4 4V4z',history:'M3 12a9 9 0 1 0 3-6M3 3v6h6M12 7v5l3 2',device:'M4 4h16v12H4zM8 20h8M12 16v4',account:'M20 21v-2a7 7 0 0 0-14 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',plus:'M12 5v14M5 12h14',back:'M15 5l-7 7 7 7',close:'M6 6l12 12M18 6L6 18',search:'M21 21l-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16',chevron:'M9 5l7 7-7 7',send:'M12 19V5M5 12l7-7 7 7',more:'M5 12h.01M12 12h.01M19 12h.01',terminal:'M4 6l6 6-6 6M12 18h8',branch:'M6 3v12a4 4 0 0 0 8 0V9M10 9l4-4 4 4',refresh:'M20 7a8 8 0 1 0 1 7M20 3v5h-5',lock:'M5 10h14v11H5zM8 10V6a4 4 0 0 1 8 0v4',check:'M4 12l5 5L20 6',edit:'M16 3l5 5-12 12H4v-5z',folder:'M3 6h7l2 2h9v12H3z',pause:'M8 5v14M16 5v14'};
+// Herdr Pocket UI. Plain DOM, no innerHTML: every remote string is inserted as text.
+// terminals.js shares the helpers and state declared here (S, el, btn, ib, sheet, remote…).
+
+// ─── Icons & DOM helpers ────────────────────────────────────────────────────
+const paths={chat:'M4 4h16v12H8l-4 4V4z',history:'M3 12a9 9 0 1 0 3-6M3 3v6h6M12 7v5l3 2',device:'M4 4h16v12H4zM8 20h8M12 16v4',account:'M20 21v-2a7 7 0 0 0-14 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',plus:'M12 5v14M5 12h14',back:'M15 5l-7 7 7 7',close:'M6 6l12 12M18 6L6 18',search:'M21 21l-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16',chevron:'M9 5l7 7-7 7',down:'M6 9l6 6 6-6',send:'M12 19V5M5 12l7-7 7 7',more:'M5 12h.01M12 12h.01M19 12h.01',terminal:'M4 6l6 6-6 6M12 18h8',branch:'M6 3v12a4 4 0 0 0 8 0V9M10 9l4-4 4 4',refresh:'M20 7a8 8 0 1 0 1 7M20 3v5h-5',lock:'M5 10h14v11H5zM8 10V6a4 4 0 0 1 8 0v4',check:'M4 12l5 5L20 6',edit:'M16 3l5 5-12 12H4v-5z',folder:'M3 6h7l2 2h9v12H3z',pause:'M8 5v14M16 5v14',file:'M6 2h8l5 5v15H6zM14 2v5h5',pen:'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',globe:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18',tool:'M14 7a4 4 0 0 0 5 5l-8 8-4-4 8-8z',x:'M7 7l10 10M17 7L7 17',copy:'M9 9h11v11H9zM5 15V4h11',alert:'M12 3l10 18H2zM12 10v5M12 18h.01',stop:'M6 6h12v12H6z',plug:'M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4'};
 function icon(name){const n=document.createElementNS('http://www.w3.org/2000/svg','svg');n.setAttribute('viewBox','0 0 24 24');n.setAttribute('aria-hidden','true');const p=document.createElementNS(n.namespaceURI,'path');p.setAttribute('d',paths[name]||paths.chat);n.append(p);return n;}
 function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;}
 function btn(text,cls,fn,name){const n=el('button',cls);n.type='button';if(name)n.append(icon(name));if(text)n.append(document.createTextNode(text));n.onclick=fn;return n;}
-function ib(name,label,fn){const n=btn('', 'icon-btn',fn,name);n.setAttribute('aria-label',label);n.title=label;return n;}
+function ib(name,label,fn){const n=btn('','icon-btn',fn,name);n.setAttribute('aria-label',label);n.title=label;return n;}
+function uuid(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&3|8)).toString(16);});}
+
+// ─── Native bridge ──────────────────────────────────────────────────────────
 let seq=0;const pending=new Map();
 function rpc(op,args={},progress){return new Promise((resolve,reject)=>{const id='r'+(++seq);pending.set(id,{resolve,reject,progress});try{PocketNative.request(id,op,JSON.stringify(args));}catch(e){pending.delete(id);reject(e);}});}
 window.nativeResult=(id,r)=>{const p=pending.get(id);if(!p)return;pending.delete(id);r.ok?p.resolve(r.data):p.reject(new Error(r.error));};
 window.nativeProgress=(id,stage)=>{pending.get(id)?.progress?.(stage);};
-const S={tab:'devices',devices:[],device:null,demo:false,agents:[],session:'',sessions:[],records:[],next:null,total:0,chat:null,chatMode:'conversation',messages:[],children:[],before:0,more:false,drafts:new Map(),bindings:new Map(),epoch:0,active:true,polling:false,paused:false,loading:false,connecting:null,connectStage:'',connectError:'',liveLoading:false,liveError:'',chatStack:[],search:'',filter:'all',account:null};
-const app=document.getElementById('app'),overlay=document.getElementById('overlay');let toastTimer;
-function toast(text){const n=document.getElementById('toast');n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.classList.remove('show'),4500);}
+// Reassignable on purpose: offline tests wrap it to observe requests.
+let remote=(op,args={})=>S.demo?demoRequest(op,args):rpc('remote',{op,...args});
+
+// ─── State ──────────────────────────────────────────────────────────────────
+const S={tab:'devices',devices:[],device:null,demo:false,version:'',agents:[],session:'',sessions:[],records:[],next:null,total:0,
+ chat:null,chatMode:'conversation',messages:[],children:[],before:0,more:false,drafts:new Map(),bindings:new Map(),outbox:[],
+ epoch:0,active:true,polling:false,paused:false,loading:false,connecting:null,connectStage:'',connectError:'',liveLoading:false,liveError:'',
+ chatStack:[],search:'',filter:'all',account:null,activity:'',statusBusy:false,statusSupported:true};
+const app=document.getElementById('app'),overlay=document.getElementById('overlay');
+
+// ─── Feedback ───────────────────────────────────────────────────────────────
+let toastTimer;
+function toast(text){const n=document.getElementById('toast');n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.classList.remove('show'),4200);}
 function error(e){toast(e.message||String(e));}
-function sheet(title){overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);back.onclick=e=>{if(e.target===back)closeSheet();};overlay.append(back);return body;}
+async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const t=el('textarea');t.value=text;document.body.append(t);t.select();document.execCommand('copy');t.remove();}toast('已复制');}
+function sheet(title){overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);back.onclick=e=>{if(e.target===back)closeSheet();};overlay.append(back);return body;}
 function closeSheet(){overlay.replaceChildren();}
-function confirmAction(title,text,label,action){const box=sheet(title);box.append(el('p','muted',text));const row=el('div','sheet-actions');row.append(btn('取消','secondary',closeSheet),btn(label,'primary',()=>{closeSheet();action();}));box.append(row);}
-function avatar(kind){return el('div','avatar '+(kind||''),kind==='claude'?'Cl':kind==='codex'?'Cx':'H');}
-function stateLabel(a){return ({idle:'可对话',done:'已完成',working:'执行中',blocked:'等待确认'})[a.agent_status]||'状态未知';}
-function titleOf(a){return a.terminal_title_stripped||a.terminal_title||a.agent||'Agent';}
-function time(v){if(!v)return '';const d=new Date(typeof v==='number'?v*1000:v);return isNaN(d)?'':d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
+function confirmAction(title,text,label,action,danger){const box=sheet(title);box.append(el('p','muted',text));const row=el('div','sheet-actions');row.append(btn('取消','secondary',closeSheet),btn(label,'primary'+(danger?' danger-fill':''),()=>{closeSheet();action();}));box.append(row);}
+function menuItem(box,label,fn,name,detail){const b=btn('','menu-item',()=>{closeSheet();fn();},name);const t=el('span','grow');t.append(el('span','menu-label',label));if(detail)t.append(el('small','',detail));b.append(t);box.append(b);return b;}
+
+// ─── Formatting ─────────────────────────────────────────────────────────────
+const STATUS={working:['执行中','work'],blocked:['等你确认','alert'],idle:['空闲','ok'],done:['已完成','ok']};
+function stateLabel(a){return (STATUS[a?.agent_status]||['状态未知','muted'])[0];}
+function stateTone(a){return (STATUS[a?.agent_status]||['','muted'])[1];}
+function providerName(p){return p==='claude'?'Claude':p==='codex'?'Codex':'Agent';}
+function titleOf(a){return (a.terminal_title_stripped||a.terminal_title||a.title||a.agent||'Agent').replace(/^[✳⠀-⣿·•*]+\s*/,'').replace(/\s*\|\s*[^|]+$/,'')||'Agent';}
+function projectOf(a){const p=a.foreground_cwd||a.cwd||'';return p.split('/').filter(Boolean).pop()||'';}
+function toDate(v){if(!v)return null;const d=new Date(typeof v==='number'?v*1000:v);return isNaN(d)?null:d;}
+function time(v){const d=toDate(v);return d?d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'';}
+function clock(v){const d=toDate(v);return d?d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'';}
+function dayLabel(v){const d=toDate(v);if(!d)return '';const today=new Date();today.setHours(0,0,0,0);const diff=Math.round((today-new Date(d).setHours(0,0,0,0))/864e5);return diff===0?'今天':diff===1?'昨天':diff<7&&diff>0?['周日','周一','周二','周三','周四','周五','周六'][d.getDay()]:d.toLocaleDateString('zh-CN',{month:'long',day:'numeric'});}
+function relative(v){const d=toDate(v);if(!d)return '';const s=(Date.now()-d)/1000;if(s<60)return '刚刚';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400&&dayLabel(v)==='今天')return clock(v);return dayLabel(v)==='昨天'?'昨天 '+clock(v):time(v);}
+function avatar(kind,status){const n=el('div','avatar '+(kind||''),kind==='claude'?'Cl':kind==='codex'?'Cx':'');if(!kind)n.append(icon('device'));if(status)n.append(el('span','status-dot '+status));return n;}
 function draftKey(){return S.chat?.agent?S.session+'/'+S.chat.agent.identity:S.chat?.record?.id||'';}
-function remote(op,args={}){return S.demo?demoRequest(op,args):rpc('remote',{op,...args});}
-function setTab(tab){leaveTerminal();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='account'&&S.device)loadAccount();}
+
+// ─── Markdown (safe DOM, no HTML) ───────────────────────────────────────────
+function inline(text,parent){
+ const re=/(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\s][^*\n]*\*|\[[^\]\n]+\]\([^)\s]+\)|https?:\/\/[^\s)）]+)/g;let last=0,m;
+ while((m=re.exec(text))){if(m.index>last)parent.append(document.createTextNode(text.slice(last,m.index)));const t=m[0];
+  if(t[0]==='`')parent.append(el('code','',t.slice(1,-1)));
+  else if(t.startsWith('**')||t.startsWith('__'))inline(t.slice(2,-2),parent.appendChild(el('strong')));
+  else if(t[0]==='*')inline(t.slice(1,-1),parent.appendChild(el('em')));
+  else if(t[0]==='['){const i=t.indexOf('](');const a=el('span','md-link',t.slice(1,i));a.title=t.slice(i+2,-1);parent.append(a);}
+  else parent.append(el('span','md-link',t));
+  last=m.index+t.length;}
+ if(last<text.length)parent.append(document.createTextNode(text.slice(last)));return parent;}
+function codeBlock(code,lang){const box=el('div','code-block');const bar=el('div','code-bar');bar.append(el('span','',lang||'代码'));const c=btn('复制','code-copy',()=>copyText(code),'copy');bar.append(c);const pre=el('pre');pre.append(el('code','',code));box.append(bar,pre);return box;}
+function markdown(text){
+ const root=el('div','md');const lines=text.replace(/\r\n/g,'\n').split('\n');let i=0;
+ const isTable=k=>/^\s*\|.*\|\s*$/.test(lines[k]||'')&&/^\s*\|?\s*:?-{2,}/.test(lines[k+1]||'');
+ while(i<lines.length){const line=lines[i];
+  const fence=line.match(/^\s*(```+|~~~+)\s*([\w+#.-]*)/);
+  if(fence){const end=fence[1];const buf=[];i++;while(i<lines.length&&!lines[i].trim().startsWith(end))buf.push(lines[i++]);i++;root.append(codeBlock(buf.join('\n'),fence[2]));continue;}
+  if(!line.trim()){i++;continue;}
+  const h=line.match(/^(#{1,6})\s+(.*)/);if(h){root.append(inline(h[2],el('h'+Math.min(6,h[1].length+2),'md-h')));i++;continue;}
+  if(/^\s*([-*_])\s*\1\s*\1[\s\-*_]*$/.test(line)){root.append(el('hr'));i++;continue;}
+  if(isTable(i)){const row=s=>s.trim().replace(/^\||\|$/g,'').split('|').map(x=>x.trim());const wrap=el('div','table-wrap');const table=el('table');const head=el('tr');row(lines[i]).forEach(c=>head.append(inline(c,el('th'))));table.append(head);i+=2;while(i<lines.length&&/^\s*\|.*\|\s*$/.test(lines[i])){const tr=el('tr');row(lines[i]).forEach(c=>tr.append(inline(c,el('td'))));table.append(tr);i++;}wrap.append(table);root.append(wrap);continue;}
+  if(/^\s*>/.test(line)){const buf=[];while(i<lines.length&&/^\s*>/.test(lines[i]))buf.push(lines[i++].replace(/^\s*>\s?/,''));const q=el('blockquote');q.append(markdown(buf.join('\n')));root.append(q);continue;}
+  const item=/^(\s*)([-*+]|\d+[.)])\s+(.*)/;
+  if(item.test(line)){const ordered=/\d/.test(line.match(item)[2]);const list=el(ordered?'ol':'ul');const base=line.match(item)[1].length;
+   while(i<lines.length){const m=lines[i].match(item);if(m&&m[1].length<=base+1){const li=el('li');const task=m[3].match(/^\[([ xX])\]\s+(.*)/);if(task){li.className='task';li.append(el('span','box'+(task[1]===' '?'':' done'),task[1]===' '?'':'✓'));inline(task[2],li);}else inline(m[3],li);list.append(li);i++;}
+    else if(m||(lines[i].trim()&&/^\s{2,}/.test(lines[i]))){const last=list.lastElementChild;const sub=[];while(i<lines.length&&(lines[i].match(item)?.[1].length>base+1||(lines[i].trim()&&/^\s{2,}/.test(lines[i])&&!lines[i].match(item))))sub.push(lines[i++].replace(/^\s{2,4}/,''));if(last&&sub.length)last.append(markdown(sub.join('\n')));else break;}
+    else break;}
+   root.append(list);continue;}
+  const para=[];while(i<lines.length&&lines[i].trim()&&!/^\s*(```|~~~|#{1,6}\s|>|([-*+]|\d+[.)])\s)/.test(lines[i])&&!isTable(i))para.push(lines[i++]);
+  const p=el('p');para.forEach((t,k)=>{if(k)p.append(el('br'));inline(t,p);});root.append(p);}
+ return root;}
+// Kept for callers that expect a ready bubble.
+function richText(text){const b=el('div','bubble');b.append(markdown(text));return b;}
+
+// ─── App shell & navigation ─────────────────────────────────────────────────
+const TABS=[['live','chat','会话'],['history','history','历史'],['terminals','terminal','终端'],['devices','device','设备']];
+function setTab(tab){leaveTerminal();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();}
 function shell(){app.replaceChildren();const root=el('div','shell');app.append(root);if(S.demo)root.append(el('div','demo-banner','离线演示 · 示例数据，不连接电脑'));return root;}
-function header(root){const bar=el('header','topbar');const brand=el('div','brand');const mark=el('span','brandmark');mark.append(icon('chat'));brand.append(mark,document.createTextNode('Herdr Pocket'));const connection=el('div','connection');connection.append(el('span',S.loading?'spinner':S.device?'dot':'dot offline'),document.createTextNode(S.loading?'连接中':S.device?S.device.name:'未连接设备'));bar.append(brand,connection);root.append(bar);if(S.loading||S.connectError){const box=el('div','connection-status'+(S.connectError?' failed':''));box.setAttribute('role','status');if(S.loading)box.append(el('span','spinner'));const text=el('div','grow');text.append(el('strong','',S.connectError?'连接未完成':'正在连接 '+(S.connecting?.name||S.device?.name||'')),el('div','',S.connectError||S.connectStage));box.append(text);if(S.connectError&&S.connecting)box.append(btn('重试','secondary',()=>S.device?setupBridge():connectDevice(S.connecting)));root.append(box);}}
-function loadingCard(main,title,detail){const box=el('div','card loading-card');box.setAttribute('role','status');box.setAttribute('aria-live','polite');box.append(el('span','spinner'));const text=el('div');text.append(el('h2','',title),el('p','muted',detail));box.append(text);main.append(box);}
+function header(root){
+ const bar=el('header','topbar');const title=(TABS.find(t=>t[0]===S.tab)||[])[2]||'Herdr Pocket';bar.append(el('h1','',title));
+ const chip=btn('','device-chip',()=>setTab('devices'));chip.setAttribute('aria-label','当前设备');chip.append(el('span',S.loading?'spinner':S.device?'dot':'dot offline'),el('span','truncate',S.loading?'连接中':S.device?S.device.name:'未连接'));bar.append(chip);root.append(bar);
+ if(S.loading||S.connectError){const box=el('div','connection-status'+(S.connectError?' failed':''));box.setAttribute('role','status');if(S.loading)box.append(el('span','spinner'));else box.append(icon('alert'));const text=el('div','grow');text.append(el('strong','',S.connectError?'连接未完成':'正在连接 '+(S.connecting?.name||S.device?.name||'')),el('div','',S.connectError||S.connectStage));box.append(text);if(S.connectError&&S.connecting)box.append(btn('重试','secondary small',()=>S.device?setupBridge():connectDevice(S.connecting)));root.append(box);}
+}
+function pageHead(main,kicker,title,subtitle,action){const h=el('div','page-head');const t=el('p','grow',subtitle||'');h.append(t);if(action)h.append(action);main.append(h);}
+function loadingCard(main,title,detail){const box=el('div','loading-card');box.setAttribute('role','status');box.setAttribute('aria-live','polite');box.append(el('span','spinner'));const text=el('div');text.append(el('h2','',title),el('p','muted',detail));box.append(text);main.append(box);}
+function skeleton(main,rows=4){for(let i=0;i<rows;i++){const r=el('div','skeleton-row');r.append(el('div','sk-avatar'),el('div','sk-lines'));main.append(r);}}
+function empty(main,title,desc,action){const n=el('div','empty');const a=el('div','empty-icon');a.append(icon('chat'));n.append(a,el('h2','',title),el('p','',desc));if(action)n.append(action);main.append(n);}
+function render(){
+ if(S.chat){renderChat();return;}if(typeof T!=='undefined'&&T.view){renderTerminal();return;}
+ const root=shell();header(root);const main=el('main','main pane-enter');root.append(main);
+ if(S.tab==='live')livePage(main);else if(S.tab==='history')historyPage(main);else if(S.tab==='terminals')terminalsPage(main);else devicesPage(main);
+ const nav=el('nav','bottom-nav');nav.setAttribute('aria-label','主导航');
+ const waiting=S.agents.filter(a=>a.agent_status==='blocked').length;
+ TABS.forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waiting){const badge=el('span','nav-badge',String(waiting));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waiting+' 个 Agent 等你确认';}nav.append(n);});
+ root.append(nav);}
+function requireDevice(main){if(S.device)return true;if(S.loading){loadingCard(main,'连接正在进行','连接成功后会自动读取会话，请稍候。');return false;}empty(main,'先连接你的电脑','连接后，在线会话、历史记录和终端会出现在这里。',btn('选择设备','primary',()=>setTab('devices')));return false;}
+function searchBox(placeholder,change,value=''){const box=el('div','search');const input=el('input');input.type='search';input.placeholder=placeholder;input.value=value;input.setAttribute('aria-label',placeholder);input.oninput=()=>change(input.value);box.append(icon('search'),input);return box;}
 
-function pageHead(main,kicker,title,subtitle,action){const h=el('div','page-head');const t=el('div','grow');t.append(el('div','eyebrow',kicker),el('h1','',title),el('p','',subtitle));h.append(t);if(action)h.append(action);main.append(h);}
-function render(){if(S.chat){renderChat();return;}const root=shell();header(root);const main=el('main','main pane-enter');root.append(main);if(S.tab==='devices')devicesPage(main);if(S.tab==='live')livePage(main);if(S.tab==='history')historyPage(main);if(S.tab==='account')accountPage(main);if(S.tab==='terminals')terminalsPage(main);const nav=el('nav','bottom-nav');nav.setAttribute('aria-label','主导航');[['live','chat','会话'],['history','history','历史'],['terminals','terminal','终端'],['devices','device','设备'],['account','account','我的']].forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');nav.append(n);});root.append(nav);}
-function empty(main,title,desc,action){const n=el('div','empty');const a=el('div','avatar');a.append(icon('chat'));n.append(a,el('h2','',title),el('p','',desc));if(action)n.append(action);main.append(n);}
-function requireDevice(main){if(S.device)return true;if(S.loading){loadingCard(main,'连接正在进行','连接成功后会自动读取会话，请稍候。');return false;}empty(main,'先连接你的电脑','连接后，在线会话和历史记录会出现在这里。',btn('选择设备','primary',()=>setTab('devices')));return false;}
-function devicesPage(main){rpc("protect").catch(error);pageHead(main,'YOUR DEVICES','设备','保存连接，下次一点就能继续。',ib('plus','添加设备',()=>deviceForm()));if(S.devices.length===0){const n=el('div','card');n.append(el('h2','','让工作随身而行'),el('p','muted','添加运行 Herdr 的电脑，支持局域网和 Sakura Frp TCP 入口。'));const b=btn('添加第一台设备','primary',()=>deviceForm());b.style.marginTop='20px';n.append(b);main.append(n);}for(const d of S.devices){const card=el('section','card');const row=el('div','row');const av=el('div','avatar');av.append(icon('device'));const text=el('div','grow');text.append(el('div','card-title',d.name),el('div','card-meta',d.user+' @ '+d.host+':'+d.port));row.append(av,text,ib('edit','编辑 '+d.name,()=>deviceForm(d)));card.append(row);const line=el('div','device-line');line.append(icon('lock'),document.createTextNode(d.remember?'密码已加密保存':'连接时输入密码'));card.append(line);const actions=el('div','device-actions');const connect=btn(S.loading&&S.connecting?.id===d.id?'正在连接…':S.device?.id===d.id?'已连接':'连接设备','primary',()=>connectDevice(d));connect.disabled=S.loading;actions.append(connect,btn('删除','secondary danger',()=>confirmAction('删除设备？','将移除这台设备及其保存的密码。','删除',async()=>{try{S.devices=(await rpc('deleteDevice',{id:d.id})).devices;render();}catch(e){error(e);}})));card.append(actions);main.append(card);}main.append(btn('体验聊天演示','secondary',startDemo));const info=el('p','muted','连接资料和勾选保存的密码使用 Android Keystore 加密，仅保存在本机。');info.style.marginTop='18px';main.append(info);}
+// ─── Devices & connection ───────────────────────────────────────────────────
+function devicesPage(main){
+ rpc('protect').catch(error);
+ if(S.device)main.append(connectionCard());
+ const head=el('div','section-head');head.append(el('span','section-label','保存的设备'),ib('plus','添加设备',()=>deviceForm()));main.append(head);
+ if(!S.devices.length){const n=el('div','card intro');n.append(el('h2','','添加运行 Herdr 的电脑'),el('p','muted','填 SSH 地址即可，局域网、Tailscale、Sakura Frp 的 TCP 入口都可以。'));const b=btn('添加第一台设备','primary',()=>deviceForm());n.append(b);main.append(n);}
+ for(const d of S.devices){const current=S.device?.id===d.id&&!S.demo;const card=el('section','card device-card'+(current?' current':''));const row=el('div','row');row.append(avatar('',current?'ok':''));const text=el('div','grow');text.append(el('div','card-title',d.name),el('div','card-meta truncate',d.user+' @ '+d.host+':'+d.port));row.append(text,ib('edit','编辑 '+d.name,()=>deviceForm(d)));card.append(row);
+  const line=el('div','device-line');line.append(icon('lock'),document.createTextNode(d.remember?'密码已加密保存':'连接时输入密码'));card.append(line);
+  const actions=el('div','device-actions');const busy=S.loading&&S.connecting?.id===d.id;const connect=btn(busy?'正在连接…':current?'已连接':'连接设备',current?'secondary':'primary',()=>connectDevice(d));connect.disabled=S.loading;actions.append(connect,btn('删除','secondary danger',()=>confirmAction('删除设备？','会移除这台设备及其保存的密码。','删除',async()=>{try{S.devices=(await rpc('deleteDevice',{id:d.id})).devices;render();}catch(e){error(e);}},true)));card.append(actions);main.append(card);}
+ const demo=btn('体验聊天演示','secondary wide',startDemo);main.append(demo);
+ main.append(el('p','fine','设备资料和勾选保存的密码用 Android Keystore 加密，只存在这台手机上。'));}
+function connectionCard(){
+ const card=el('section','card account-card');const top=el('div','row');top.append(avatar('', 'ok'));const t=el('div','grow');t.append(el('div','card-title',S.device.name),el('div','card-meta',S.demo?'离线演示':'SSH 已连接'));top.append(t);card.append(top);
+ [['SSH 用户',S.account?.ssh_user||S.device.user],['主机地址',S.device.host],['端口',String(S.device.port)],['电脑主机名',S.account?.hostname||'读取中…'],['密码保存',S.device.remember?'已加密保存':'未保存'],['应用版本',S.version||'—']].forEach(([k,v])=>{const n=el('div','setting-row');n.append(el('span','',k),el('span','',v));card.append(n);});
+ const actions=el('div','device-actions');actions.append(btn('更新桥接程序','secondary',setupBridge),btn('断开连接','secondary danger',()=>confirmAction('断开当前设备？','电脑上的 Agent 会继续运行。','断开',()=>disconnect().catch(error),true)));card.append(actions);
+ card.append(el('p','fine','只显示 SSH 连接信息，不读取 Codex / Claude 的登录资料。'));return card;}
 function field(box,title,value='',type='text',placeholder=''){const label=el('label','',title);const input=el('input','field');input.type=type;input.value=value;input.placeholder=placeholder;input.autocomplete='off';input.setAttribute('aria-label',title);label.append(input);box.append(label);return input;}
-function deviceForm(d={}){rpc("protect").catch(error);const box=sheet(d.id?'编辑设备':'添加设备');const name=field(box,'设备名称',d.name||'','','例如：家里的电脑');const grid=el('div','form-grid');box.append(grid);const host=field(grid,'主机地址',d.host||'','text','域名或 IP');const port=field(grid,'端口',d.port||22,'number');const user=field(box,'SSH 用户名',d.user||'');const pass=field(box,'登录密码','','password',d.remember?'已保存；留空保留原密码':'输入 SSH 密码');const check=el('label','check');const remember=el('input');remember.type='checkbox';remember.checked=d.remember!==false;check.append(remember,document.createTextNode('记住密码 · 本机加密保存'));box.append(check);box.append(el('p','muted','更换主机或用户名时，请重新输入密码。'));const actions=el('div','sheet-actions');const save=btn('保存设备','primary',async()=>{save.disabled=true;try{const r=await rpc('saveDevice',{id:d.id||'',name:name.value,host:host.value,port:Number(port.value),user:user.value,password:pass.value,remember:remember.checked});pass.value='';S.devices=r.devices;closeSheet();render();toast('设备已保存');}catch(e){error(e);}finally{save.disabled=false;}});actions.append(btn('取消','secondary',closeSheet),save);box.append(actions);}
-function connectionPassword(d){const box=sheet('连接 '+d.name);const pass=field(box,'本次登录密码','','password');const label=el('label','check');const remember=el('input');remember.type='checkbox';remember.checked=true;remember.setAttribute('aria-label','记住本次登录密码');label.append(remember,document.createTextNode('记住密码 · 登录成功后加密保存'));box.append(label,el('p','muted','勾选后，下次点击这台设备即可连接，无需重新输入。'));const actions=el('div','sheet-actions');actions.append(btn('连接','primary',()=>{if(!pass.value){toast('请输入登录密码');return;}const value=pass.value,save=remember.checked;pass.value='';closeSheet();doConnect(d,value,save);}));box.append(actions);}
+function deviceForm(d={}){rpc('protect').catch(error);const box=sheet(d.id?'编辑设备':'添加设备');const name=field(box,'设备名称',d.name||'','','例如：家里的电脑');const grid=el('div','form-grid');box.append(grid);const host=field(grid,'主机地址',d.host||'','text','域名或 IP');const port=field(grid,'端口',d.port||22,'number');const user=field(box,'SSH 用户名',d.user||'');const pass=field(box,'登录密码','','password',d.remember?'已保存；留空保留原密码':'输入 SSH 密码');const check=el('label','check');const remember=el('input');remember.type='checkbox';remember.checked=d.remember!==false;check.append(remember,document.createTextNode('记住密码 · 本机加密保存'));box.append(check);box.append(el('p','fine','更换主机或用户名后，需要重新输入密码。'));const actions=el('div','sheet-actions');const save=btn('保存设备','primary',async()=>{save.disabled=true;try{const r=await rpc('saveDevice',{id:d.id||'',name:name.value,host:host.value,port:Number(port.value),user:user.value,password:pass.value,remember:remember.checked});pass.value='';S.devices=r.devices;closeSheet();render();toast('设备已保存');}catch(e){error(e);}finally{save.disabled=false;}});actions.append(btn('取消','secondary',closeSheet),save);box.append(actions);}
+function connectionPassword(d){const box=sheet('连接 '+d.name);const pass=field(box,'本次登录密码','','password');const label=el('label','check');const remember=el('input');remember.type='checkbox';remember.checked=true;remember.setAttribute('aria-label','记住本次登录密码');label.append(remember,document.createTextNode('记住密码 · 登录成功后加密保存'));box.append(label,el('p','fine','勾选后，下次点这台设备就能直接连接。'));const actions=el('div','sheet-actions');const go=()=>{if(!pass.value){toast('请输入登录密码');return;}const value=pass.value,save=remember.checked;pass.value='';closeSheet();doConnect(d,value,save);};pass.onkeydown=e=>{if(e.key==='Enter')go();};actions.append(btn('连接','primary',go));box.append(actions);setTimeout(()=>pass.focus(),50);}
 function connectDevice(d){if(S.loading){toast('正在连接，请稍候');return;}if(S.device?.id===d.id&&!S.demo){setTab('live');return;}if(!d.remember)connectionPassword(d);else doConnect(d);}
+async function doConnect(d,password='',remember){
+ if(S.loading)return;
+ if(S.device&&!S.demo&&S.device.id!==d.id){confirmAction('切换设备？','当前 SSH 连接会断开；未发送的草稿只在本次运行中保留。','切换',async()=>{await disconnect(false);doConnect(d,password,remember);});return;}
+ S.loading=true;S.connecting=d;S.connectError='';S.connectStage='正在建立 SSH 连接并验证身份…';render();
+ try{if(S.demo){S.demo=false;S.device=null;}
+  const r=await rpc('connect',{id:d.id,password,...(remember===undefined?{}:{remember})},stage=>{S.connectStage=stage;render();});
+  S.loading=false;clearTerminals();S.device=r.device;if(r.devices)S.devices=r.devices;S.account=null;S.records=[];S.statusSupported=true;
+  if(r.ready)setTab('live');else{render();setupBridge();}
+ }catch(e){S.loading=false;S.device=null;S.connectError=e.message||String(e);render();if(/auth fail|authentication/i.test(e.message))connectionPassword(d);}
+ finally{S.loading=false;}}
+function setupBridge(){confirmAction('安装配套桥接程序','把随 App 分发的开源程序安装到当前 SSH 用户的 ~/.herdr-pocket。历史功能只读 ~/.codex/sessions 和 ~/.claude/projects，不读服务商登录资料。需要 Python 3.9+。','安装并进入',async()=>{if(S.loading)return;S.loading=true;S.connectError='';S.connectStage='SSH 已连接，正在安装与校验桥接程序…';render();try{await rpc('install');S.loading=false;S.statusSupported=true;setTab('live');}catch(e){S.loading=false;S.connectError=e.message;render();}});}
+async function disconnect(show=true){await rpc('disconnect');clearTerminals();Object.assign(S,{device:null,loading:false,connecting:null,connectError:'',liveLoading:false,liveError:'',demo:false,records:[],agents:[],account:null,chat:null,outbox:[],activity:''});S.drafts.clear();S.bindings.clear();S.epoch++;if(show)setTab('devices');}
+async function startDemo(){if(S.loading){toast('正在连接，请稍候');return;}S.connectError='';if(S.device&&!S.demo){confirmAction('断开并体验演示？','演示不连接任何电脑，也不会给 Agent 发消息。','进入演示',async()=>{await disconnect(false);startDemo();});return;}try{await rpc('demo');S.demo=true;S.device={id:'demo',name:'演示工作站',user:'demo',host:'workstation.local',port:22};S.account={ssh_user:'demo',hostname:'workstation'};S.session='demo';S.sessions=['demo'];S.agents=demoAgents;S.records=demoRecords;S.tab='live';S.chat=null;render();}catch(e){error(e);}}
+async function loadAccount(){const epoch=S.epoch;try{const a=await remote('account');if(epoch!==S.epoch)return;S.account=a;if(S.tab==='devices'&&!S.chat)render();}catch(e){if(epoch===S.epoch)error(e);}}
 
-async function doConnect(d,password='',remember){if(S.loading)return;if(S.device&&!S.demo&&S.device.id!==d.id){confirmAction('切换设备？','当前 SSH 连接会断开；未发送草稿只在本次应用进程中保留。','切换',async()=>{await disconnect(false);doConnect(d,password,remember);});return;}S.loading=true;S.connecting=d;S.connectError='';S.connectStage='正在建立 SSH 连接并验证身份…';render();try{if(S.demo){S.demo=false;S.device=null;}const r=await rpc('connect',{id:d.id,password,...(remember===undefined?{}:{remember})},stage=>{S.connectStage=stage;render();});S.loading=false;clearTerminals();S.device=r.device;if(r.devices)S.devices=r.devices;S.account=null;S.records=[];if(r.ready){setTab('live');}else{render();setupBridge();}}catch(e){S.loading=false;S.device=null;S.connectError=e.message||String(e);render();if(/auth fail|authentication/i.test(e.message))connectionPassword(d);}finally{S.loading=false;}}
-function setupBridge(){confirmAction('安装配套桥接程序','将随 App 分发的开源程序安装到当前 SSH 用户的 ~/.herdr-pocket。历史功能只读取 ~/.codex/sessions 和 ~/.claude/projects；不读取服务商登录资料。需要 Python 3.9+。','安装并进入',async()=>{if(S.loading)return;S.loading=true;S.connectError='';S.connectStage='SSH 已连接，正在安装与校验桥接程序…';render();try{await rpc('install');S.loading=false;setTab('live');}catch(e){S.loading=false;S.connectError=e.message;render();}});}
-async function disconnect(show=true){await rpc('disconnect');clearTerminals();S.device=null;S.loading=false;S.connecting=null;S.connectError='';S.liveLoading=false;S.liveError='';S.demo=false;S.records=[];S.agents=[];S.account=null;S.chat=null;S.drafts.clear();S.bindings.clear();S.epoch++;if(show)setTab('devices');}
-async function startDemo(){if(S.loading){toast('正在连接，请稍候');return;}S.connectError='';if(S.device&&!S.demo){confirmAction('断开并体验演示？','演示不会连接任何主机，也不会给 Agent 发送消息。','进入演示',async()=>{await disconnect(false);startDemo();});return;}try{await rpc('demo');S.demo=true;S.device={id:'demo',name:'演示工作站',user:'demo',host:'workstation.local',port:22};S.session='demo';S.sessions=['demo'];S.agents=demoAgents;S.records=demoRecords;S.tab='live';S.chat=null;render();}catch(e){error(e);}}
-function livePage(main){pageHead(main,'WORKSPACE','继续对话','你的 Agent，一起带在身边。',ib('refresh','刷新会话',loadLive));if(!requireDevice(main))return;if(S.liveLoading){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并同步本机和远端历史，首次读取可能需要几十秒。');return;}if(S.liveError){empty(main,'会话读取失败',S.liveError,btn('重新读取','primary',loadLive));return;}const stats=el('div','status-grid');[[S.agents.length,'在线会话'],[S.agents.filter(a=>a.agent_status==='working').length,'执行中']].forEach(([v,k])=>{const n=el('div','stat');n.append(el('small','',k),el('strong','',String(v)));stats.append(n);});main.append(stats);const switcher=btn('Herdr 会话 · '+(S.session||'选择'),'pill',()=>{const box=sheet('切换 Herdr 会话');S.sessions.forEach(name=>box.append(btn(name,'card card-button',()=>{S.session=name;closeSheet();loadLive();})));});main.append(switcher);const search=searchBox('搜索在线 Agent',q=>{S.search=q;draw();});main.append(search);const list=el('div');main.append(list);function draw(){list.replaceChildren();const matches=S.agents.filter(a=>(titleOf(a)+' '+a.agent).toLowerCase().includes(S.search.toLowerCase()));if(!matches.length)empty(list,'暂时没有会话','在电脑上启动 Agent，或尝试刷新。');for(const a of matches){const n=btn('','card card-button',()=>openAgent(a));const text=el('div','grow');text.append(el('div','card-title',titleOf(a)));const meta=el('div','card-meta');meta.append(el('span','',a.agent.toUpperCase()),el('span','badge'+(a.agent_status==='working'?' work':''),stateLabel(a)));text.append(meta);n.append(avatar(a.agent),text,icon('chevron'));list.append(n);}}draw();}
-function searchBox(placeholder,change){const box=el('div','search');const input=el('input');input.placeholder=placeholder;input.setAttribute('aria-label',placeholder);input.oninput=()=>change(input.value);box.append(icon('search'),input);return box;}
-async function loadLive(){if(!S.device)return;const epoch=++S.epoch;S.liveLoading='sessions';S.liveError='';if(S.tab==='live'&&!S.chat)render();try{const r=await remote('sessions');if(epoch!==S.epoch)return;S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];return;}S.liveLoading='agents';if(S.tab==='live'&&!S.chat)render();const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;}catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
+// ─── Live agents ────────────────────────────────────────────────────────────
+function agentRow(a){
+ const n=btn('','card-button agent-row tone-'+stateTone(a),()=>openAgent(a));
+ const text=el('div','grow');text.append(el('div','card-title',titleOf(a)));
+ const meta=el('div','card-meta');meta.append(el('span','',providerName(a.agent)));const project=projectOf(a);if(project)meta.append(el('span','sep',project));
+ const ref=a.history_ref;if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(el('span','sep warn','历史未关联'));
+ text.append(meta);n.append(avatar(a.agent,stateTone(a)),text,el('span','badge '+stateTone(a),stateLabel(a)));return n;}
+function livePage(main){
+ const actions=el('div','row');if(S.sessions.length>1)actions.append(btn(S.session||'选择会话','pill',chooseSession,'folder'));actions.append(ib('refresh','刷新会话',loadLive));
+ pageHead(main,'','会话',S.device?(S.agents.length?S.agents.length+' 个 Agent 在线':''):'',actions);
+ if(!requireDevice(main))return;
+ if(S.liveLoading&&!S.agents.length){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并关联历史记录…');skeleton(main,3);return;}
+ if(S.liveError){empty(main,'会话读取失败',S.liveError,btn('重新读取','primary',loadLive));return;}
+ if(S.agents.length>6)main.append(searchBox('搜索 Agent 或项目',q=>{S.search=q;draw();},S.search));
+ const list=el('div','agent-list');main.append(list);
+ function draw(){list.replaceChildren();const q=S.search.toLowerCase();const matches=S.agents.filter(a=>(titleOf(a)+' '+a.agent+' '+projectOf(a)).toLowerCase().includes(q));
+  if(!matches.length){empty(list,'暂时没有会话',S.search?'没有匹配的 Agent。':'在电脑的 Herdr 里启动 Codex 或 Claude，再刷新。');return;}
+  const groups=[['等你确认',a=>a.agent_status==='blocked'],['执行中',a=>a.agent_status==='working'],['空闲',a=>!['blocked','working'].includes(a.agent_status)]];
+  for(const [label,test] of groups){const items=matches.filter(test);if(!items.length)continue;list.append(el('div','section-label',label+' · '+items.length));const g=el('div','card list-card');items.forEach(a=>g.append(agentRow(a)));list.append(g);}}
+ draw();
+ if(S.liveLoading)main.append(el('p','fine center','正在刷新…'));}
+function chooseSession(){const box=sheet('切换 Herdr 会话');S.sessions.forEach(name=>menuItem(box,name,()=>{S.session=name;loadLive();},name===S.session?'check':'folder'));}
+async function loadLive(){
+ if(!S.device)return;const epoch=++S.epoch;S.liveLoading=S.agents.length?'agents':'sessions';S.liveError='';if(S.tab==='live'&&!S.chat)render();
+ try{const r=await remote('sessions');if(epoch!==S.epoch)return;S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];return;}
+  S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
+  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;}
+ catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
+ finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
+// Lightweight status refresh: Herdr state only, keeps resolved history refs.
+async function refreshStatus(){
+ if(!S.device||S.demo||S.statusBusy||!S.session||!S.statusSupported||S.liveLoading)return;S.statusBusy=true;
+ try{const r=await remote('status',{session:S.session});const known=new Map(S.agents.map(a=>[a.pane_id,a]));let changed=false;
+  const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}if(old.agent_status!==a.agent_status||titleOf(old)!==titleOf(a))changed=true;return {...old,...a,history_ref:old.history_ref};});
+  if(next.length!==S.agents.length)changed=true;
+  const fresh=next.filter(a=>!known.has(a.pane_id)||known.get(a.pane_id).identity!==a.identity);
+  S.agents=next;
+  if(S.chat?.agent){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status};onAgentStatus(was,cur.agent_status);}}
+  if(fresh.length&&S.tab==='live'&&!S.chat){loadLive();return;}
+  if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}
+ catch(e){if(/Unknown operation|不支持的操作/.test(e.message))S.statusSupported=false;}
+ finally{S.statusBusy=false;}}
 
-let searchTimer;
-function historyPage(main){pageHead(main,'YOUR CONVERSATIONS','历史记录','原来的对话、命令和子 Agent 都在这里。',ib('refresh','刷新历史',()=>loadCatalog()));if(!requireDevice(main))return;main.append(searchBox('搜索项目、标题或会话 ID',q=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>loadCatalog(q),450);}));const filters=el('div','tabs');[['all','全部'],['codex','Codex'],['claude','Claude'],['child','子 Agent']].forEach(([id,t])=>filters.append(btn(t,'pill'+(S.filter===id?' active':''),()=>{S.filter=id;renderHistoryList();filters.querySelectorAll('button').forEach(n=>n.classList.toggle('active',n.textContent===t));})));main.append(filters);main.append(el('div','section-label',S.total+' 条记录 · 最近更新'));const list=el('div');list.id='history-list';main.append(list);renderHistoryList();}
-function renderHistoryList(){const list=document.getElementById('history-list');if(!list)return;list.replaceChildren();const records=S.records.filter(r=>S.filter==='all'||(S.filter==='child'?r.parent:r.provider===S.filter));if(!records.length)empty(list,'没有匹配的记录','只显示当前 SSH 用户的 Codex / Claude 本地历史。');for(const r of records){const b=btn('','card card-button',()=>openRecord(r));const text=el('div','grow');text.append(el('div','card-title',r.title));const meta=el('div','card-meta');meta.append(el('span','',r.provider.toUpperCase()),el('span','',time(r.modified)));if(r.parent)meta.append(el('span','badge','子 Agent'));text.append(meta,el('div','card-meta truncate',r.cwd||r.thread));b.append(avatar(r.provider),text,icon('chevron'));list.append(b);}if(S.next!==null)list.append(btn('加载更多历史','secondary',()=>loadCatalog(S.catalogQuery||'',true)));}
-async function loadCatalog(query='',more=false){if(!S.device)return;const epoch=++S.epoch;try{const r=await remote('catalog',{offset:more?S.next||0:0,query});if(epoch!==S.epoch)return;S.records=more?S.records.concat(r.records):r.records;S.total=r.total;S.next=r.next;S.catalogQuery=query;if(S.tab==='history'&&!S.chat){if(more||query)renderHistoryList();else render();}}catch(e){if(epoch===S.epoch)error(e);}}
-function accountPage(main){pageHead(main,'CONNECTION','我的连接','知道正在用谁的账号、连到哪台电脑。');if(!requireDevice(main))return;const card=el('div','card');const row=el('div','row');row.append(avatar(),el('h2','',S.device.user));card.append(row);[['应用版本',S.version||'0.4.0'],['密码保存',S.device.remember?'已加密保存':'未保存，可在设备页编辑'],['设备名称',S.device.name],['SSH 用户',S.account?.ssh_user||S.device.user],['主机地址',S.device.host],['端口',String(S.device.port)],['电脑主机名',S.account?.hostname||'读取中…'],['连接状态',S.demo?'离线演示':'SSH 已连接']].forEach(([k,v])=>{const n=el('div','setting-row');n.append(el('span','',k),el('span','',v));card.append(n);});main.append(card,el('p','note','只显示 SSH 连接信息，不读取 Codex / Claude 的登录资料。保存的密码不在界面回显。'));main.append(btn('安装 / 更新桥接程序','secondary',setupBridge),btn('断开连接','secondary danger',()=>confirmAction('断开当前设备？','电脑上的 Agent 会继续运行。','断开',()=>disconnect().catch(error))));}
-async function loadAccount(){const epoch=S.epoch;try{const a=await remote('account');if(epoch!==S.epoch)return;S.account=a;if(S.tab==='account')render();}catch(e){if(epoch===S.epoch)error(e);}}
-async function openAgent(a){S.chatStack=[];S.paused=false;S.chat={agent:a,record:null,title:titleOf(a),provider:a.agent};S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.chatMode='conversation';const epoch=++S.epoch;renderChat();const ref=a.history_ref;if(ref?.record){S.bindings.delete(S.session+'/'+a.identity);S.chat.record=ref.record;await fetchHistory(false,true);return;}const remembered=S.bindings.get(S.session+'/'+a.identity);if(remembered){S.chat.record=remembered;S.chat.manual=true;await fetchHistory(false,true);return;}const id=ref?.thread||(a.agent_session?.kind!=='path'?a.agent_session?.value:null);if(id){try{const r=await remote('catalog',{thread:id});if(epoch!==S.epoch)return;const rec=r.records.find(x=>x.provider===a.agent&&(!ref?.record_id||x.id===ref.record_id));if(rec){S.chat.record=rec;await fetchHistory(false,true);return;}}catch(e){if(epoch===S.epoch)error(e);}}if(epoch===S.epoch){S.chat.historyIssue=historyIssueText(ref);renderChat();toast(S.chat.historyIssue);}}
-
+// ─── Chat ───────────────────────────────────────────────────────────────────
+function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.activity='';S.chatMode='conversation';S.paused=false;}
+async function openAgent(a){
+ S.chatStack=[];resetChat({agent:a,record:null,title:titleOf(a),provider:a.agent});const epoch=++S.epoch;renderChat();
+ const ref=a.history_ref;
+ if(ref?.record){S.bindings.delete(S.session+'/'+a.identity);S.chat.record=ref.record;await fetchHistory(false,true);return;}
+ const remembered=S.bindings.get(S.session+'/'+a.identity);if(remembered){S.chat.record=remembered;S.chat.manual=true;await fetchHistory(false,true);return;}
+ const id=ref?.thread||(a.agent_session?.kind!=='path'?a.agent_session?.value:null);
+ if(id&&ref?.status!=='pending'){try{const r=await remote('catalog',{thread:id});if(epoch!==S.epoch)return;const rec=r.records.find(x=>x.provider===a.agent&&(!ref?.record_id||x.id===ref.record_id));if(rec){S.chat.record=rec;await fetchHistory(false,true);return;}}catch(e){if(epoch===S.epoch)error(e);}}
+ if(epoch===S.epoch){S.chat.historyIssue=historyIssueText(ref);renderChat();if(a.agent_status==='working'||a.agent_status==='blocked')fetchTerminal(true);}}
 // Bridge reasons are specific; fall back to generic copy only for older bridges.
-function historyIssueText(ref){const reason=ref?.reason;switch(ref?.status){case 'remote_error':return '远端历史读取失败：'+(reason||'连接不可用');case 'pending':return (reason||'会话刚开始，历史文件还没写出')+'。稍后刷新即可。';case 'remote_candidates':case 'ambiguous':case 'unavailable':return (reason||'没有能唯一确认的会话标识')+(ref?.candidates?.length?'，下面列出了候选。':'。');case 'remote_missing':return reason||'远端这个工作目录下还没有历史记录。';case 'remote':return '这个窗格通过 SSH 连到别的电脑，历史在那台电脑上；终端输出仍可查看。';case 'missing':return reason||'会话标识已知，但没找到对应的历史文件。';default:return reason||'没有能确认的会话标识，可以手动选择历史，或查看终端输出。';}}
-function openRecord(r,push=false){if(push&&S.chat)S.chatStack.push({...S.chat,mode:S.chatMode,savedMessages:S.messages,savedChildren:S.children,savedBefore:S.before,savedMore:S.more,savedScroll:document.getElementById('chat-scroll')?.scrollTop||0});else S.chatStack=[];S.chat={record:r,agent:null,title:r.title,provider:r.provider};S.chatMode='conversation';S.messages=[];S.children=[];S.terminalText='';S.more=false;S.before=0;S.epoch++;renderChat();fetchHistory(false,true);}
-async function fetchHistory(older=false,initial=false){if(!S.chat?.record||(S.polling&&S.fetchEpoch===S.epoch))return;S.polling=true;const epoch=S.epoch;S.fetchEpoch=epoch;const record=S.chat.record;if(initial){S.chat.historyLoading=true;renderTimeline();}const args={record_id:record.id};if(record.remote)args.remote=record.remote;if(older)args.before=S.before;const scroll=document.getElementById('chat-scroll');const oldHeight=scroll?.scrollHeight||0,oldTop=scroll?.scrollTop||0;try{const r=await remote('history',args);if(epoch!==S.epoch)return;const hadError=!!S.chat.historyError;S.chat.historyError=null;S.chat.historyLoading=false;const prior=JSON.stringify(S.messages);if(older){const seen=new Set(S.messages.map(x=>x.id));S.messages=r.messages.filter(m=>!seen.has(m.id)).concat(S.messages);}else if(initial){S.messages=r.messages;}else{const map=new Map(S.messages.map(x=>[x.id,x]));r.messages.forEach(m=>map.set(m.id,m));S.messages=[...map.values()].sort((a,b)=>Number(a.id.split(':')[0])-Number(b.id.split(':')[0]));}S.children=r.children||[];if(initial||older){S.before=r.before;S.more=r.has_more;}S.historyNote=r.bounded?'本页已到读取窗口边界，可以继续加载更早记录。':r.partial?'最新记录仍在写入，稍后自动更新。':'';if(prior!==JSON.stringify(S.messages)||initial||older||hadError){const nearBottom=!scroll||oldHeight-oldTop-scroll.clientHeight<100;renderTimeline();const n=document.getElementById('chat-scroll');if(older&&n)n.scrollTop=oldTop+n.scrollHeight-oldHeight;else if((initial||nearBottom)&&n)n.scrollTop=n.scrollHeight;}updateChatMeta();}catch(e){if(epoch===S.epoch){S.paused=true;S.chat.historyLoading=false;S.chat.historyError='历史读取失败：'+e.message;renderTimeline();toast(S.chat.historyError);}}finally{if(S.fetchEpoch===epoch)S.polling=false;}}
-function chatTitle(){return S.chat?.title||'对话';}
-function renderChat(){const root=shell();const head=el('header','chat-head');head.append(ib('back','返回列表',pocketBack),avatar(S.chat.provider));const name=el('div','grow');name.append(el('h2','',chatTitle()));const sub=el('small','',S.chat.agent?stateLabel(S.chat.agent)+' · '+S.device.name:'历史记录 · 只读');sub.id='chat-meta';name.append(sub);head.append(name,ib('branch','切换 Agent',agentSwitcher),ib('more','更多操作',chatMenu));root.append(head);const tabs=el('div','chat-tabs');[['conversation','对话'],['commands','命令'],['terminal','终端']].forEach(([mode,title])=>tabs.append(btn(title,S.chatMode===mode?'active':'',()=>{S.chatMode=mode;S.epoch++;renderChat();if(mode==='terminal')fetchTerminal();else if(S.chat.record&&!S.messages.length)fetchHistory(false,true);})));root.append(tabs);const body=el('main','chat-body');body.id='chat-scroll';root.append(body);renderTimeline();const footer=el('footer','composer-wrap');if(S.chat.agent){const note=el('div','compose-note');note.append(el('span','',S.chat.agent.agent+' · '+S.chat.agent.pane_id),el('span','',S.demo?'演示模式，不会发送':'发送到当前在线 Agent'));footer.append(note);const compose=el('div','composer');const input=el('textarea');input.rows=1;input.placeholder='说点什么，继续这段对话…';input.setAttribute('aria-label','消息输入框');const key=draftKey();input.value=S.drafts.get(key)||'';input.oninput=()=>{S.drafts.set(key,input.value);input.style.height='auto';input.style.height=Math.min(input.scrollHeight,120)+'px';};const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');compose.append(input,send);footer.append(compose);}else footer.append(el('div','readonly',S.chat.record?.parent?'子 Agent 的历史记录 · 只读，不向父会话发送输入':'历史只读 · 在「会话」中打开在线 Agent 可继续对话'));root.append(footer);}
-function richText(text){const box=el('div','bubble');const chunks=text.split(/```/);chunks.forEach((part,i)=>{if(i%2){const code=el('pre');code.textContent=part.replace(/^[a-zA-Z0-9_+-]*\n/,'');box.append(code);}else{for(const line of part.split('\n')){const p=el('div');if(/^#{1,4} /.test(line)){const b=el('strong','',line.replace(/^#{1,4} /,''));p.append(b);}else{const parts=line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);parts.forEach(s=>{if(s.startsWith('**')&&s.endsWith('**'))p.append(el('strong','',s.slice(2,-2)));else if(s.startsWith('`')&&s.endsWith('`'))p.append(el('code','',s.slice(1,-1)));else p.append(document.createTextNode(s||'\u200b'));});}box.append(p);}}});return box;}
-function renderTimeline(){const body=document.getElementById('chat-scroll');if(!body)return;const open=new Set([...body.querySelectorAll('details[open]')].map(x=>x.dataset.id));body.replaceChildren();const list=el('div','timeline');body.append(list);if(S.chatMode==='terminal'){const pre=el('pre','agent-terminal',S.terminalText||'切换到终端后点击刷新，查看 Agent 的当前屏幕。');pre.id='terminal-output';list.append(pre,btn('刷新终端','secondary',fetchTerminal));return;}if(!S.chat.record){empty(list,'把原来的对话接进来',S.chat.historyIssue||'正在核实历史记录；也可手动选择对应记录查看。',btn('选择历史记录','primary',pickHistory));const candidates=S.chat.agent?.history_ref?.candidates||[];if(candidates.length){list.append(el('div','section-label','候选历史 · 点击后确认'));for(const rec of candidates){list.append(btn(rec.title+' · '+time(rec.modified),'card card-button',()=>chooseHistory(rec,S.chat.agent)));}}return;}const more=btn(S.more?'加载更早消息':'已到本页记录起点','link-btn',()=>fetchHistory(true));more.disabled=!S.more;list.append(more);if(S.chat.historyError){list.append(el('p','note error',S.chat.historyError),btn('重试读取历史','secondary',()=>{S.paused=false;fetchHistory(false,true);}));}if(S.historyNote)list.append(el('p','note',S.historyNote));const resultMap=new Map();S.messages.filter(x=>x.kind==='result'&&x.call_id).forEach(x=>resultMap.set(x.call_id,x));const toolIds=new Set(S.messages.filter(x=>x.kind==='tool').map(x=>x.call_id));let date='';for(const m of S.messages){if(m.kind==='result'&&toolIds.has(m.call_id))continue;if(S.chatMode==='commands'&&!['tool','result'].includes(m.kind))continue;if(m.kind==='tool'||m.kind==='result'){const details=el('details','tool-card');details.dataset.id=m.id;details.open=open.has(m.id)||S.chatMode==='commands';const summary=el('summary');summary.append(icon('terminal'),el('span','tool-name',m.title||'命令执行'),el('span','badge',m.kind==='result'?'输出':resultMap.has(m.call_id)?'已有结果':'已记录'));details.append(summary);const content=el('div','tool-body');content.append(el('div','tool-caption',m.kind==='tool'?'调用内容':'结果'),el('pre','',m.text));if(m.truncated)content.append(el('small','','内容超过 16 KB，已截断。'));const result=resultMap.get(m.call_id);if(m.kind==='tool'&&result){const r=el('div','result');r.append(el('div','tool-caption',result.title||'执行结果'),el('pre','',result.text));if(result.truncated)r.append(el('small','','结果过长，已截断。'));content.append(r);}details.append(content);list.append(details);continue;}const stamp=time(m.timestamp);if(stamp.slice(0,5)!==date){date=stamp.slice(0,5);if(date)list.append(el('div','date-separator',date));}const row=el('article','message '+m.kind);const label=el('div','message-label',(m.kind==='user'?'你':S.chat.provider==='claude'?'Claude':'Codex')+(stamp?' · '+stamp.slice(-5):''));row.append(label,richText(m.text));if(m.truncated)row.append(el('small','','消息过长，已截断。'));list.append(row);}if(!S.messages.length&&!S.chat.historyError)list.append(el('div','empty',S.chat.historyLoading?'正在读取对话记录…':S.more?'此页没有可显示的消息，继续加载更早记录。':'此记录暂无可显示的对话消息。'));}
-function updateChatMeta(){const n=document.getElementById('chat-meta');if(n)n.textContent=(S.chat.manual?'手动关联 · '+S.chat.agent.pane_id:S.chat.agent?stateLabel(S.chat.agent):'历史只读')+' · '+(S.children.length?S.children.length+' 个子 Agent':'原会话记录');}
-async function fetchTerminal(){if(!S.chat?.agent){toast('这条历史没有在线终端，不能读取实时屏幕');return;}const epoch=S.epoch;try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;}catch(e){if(epoch===S.epoch)error(e);}}
-function agentSwitcher(){const box=sheet('切换 Agent');box.append(el('p','muted','子 Agent 展示独立记录；在线 Agent 切换会改变消息发送目标。'));if(S.chat?.record?.parent){box.append(btn('返回父会话','card card-button',async()=>{const r=await remote('catalog',{thread:S.chat.record.parent,...(S.chat.record.remote?{remote:S.chat.record.remote}:{})});if(r.records.length){closeSheet();openRecord(r.records[0],true);}else toast('未找到父会话记录');}));}if(S.children.length){box.append(el('div','section-label','当前会话的子 Agent'));S.children.forEach(r=>box.append(btn((r.role||r.title)+' · '+r.thread.slice(0,8),'card card-button',()=>{closeSheet();openRecord(r,true);})));}else box.append(el('p','note','此记录尚未发现子 Agent；切换只会打开实际存在的记录。'));box.append(el('div','section-label','在线 Agent'));S.agents.forEach(a=>{const b=btn('','card card-button',()=>{closeSheet();openAgent(a);});b.append(avatar(a.agent),el('div','grow',titleOf(a)),el('span','badge',stateLabel(a)));box.append(b);});}
-function chatMenu(){const box=sheet('对话操作');box.append(btn(S.paused?'恢复自动更新':'暂停自动更新','card card-button',()=>{S.paused=!S.paused;closeSheet();toast(S.paused?'自动更新已暂停':'自动更新已恢复');}),btn('选择其他历史记录','card card-button',pickHistory),btn('刷新对话','card card-button',()=>{closeSheet();fetchHistory(false,true);}));if(S.chat.agent)box.append(btn('终端按键','card card-button',keyMenu));}
-function keyMenu(){const box=sheet('终端按键');box.append(el('p','note','先查看最新终端。Enter 可能批准当前操作；不会自动确认。'));[['↑ 上','up'],['↓ 下','down'],['Enter 确认','enter'],['Esc 返回','esc'],['Ctrl+C 中断','ctrl+c']].forEach(([t,key])=>box.append(btn(t,'card card-button',()=>confirmAction('发送 '+t+'？','目标：'+titleOf(S.chat.agent)+' / '+S.chat.agent.pane_id,'发送按键',async()=>{try{await remote('key',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'按键已发送，请查看终端确认');}catch(e){error(e);}}))));}
-async function pickHistory(){const targetAgent=S.chat?.agent;const box=sheet('选择历史记录');box.append(el('p','note','选择后进入只读历史，避免把消息误发给其他 Agent。'));const list=el('div');let requestNumber=0;async function search(query=''){const token=++requestNumber;list.replaceChildren(el('div','loading','读取中…'));try{const r=await remote('catalog',{query,...(targetAgent?.history_ref?.remote?{remote:targetAgent.history_ref.remote}:{})});if(token!==requestNumber)return;list.replaceChildren();r.records.forEach(rec=>list.append(btn(rec.title+' · '+rec.thread.slice(0,8),'card card-button',()=>{closeSheet();chooseHistory(rec,targetAgent);})));if(!r.records.length)list.append(el('p','muted','没有匹配的记录'));if(r.next!==null)list.append(el('p','muted','结果超过 100 条，请输入项目、标题或会话 ID 缩小范围。'));}catch(e){if(token===requestNumber)list.replaceChildren(el('p','note error',e.message));}}let timer;box.append(searchBox('搜索历史记录',q=>{clearTimeout(timer);timer=setTimeout(()=>search(q),450);}),list);await search(targetAgent?.history_ref?.query||'');}
+function historyIssueText(ref){const reason=ref?.reason;switch(ref?.status){case 'remote_error':return '远端历史读取失败：'+(reason||'连接不可用');case 'pending':return (reason||'会话刚开始，历史文件还没写出')+'。稍后会自动出现。';case 'remote_candidates':case 'ambiguous':case 'unavailable':return (reason||'没有能唯一确认的会话标识')+(ref?.candidates?.length?'，下面列出了候选。':'。');case 'remote_missing':return reason||'远端这个工作目录下还没有历史记录。';case 'remote':return '这个窗格通过 SSH 连到别的电脑，历史在那台电脑上；终端输出仍可查看。';case 'missing':return reason||'会话标识已知，但没找到对应的历史文件。';default:return reason||'没有能确认的会话标识，可以手动选择历史，或查看终端输出。';}}
+function openRecord(r,push=false){
+ if(push&&S.chat)S.chatStack.push({...S.chat,mode:S.chatMode,savedMessages:S.messages,savedChildren:S.children,savedBefore:S.before,savedMore:S.more,savedScroll:document.getElementById('chat-scroll')?.scrollTop||0});else S.chatStack=[];
+ resetChat({record:r,agent:null,title:r.title,provider:r.provider});S.epoch++;renderChat();fetchHistory(false,true);}
+async function fetchHistory(older=false,initial=false){
+ if(!S.chat?.record||(S.polling&&S.fetchEpoch===S.epoch))return;S.polling=true;const epoch=S.epoch;S.fetchEpoch=epoch;const record=S.chat.record;
+ if(initial){S.chat.historyLoading=true;renderTimeline();}
+ const args={record_id:record.id};if(record.remote)args.remote=record.remote;if(older)args.before=S.before;
+ const scroll=document.getElementById('chat-scroll');const oldHeight=scroll?.scrollHeight||0,oldTop=scroll?.scrollTop||0;
+ try{const r=await remote('history',args);if(epoch!==S.epoch)return;const hadError=!!S.chat.historyError;S.chat.historyError=null;S.chat.historyLoading=false;const prior=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
+  if(older){const seen=new Set(S.messages.map(x=>x.id));S.messages=r.messages.filter(m=>!seen.has(m.id)).concat(S.messages);}
+  else if(initial)S.messages=r.messages;
+  else{const map=new Map(S.messages.map(x=>[x.id,x]));r.messages.forEach(m=>map.set(m.id,m));S.messages=[...map.values()].sort((a,b)=>Number(a.id.split(':')[0])-Number(b.id.split(':')[0])||Number(a.id.split(':')[1])-Number(b.id.split(':')[1]));}
+  S.children=r.children||[];if(initial||older){S.before=r.before;S.more=r.has_more;}
+  S.historyNote=r.bounded?'本页到了读取窗口边界，可以继续加载更早记录。':'';
+  settleOutbox();
+  const now=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
+  if(prior!==now||initial||older||hadError){const nearBottom=!scroll||oldHeight-oldTop-scroll.clientHeight<120;renderTimeline();const n=document.getElementById('chat-scroll');if(older&&n)n.scrollTop=oldTop+n.scrollHeight-oldHeight;else if((initial||nearBottom)&&n)n.scrollTop=n.scrollHeight;else if(!initial)showJump(true);}
+  updateChatMeta();}
+ catch(e){if(epoch===S.epoch){S.paused=true;S.chat.historyLoading=false;S.chat.historyError='历史读取失败：'+e.message;renderTimeline();}}
+ finally{if(S.fetchEpoch===epoch)S.polling=false;}}
+function chatSubtitle(){const c=S.chat;if(!c)return '';if(c.stale)return '窗格已变化 · 只读';if(c.agent){const parts=[stateLabel(c.agent)];const p=projectOf(c.agent);if(p)parts.push(p);if(c.manual)parts.push('手动关联');if(S.children.length)parts.push(S.children.length+' 个子 Agent');return parts.join(' · ');}return (c.record?.parent?'子 Agent · ':'')+'历史只读'+(S.children.length?' · '+S.children.length+' 个子 Agent':'');}
+function updateChatMeta(){const n=document.getElementById('chat-meta');if(n)n.textContent=chatSubtitle();const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(S.chat?.agent&&!S.chat.stale?stateTone(S.chat.agent):'muted');}
+function renderChat(){
+ const root=shell();root.classList.add('chat-shell');const head=el('header','chat-head');head.append(ib('back','返回列表',pocketBack));
+ const av=avatar(S.chat.provider);const dot=el('span','status-dot '+(S.chat.agent&&!S.chat.stale?stateTone(S.chat.agent):'muted'));dot.id='chat-dot';av.append(dot);head.append(av);
+ const name=el('div','grow');name.append(el('h2','',S.chat.title||'对话'));const sub=el('small','',chatSubtitle());sub.id='chat-meta';name.append(sub);head.append(name);
+ head.append(ib('branch','切换 Agent',agentSwitcher),ib('more','更多操作',chatMenu));root.append(head);
+ const tabs=el('div','chat-tabs');[['conversation','对话'],['commands','命令'],['terminal','终端']].forEach(([mode,title])=>{const b=btn(title,S.chatMode===mode?'active':'',()=>{if(S.chatMode===mode)return;S.chatMode=mode;S.epoch++;renderChat();if(mode==='terminal')fetchTerminal();else if(S.chat.record&&!S.messages.length)fetchHistory(false,true);});b.setAttribute('aria-pressed',String(S.chatMode===mode));tabs.append(b);});root.append(tabs);
+ const wrap=el('div','chat-body-wrap');const body=el('main','chat-body');body.id='chat-scroll';body.onscroll=()=>{if(body.scrollHeight-body.scrollTop-body.clientHeight<80)showJump(false);};wrap.append(body);
+ const jump=btn('','jump-btn hidden',()=>{body.scrollTop=body.scrollHeight;showJump(false);},'down');jump.id='jump';jump.setAttribute('aria-label','回到最新');wrap.append(jump);root.append(wrap);
+ renderTimeline();
+ const footer=el('footer','composer-wrap');footer.id='composer';root.append(footer);renderComposer();
+ const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
+function showJump(v){document.getElementById('jump')?.classList.toggle('hidden',!v);}
+
+// Tool calls between two text messages collapse into one group, results attach by call id.
+const TOOL_KINDS=[[/^(bash|shell|exec_command|exec|local_shell|run|write_stdin|BashOutput)$/i,'运行','terminal'],[/^(read|view|cat|notebookread)$/i,'读取','file'],[/^(edit|multiedit|write|apply_patch|notebookedit|str_replace)/i,'编辑','pen'],[/^(grep|glob|search|find|ls|rg)$/i,'搜索','search'],[/^(webfetch|websearch|web_search|fetch)$/i,'网络','globe'],[/^(task|agent|spawn_agent|send_message|followup_task)$/i,'子 Agent','branch']];
+function toolKind(name=''){for(const [re,label,i] of TOOL_KINDS)if(re.test(name))return {label,icon:i};return {label:name||'工具',icon:'tool'};}
+function toolSummary(m){let t=m.text||'';try{const v=JSON.parse(t);if(v&&typeof v==='object')t=v.command||v.cmd||v.file_path||v.path||v.pattern||v.query||v.url||v.description||v.prompt||Object.values(v).find(x=>typeof x==='string')||t;}catch(_){}
+ if(Array.isArray(t))t=t.join(' ');t=String(t).replace(/^\s*(bash\s+-lc\s+|\/bin\/\w+\s+-c\s+)/,'').trim();return t.split('\n').find(x=>x.trim())||t;}
+// Show the command itself when a tool input is a JSON envelope around it.
+function toolInput(m){try{const v=JSON.parse(m.text);if(v&&typeof v==='object'&&!Array.isArray(v)){const c=v.command??v.cmd;if(typeof c==='string')return c;if(Array.isArray(c))return c.join(' ');}}catch(_){}return m.text;}
+function resultFailed(r){return r&&(r.title==='执行失败'||/(^|\n)(Exit code|Process exited with code):?\s*[1-9]/.test(r.text)||/^Error:/.test(r.text));}
+function buildItems(messages,commandsOnly){
+ const results=new Map();messages.forEach(m=>{if(m.kind==='result'&&m.call_id)results.set(m.call_id,m);});
+ const toolIds=new Set(messages.filter(m=>m.kind==='tool').map(m=>m.call_id));const items=[];let group=null;
+ for(const m of messages){
+  if(m.kind==='tool'||m.kind==='result'){if(m.kind==='result'&&toolIds.has(m.call_id))continue;const entry={tool:m.kind==='tool'?m:null,result:m.kind==='tool'?results.get(m.call_id):m,id:m.id,timestamp:m.timestamp};
+   if(commandsOnly){items.push({type:'tool',entry});continue;}
+   if(!group){group={type:'group',entries:[],id:m.id};items.push(group);}group.entries.push(entry);continue;}
+  if(commandsOnly)continue;group=null;items.push({type:'message',m});}
+ return items;}
+function toolRow(entry,open){
+ const t=entry.tool,r=entry.result;const kind=toolKind(t?.title||r?.title);const failed=resultFailed(r);
+ const d=el('details','tool-row'+(failed?' failed':''));d.dataset.id=entry.id;d.open=!!open;const s=el('summary');
+ s.append(el('span','tool-icon'),el('span','tool-verb',kind.label),el('span','tool-text',t?toolSummary(t):(r?.title||'输出')),el('span','tool-state '+(failed?'bad':r?'good':'wait'),failed?'失败':r?'':'…'));s.firstChild.append(icon(kind.icon));d.append(s);
+ const body=el('div','tool-body');
+ if(t){const cap=el('div','tool-caption');cap.append(el('span','',t.title||'调用内容'),btn('复制','code-copy',()=>copyText(toolInput(t)),'copy'));body.append(cap,el('pre','',toolInput(t)));if(t.truncated)body.append(el('small','','内容超过 16 KB，已截断。'));}
+ if(r){const cap=el('div','tool-caption');cap.append(el('span','',r.title||'执行结果'),btn('复制','code-copy',()=>copyText(r.text),'copy'));body.append(cap,el('pre','output',r.text));if(r.truncated)body.append(el('small','','结果过长，已截断。'));}
+ else body.append(el('p','fine','还没有输出。'));
+ d.append(body);return d;}
+function toolGroup(g,open,openRows){
+ const d=el('details','tool-group');d.dataset.id=g.id;d.open=open.has(g.id);const s=el('summary');
+ const failed=g.entries.filter(e=>resultFailed(e.result)).length;const running=g.entries.some(e=>e.tool&&!e.result);
+ const last=g.entries.at(-1);const lk=toolKind(last.tool?.title||last.result?.title);
+ const ic=el('span','tool-icon');ic.append(icon(lk.icon));s.append(ic);
+ const txt=el('span','tool-text');txt.append(el('strong','',g.entries.length===1?lk.label:'执行了 '+g.entries.length+' 个操作'),document.createTextNode(' '+(last.tool?toolSummary(last.tool):'')));s.append(txt);
+ if(failed)s.append(el('span','tool-state bad',failed+' 失败'));else if(running&&S.chat?.agent?.agent_status==='working')s.append(el('span','spinner mini'));
+ s.append(el('span','chev'));s.lastChild.append(icon('down'));d.append(s);
+ const list=el('div','tool-list');g.entries.forEach(e=>list.append(toolRow(e,openRows.has(e.id))));d.append(list);return d;}
+function messageRow(m,label){
+ const row=el('article','message '+m.kind);const meta=el('div','message-label');meta.append(el('span','',label),el('span','',clock(m.timestamp)));
+ const bubble=el('div','bubble');bubble.append(m.kind==='user'?userText(m.text):markdown(m.text));
+ bubble.oncontextmenu=e=>{e.preventDefault();messageMenu(m);};
+ row.append(meta,bubble);if(m.truncated)row.append(el('small','fine','消息过长，已截断。'));return row;}
+function userText(text){const box=el('div','md');text.split('\n').forEach((line,i)=>{if(i)box.append(el('br'));box.append(document.createTextNode(line));});return box;}
+function messageMenu(m){const box=sheet('消息');menuItem(box,'复制全文',()=>copyText(m.text),'copy');if(S.chat?.agent&&m.kind==='user')menuItem(box,'放入输入框',()=>{S.drafts.set(draftKey(),m.text);renderComposer();},'edit');}
+function renderTimeline(){
+ const body=document.getElementById('chat-scroll');if(!body)return;
+ const open=new Set([...body.querySelectorAll('details.tool-group[open]')].map(x=>x.dataset.id));const openRows=new Set([...body.querySelectorAll('details.tool-row[open]')].map(x=>x.dataset.id));
+ body.replaceChildren();const list=el('div','timeline');body.append(list);
+ if(S.chatMode==='terminal'){const pre=el('pre','agent-terminal',S.terminalText||(S.chat.agent?'正在读取终端…':'这条历史没有在线终端。'));pre.id='terminal-output';list.append(pre);if(S.chat.agent)list.append(btn('刷新终端','secondary',()=>fetchTerminal()));return;}
+ if(!S.chat.record){const box=el('div','unlinked');box.append(el('h2','','还没关联到对话记录'),el('p','muted',S.chat.historyIssue||'正在定位这个窗格对应的历史记录…'));
+  if(S.chat.historyIssue)box.append(btn('选择历史记录','primary',pickHistory));list.append(box);
+  const candidates=S.chat.agent?.history_ref?.candidates||[];if(candidates.length){list.append(el('div','section-label','候选历史 · 点击后确认'));const g=el('div','card list-card');candidates.forEach(rec=>{const b=btn('','card-button',()=>chooseHistory(rec,S.chat.agent));const t=el('div','grow');t.append(el('div','card-title',rec.title),el('div','card-meta',relative(rec.modified)+' · '+String(rec.thread).slice(0,8)));b.append(t,icon('chevron'));g.append(b);});list.append(g);}
+  if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));list.append(el('pre','agent-terminal compact',tail(S.terminalText,14)));}
+  return;}
+ const more=btn(S.more?'加载更早消息':'已到记录起点','link-btn',()=>fetchHistory(true));more.disabled=!S.more;list.append(more);
+ if(S.chat.historyError){const n=el('div','note error');n.append(el('span','grow',S.chat.historyError),btn('重试','secondary small',()=>{S.paused=false;fetchHistory(false,true);}));list.append(n);}
+ if(S.historyNote)list.append(el('p','note',S.historyNote));
+ const commandsOnly=S.chatMode==='commands';const items=buildItems(S.messages,commandsOnly);const who=providerName(S.chat.provider);let day='';
+ for(const it of items){const ts=it.m?.timestamp||it.entry?.timestamp||it.entries?.[0]?.timestamp;const d=dayLabel(ts);if(d&&d!==day){day=d;list.append(el('div','date-separator',d));}
+  if(it.type==='message')list.append(messageRow(it.m,it.m.kind==='user'?'你':who));
+  else if(it.type==='group')list.append(toolGroup(it,open,openRows));
+  else list.append(toolRow(it.entry,true));}
+ for(const o of S.outbox.filter(o=>o.key===draftKey())){const row=el('article','message user pending'+(o.state==='failed'?' failed':''));const meta=el('div','message-label');meta.append(el('span','',o.state==='failed'?'发送未确认':o.state==='sending'?'发送中…':'已送达 Agent'));const b=el('div','bubble');b.append(userText(o.text));row.append(meta,b);list.append(row);}
+ if(!items.length&&!S.chat.historyError)list.append(el('div','empty small',S.chat.historyLoading?'正在读取对话记录…':commandsOnly?'这段记录里还没有执行过命令。':S.more?'这一页没有可显示的消息，继续加载更早记录。':'这条记录暂无可显示的消息。'));}
+function tail(text,n){return text.replace(/\s+$/,'').split('\n').slice(-n).join('\n');}
+
+// Composer, live activity and confirmation panel.
+function renderComposer(){
+ const footer=document.getElementById('composer');if(!footer||!S.chat)return;footer.replaceChildren();const a=S.chat.agent;
+ if(!a||S.chat.stale){footer.append(el('div','readonly',S.chat.stale?'这个窗格的 Agent 已变化，回到列表重新打开':S.chat.record?.parent?'子 Agent 的历史记录 · 只读，不会向父会话发送':'历史只读 · 在「会话」里打开在线 Agent 才能继续对话'));return;}
+ if(a.agent_status==='blocked'){const panel=el('section','confirm-panel');const h=el('div','confirm-head');h.append(icon('alert'),el('strong','grow','Agent 在等你确认'),btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
+  const pre=el('pre','confirm-screen',S.terminalText?tail(S.terminalText,12):'正在读取终端画面…');pre.id='confirm-screen';panel.append(pre);
+  const keys=el('div','confirm-keys');[['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);footer.append(panel);}
+ else if(a.agent_status==='working'){const strip=el('div','activity');strip.append(el('span','pulse'));const t=el('div','grow');t.append(el('strong','',providerName(a.agent)+' 正在工作'));const line=el('span','activity-line',S.activity||'');line.id='activity-line';t.append(line);strip.append(t,btn('中断','secondary small',()=>confirmAction('中断 Agent？','向 '+titleOf(a)+' 发送 Ctrl+C，会打断它正在执行的操作。','发送 Ctrl+C',()=>sendKey('ctrl+c','Ctrl+C'),true)));footer.append(strip);}
+ const compose=el('div','composer');const input=el('textarea');input.rows=1;input.placeholder=a.agent_status==='working'?'Agent 执行中，可以先写好…':'说点什么，继续这段对话…';input.setAttribute('aria-label','消息输入框');const key=draftKey();input.value=S.drafts.get(key)||'';
+ const grow=()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,140)+'px';};
+ const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');
+ input.oninput=()=>{S.drafts.set(key,input.value);grow();};compose.append(input,send);footer.append(compose);requestAnimationFrame(grow);}
+async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'已发送 '+label);setTimeout(()=>{refreshStatus();fetchTerminal(true);},700);}catch(e){toast('按键未确认：'+e.message+'。不会自动重发。');}}
+async function sendMessage(input){
+ const text=input.value;const a=S.chat?.agent;if(!text.trim()||!a)return;
+ if(['working','blocked'].includes(a.agent_status)&&!S.demo){toast(a.agent_status==='working'?'Agent 还在执行，等它停下再发（草稿已保留）':'Agent 在等你确认，先处理上面的提示');return;}
+ const epoch=S.epoch,key=draftKey();const button=document.querySelector('.send');button.disabled=true;
+ const item={key,text,at:Date.now(),state:'sending'};
+ if(!S.demo){S.outbox.push(item);renderTimeline();scrollBottom();}
+ try{await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text,id:uuid()});
+  if(S.demo){toast('演示模式：未发送，草稿已保留');return;}
+  item.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
+  if(S.chat?.agent){S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
+  renderTimeline();scrollBottom();if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);}
+ catch(e){item.state='failed';renderTimeline();toast('发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
+ finally{button.disabled=false;}}
+function scrollBottom(){const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
+// A pending bubble disappears once the transcript shows the same user text.
+function settleOutbox(){if(!S.outbox.length)return;const recent=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>m.text.trim());S.outbox=S.outbox.filter(o=>!(o.state==='sent'&&recent.includes(o.text.trim()))&&Date.now()-o.at<180000);}
+function onAgentStatus(was,now){renderComposer();updateChatMeta();if(now==='blocked'){fetchTerminal(true);if(!S.active)return;toast('Agent 在等你确认');}if(was==='working'&&now!=='working'){S.activity='';fetchHistory();}}
+async function fetchTerminal(quiet=false){
+ if(!S.chat?.agent){if(!quiet)toast('这条历史没有在线终端');return;}const epoch=S.epoch;
+ try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;
+  const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
+  const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;const c=document.getElementById('confirm-screen');if(c)c.textContent=tail(r.text,12);const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
+  if(!S.chat.record&&S.chatMode==='conversation')renderTimeline();}
+ catch(e){if(epoch===S.epoch&&!quiet)error(e);}}
+
+// ─── Sheets ─────────────────────────────────────────────────────────────────
+function agentSwitcher(){
+ const box=sheet('切换 Agent');
+ if(S.chat?.record?.parent)menuItem(box,'返回父会话',async()=>{try{const r=await remote('catalog',{thread:S.chat.record.parent,...(S.chat.record.remote?{remote:S.chat.record.remote}:{})});if(r.records.length)openRecord(r.records[0],true);else toast('没找到父会话记录');}catch(e){error(e);}},'back');
+ if(S.children.length){box.append(el('div','section-label','这段对话的子 Agent'));S.children.forEach(r=>{const b=btn('','menu-item',()=>{closeSheet();openRecord(r,true);},'branch');b.append(el('span','grow menu-label',(r.role||r.title)+' · '+r.thread.slice(0,8)));box.append(b);});}
+ else box.append(el('p','fine','这段对话里还没有子 Agent。'));
+ box.append(el('div','section-label','在线 Agent'));
+ S.agents.forEach(a=>{const b=btn('','menu-item',()=>{closeSheet();openAgent(a);});b.append(avatar(a.agent,stateTone(a)));const t=el('span','grow');t.append(el('span','menu-label',titleOf(a)),el('small','',providerName(a.agent)+(projectOf(a)?' · '+projectOf(a):'')));b.append(t,el('span','badge '+stateTone(a),stateLabel(a)));box.append(b);});}
+function chatMenu(){
+ const box=sheet('对话操作');
+ menuItem(box,'刷新对话',()=>{S.paused=false;fetchHistory(false,true);},'refresh');
+ menuItem(box,S.paused?'恢复自动更新':'暂停自动更新',()=>{S.paused=!S.paused;toast(S.paused?'自动更新已暂停':'自动更新已恢复');},S.paused?'refresh':'pause');
+ menuItem(box,'选择其他历史记录',pickHistory,'history');
+ if(S.chat.agent){menuItem(box,'终端按键',keyMenu,'terminal','↑ ↓ Enter Esc Ctrl+C');menuItem(box,'查看终端',()=>{S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal();},'terminal');}}
+function keyMenu(){const box=sheet('终端按键');box.append(el('p','fine','先看一眼终端：Enter 可能会批准当前操作。'));[['↑ 上','up'],['↓ 下','down'],['Enter 确认','enter'],['Esc 返回','esc'],['Ctrl+C 中断','ctrl+c']].forEach(([t,key])=>{const b=btn(t,'menu-item',()=>{closeSheet();sendKey(key,t);});box.append(b);});}
+async function pickHistory(){
+ const targetAgent=S.chat?.agent;const box=sheet('选择历史记录');box.append(el('p','fine','选中后先只读打开，不会把消息发给其他 Agent。'));const list=el('div','pick-list');let requestNumber=0;
+ async function search(query=''){const token=++requestNumber;list.replaceChildren(el('div','loading','读取中…'));
+  try{const r=await remote('catalog',{query,...(targetAgent?.history_ref?.remote?{remote:targetAgent.history_ref.remote}:{})});if(token!==requestNumber)return;list.replaceChildren();
+   r.records.forEach(rec=>{const b=btn('','menu-item',()=>{closeSheet();chooseHistory(rec,targetAgent);});b.setAttribute('aria-label',rec.title+' · '+rec.thread.slice(0,8));const t=el('span','grow');t.append(el('span','menu-label',rec.title),el('small','',relative(rec.modified)+' · '+rec.thread.slice(0,8)));b.append(avatar(rec.provider),t);list.append(b);});
+   if(!r.records.length)list.append(el('p','fine','没有匹配的记录'));if(r.next!==null&&r.next!==undefined)list.append(el('p','fine','超过 100 条，输入项目、标题或会话 ID 缩小范围。'));}
+  catch(e){if(token===requestNumber)list.replaceChildren(el('p','note error',e.message));}}
+ let timer;box.append(searchBox('搜索历史记录',q=>{clearTimeout(timer);timer=setTimeout(()=>search(q),400);}),list);await search(targetAgent?.history_ref?.query||'');}
 function chooseHistory(rec,targetAgent){
  if(!targetAgent||targetAgent.agent_session?.value||rec.provider!==targetAgent.agent){openRecord(rec,true);return;}
  const box=sheet('确认历史与在线会话对应');
- box.append(el('p','note','Herdr 没有提供这个窗格的会话 ID。只有确认记录属于下方在线 Agent 时才关联；不会自动恢复或创建会话。'));
- box.append(el('p','', '在线目标：'+titleOf(targetAgent)+' / '+targetAgent.pane_id),el('p','muted','历史记录：'+rec.title+' / '+rec.thread));
+ box.append(el('p','fine','没能自动确认这个窗格的会话。只有确定这段记录属于下面的在线 Agent 时才关联；不会恢复或新建会话。'));
+ const pair=el('div','card pair');pair.append(el('div','card-meta','在线 Agent'),el('div','card-title',titleOf(targetAgent)+' · '+targetAgent.pane_id),el('div','card-meta','历史记录'),el('div','card-title',rec.title+' · '+rec.thread.slice(0,8)));box.append(pair);
  const actions=el('div','sheet-actions');
- actions.append(btn('只读查看','secondary',()=>{closeSheet();openRecord(rec,true);}),btn('关联当前 Agent','primary',()=>{closeSheet();S.bindings.set(S.session+'/'+targetAgent.identity,rec);S.chat={agent:targetAgent,record:rec,title:titleOf(targetAgent),provider:targetAgent.agent,manual:true};S.messages=[];S.children=[];S.more=false;S.chatMode='conversation';S.epoch++;renderChat();fetchHistory(false,true);}));box.append(actions);
-}
+ actions.append(btn('只读查看','secondary',()=>{closeSheet();openRecord(rec,true);}),btn('关联当前 Agent','primary',()=>{closeSheet();S.bindings.set(S.session+'/'+targetAgent.identity,rec);resetChat({agent:targetAgent,record:rec,title:titleOf(targetAgent),provider:targetAgent.agent,manual:true});S.epoch++;renderChat();fetchHistory(false,true);}));box.append(actions);}
 
-function uuid(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&3|8)).toString(16);});}
-async function sendMessage(input){const text=input.value;if(!text.trim()||!S.chat.agent)return;const agent=S.chat.agent,epoch=S.epoch,key=draftKey();const button=document.querySelector('.send');button.disabled=true;try{await remote('prompt',{session:S.session,target:agent.pane_id,identity:agent.identity,text,id:uuid()});if(S.demo){toast('演示模式：未发送，草稿已保留');return;}if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}toast('消息已发送，等待 Agent 响应');if(epoch===S.epoch)fetchHistory();}catch(e){toast('发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}finally{button.disabled=false;}}
-function pocketBack(){if(overlay.childElementCount){closeSheet();return;}if(T.view){leaveTerminal();render();return;}if(S.chatStack.length){const prev=S.chatStack.pop();S.chat=prev;S.chatMode=prev.mode||'conversation';S.messages=prev.savedMessages||[];S.children=prev.savedChildren||[];S.before=prev.savedBefore||0;S.more=!!prev.savedMore;S.epoch++;renderChat();document.getElementById('chat-scroll').scrollTop=prev.savedScroll||0;if(prev.record&&!S.messages.length)fetchHistory(false,true);return;}if(S.chat){S.chat=null;S.epoch++;render();return;}if(S.tab!=='live'&&S.device)setTab('live');else if(S.tab!=='devices')setTab('devices');else toast('设备和勾选的密码已安全保存，可直接关闭应用');}
-window.pocketBack=pocketBack;window.setForeground=v=>{S.active=v;};
-setInterval(()=>{if(S.active&&!S.demo&&!S.paused&&!S.polling&&S.chat&&S.chatMode!=='terminal')fetchHistory();},6000);
-const demoAgents=[{pane_id:'demo:1',identity:'demo-codex',agent:'codex',agent_status:'idle',terminal_title:'把移动端做成真正的聊天工具',agent_session:{value:'demo-root'}},{pane_id:'demo:2',identity:'demo-claude',agent:'claude',agent_status:'working',terminal_title:'检查接口与回归测试',agent_session:{value:'demo-claude'}}];
-const demoRecords=[{id:'demo-root',thread:'demo-root',provider:'codex',parent:null,title:'把移动端做成真正的聊天工具',cwd:'~/projects/pocket',modified:1770000000},{id:'demo-child',thread:'demo-child',provider:'codex',parent:'demo-root',title:'布局检查 · 子 Agent',cwd:'~/projects/pocket',modified:1770000100},{id:'demo-claude',thread:'demo-claude',provider:'claude',parent:null,title:'检查接口与回归测试',cwd:'~/projects/pocket',modified:1769900000}];
-function demoMessage(id,kind,text,title='',call_id=''){return{id:id+':0',kind,text,title,call_id,timestamp:'2026-10-15T09:40:00Z'};}
-async function demoRequest(op,r){await new Promise(resolve=>setTimeout(resolve,160));if(op==='sessions')return{sessions:[{name:'demo',running:true}]};if(op==='agents')return{agents:demoAgents};if(op==='panes')return{panes:[{pane_id:'w1:p3',terminal_id:'demo-term',identity:'demo-pane',workspace_label:'演示项目',tab_id:'w1:t1',cwd:'~/projects/pocket',terminal_title:'开发终端'}]};if(op==='paneRead')return{text:'$ pwd\n~/projects/pocket\n$ npm test\nPASS: 离线普通分屏演示\n$ '};if(op==='account')return{ssh_user:'demo',hostname:'workstation'};if(op==='catalog'){let rows=demoRecords;if(r.thread)rows=rows.filter(x=>x.thread===r.thread);if(r.query)rows=rows.filter(x=>JSON.stringify(x).includes(r.query));return{records:rows,total:rows.length,next:null};}if(op==='history'){const rec=demoRecords.find(x=>x.id===r.record_id);let messages=rec.id==='demo-child'?[demoMessage(1,'user','请检查小屏和横屏的输入栏。'),demoMessage(2,'assistant','子 Agent：布局检查完成。\n\n输入栏保持可见，长命令可展开阅读。')]:rec.id==='demo-claude'?[demoMessage(1,'assistant','正在检查接口与回归测试。\n\n这是 Claude 的独立会话。')]:[demoMessage(10,'user','历史记录、子 Agent 和执行的命令都要能看到。'),demoMessage(11,'assistant','我把它们整理到同一个对话里。\n\n**对话**保留完整上下文，**命令**展示具体执行内容，子 Agent 可以独立切换。'),demoMessage(12,'tool','python3 -m unittest discover -s tests -v','执行命令 · exec_command','demo-call'),demoMessage(13,'result','Ran 24 tests in 0.08s\nOK\nProcess exited with code 0','执行结果','demo-call'),demoMessage(14,'assistant','这条命令已执行完成。你可以展开上面的卡片查看输出，或点击右上角切换到「布局检查」子 Agent。')];if(r.before!==undefined)messages=[demoMessage(1,'user','先把连接设备和密码保存做好。'),demoMessage(2,'assistant','更早的消息：连接资料和密码将使用本机密钥加密保存。')];return{record:rec,messages,children:demoRecords.filter(x=>x.parent===rec.thread),before:r.before!==undefined?0:10,has_more:r.before===undefined&&rec.id==='demo-root'};}if(op==='read')return{text:'$ python3 -m unittest discover -s tests -v\nRan 24 tests\nOK\n\n离线演示，不是真实终端。'};if(op==='prompt'||op==='key')return{sent:false};throw Error('演示不支持此操作');}
+// ─── History tab ────────────────────────────────────────────────────────────
+let searchTimer;
+function historyPage(main){
+ pageHead(main,'','历史',S.device&&S.total?S.total+' 条记录':'',ib('refresh','刷新历史',()=>loadCatalog(S.catalogQuery||'')));if(!requireDevice(main))return;
+ main.append(searchBox('搜索项目、标题或会话 ID',q=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>loadCatalog(q),400);},S.catalogQuery||''));
+ const filters=el('div','tabs');[['all','全部'],['codex','Codex'],['claude','Claude'],['child','子 Agent']].forEach(([id,t])=>filters.append(btn(t,'pill'+(S.filter===id?' active':''),()=>{S.filter=id;renderHistoryList();filters.querySelectorAll('button').forEach(n=>n.classList.toggle('active',n.textContent===t));})));main.append(filters);
+ const list=el('div');list.id='history-list';main.append(list);renderHistoryList();}
+function renderHistoryList(){
+ const list=document.getElementById('history-list');if(!list)return;list.replaceChildren();
+ const records=S.records.filter(r=>S.filter==='all'||(S.filter==='child'?r.parent:r.provider===S.filter));
+ if(!records.length){if(S.catalogLoading)skeleton(list,5);else empty(list,'没有匹配的记录','只显示当前 SSH 用户的 Codex / Claude 本地历史。');return;}
+ let day='',group=null;
+ for(const r of records){const d=dayLabel(r.modified);if(d!==day||!group){day=d;list.append(el('div','section-label',d||'更早'));group=el('div','card list-card');list.append(group);}
+  const b=btn('','card-button history-row',()=>openRecord(r));const text=el('div','grow');text.append(el('div','card-title',r.title));const meta=el('div','card-meta');meta.append(el('span','',providerName(r.provider)),el('span','sep',clock(r.modified)));const project=(r.cwd||'').split('/').filter(Boolean).pop();if(project)meta.append(el('span','sep',project));if(r.parent)meta.append(el('span','badge muted','子 Agent'));text.append(meta);b.append(avatar(r.provider),text,icon('chevron'));group.append(b);}
+ if(S.next!==null&&S.next!==undefined)list.append(btn('加载更多历史','secondary wide',()=>loadCatalog(S.catalogQuery||'',true)));}
+async function loadCatalog(query='',more=false){
+ if(!S.device)return;const epoch=++S.epoch;S.catalogLoading=true;if(!more&&!S.records.length)renderHistoryList();
+ try{const r=await remote('catalog',{offset:more?S.next||0:0,query});if(epoch!==S.epoch)return;S.records=more?S.records.concat(r.records):r.records;S.total=r.total;S.next=r.next;S.catalogQuery=query;}
+ catch(e){if(epoch===S.epoch)error(e);}
+ finally{if(epoch===S.epoch){S.catalogLoading=false;if(S.tab==='history'&&!S.chat){if(more||query)renderHistoryList();else render();}}}}
+
+// ─── Back & lifecycle ───────────────────────────────────────────────────────
+function pocketBack(){
+ if(overlay.childElementCount){closeSheet();return;}
+ if(T.view){leaveTerminal();render();return;}
+ if(S.chatStack.length){const prev=S.chatStack.pop();S.chat=prev;S.chatMode=prev.mode||'conversation';S.messages=prev.savedMessages||[];S.children=prev.savedChildren||[];S.before=prev.savedBefore||0;S.more=!!prev.savedMore;S.epoch++;renderChat();document.getElementById('chat-scroll').scrollTop=prev.savedScroll||0;if(prev.record&&!S.messages.length)fetchHistory(false,true);return;}
+ if(S.chat){S.chat=null;S.epoch++;render();return;}
+ if(S.tab!=='live'&&S.device)setTab('live');else if(S.tab!=='devices')setTab('devices');else toast('设备和保存的密码都在，可以直接关闭应用');}
+window.pocketBack=pocketBack;
+window.setForeground=v=>{S.active=v;if(v){refreshStatus();if(S.chat?.record&&!S.paused)fetchHistory();}};
+// Busy agents refresh faster; nothing polls in the background or in demo mode.
+let tick=0;
+setInterval(()=>{
+ if(!S.active||S.demo||!S.device)return;tick++;
+ const busy=S.chat?.agent&&!S.chat.stale&&['working','blocked'].includes(S.chat.agent.agent_status);
+ if(S.chat){if(!S.paused&&!S.polling&&S.chatMode!=='terminal'&&(busy||tick%3===0))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);if(tick%2===0)refreshStatus();}
+ else if(S.tab==='live'&&tick%3===0)refreshStatus();
+},2500);
+
+// ─── Offline demo ───────────────────────────────────────────────────────────
+const demoAgents=[{pane_id:'demo:1',identity:'demo-codex',agent:'codex',agent_status:'idle',terminal_title:'把移动端做成真正的聊天工具',cwd:'/home/demo/projects/pocket',agent_session:{value:'demo-root'}},{pane_id:'demo:2',identity:'demo-claude',agent:'claude',agent_status:'working',terminal_title:'检查接口与回归测试',cwd:'/home/demo/projects/pocket',agent_session:{value:'demo-claude'}},{pane_id:'demo:3',identity:'demo-review',agent:'codex',agent_status:'blocked',terminal_title:'清理构建缓存',cwd:'/home/demo/projects/site',agent_session:{value:'demo-review'}}];
+const demoRecords=[{id:'demo-root',thread:'demo-root',provider:'codex',parent:null,title:'把移动端做成真正的聊天工具',cwd:'/home/demo/projects/pocket',modified:Date.now()/1000-300},{id:'demo-child',thread:'demo-child',provider:'codex',parent:'demo-root',title:'布局检查 · 子 Agent',cwd:'/home/demo/projects/pocket',modified:Date.now()/1000-240},{id:'demo-claude',thread:'demo-claude',provider:'claude',parent:null,title:'检查接口与回归测试',cwd:'/home/demo/projects/pocket',modified:Date.now()/1000-90000},{id:'demo-review',thread:'demo-review',provider:'codex',parent:null,title:'清理构建缓存',cwd:'/home/demo/projects/site',modified:Date.now()/1000-60}];
+function demoMessage(id,kind,text,title='',call_id=''){return{id:id+':0',kind,text,title,call_id,timestamp:new Date(Date.now()-600000+id*20000).toISOString()};}
+async function demoRequest(op,r){
+ await new Promise(resolve=>setTimeout(resolve,160));
+ if(op==='sessions')return{sessions:[{name:'demo',running:true}]};
+ if(op==='agents'||op==='status')return{agents:demoAgents};
+ if(op==='panes')return{panes:[{pane_id:'w1:p3',terminal_id:'demo-term',identity:'demo-pane',workspace_label:'演示项目',tab_id:'w1:t1',cwd:'~/projects/pocket',terminal_title:'开发终端'}]};
+ if(op==='paneRead')return{text:'$ pwd\n~/projects/pocket\n$ npm test\nPASS: 离线普通分屏演示\n$ '};
+ if(op==='account')return{ssh_user:'demo',hostname:'workstation'};
+ if(op==='catalog'){let rows=demoRecords;if(r.thread)rows=rows.filter(x=>x.thread===r.thread);if(r.query)rows=rows.filter(x=>JSON.stringify(x).includes(r.query));return{records:rows,total:rows.length,next:null};}
+ if(op==='history'){const rec=demoRecords.find(x=>x.id===r.record_id);let messages;
+  if(rec.id==='demo-child')messages=[demoMessage(1,'user','请检查小屏和横屏的输入栏。'),demoMessage(2,'assistant','子 Agent：布局检查完成。\n\n输入栏保持可见，长命令可展开阅读。')];
+  else if(rec.id==='demo-claude')messages=[demoMessage(1,'assistant','正在检查接口与回归测试。\n\n这是 Claude 的独立会话。'),demoMessage(2,'tool','{"file_path":"bridge/pocket_bridge.py"}','Read','c1'),demoMessage(3,'result','#!/usr/bin/env python3\n"""Herdr Pocket protocol v1."""','执行结果','c1'),demoMessage(4,'tool','python3 -m unittest discover -s tests','Bash','c2')];
+  else if(rec.id==='demo-review')messages=[demoMessage(1,'user','把 dist 和缓存目录清掉。'),demoMessage(2,'tool','rm -rf dist .cache','exec_command','c9')];
+  else messages=[demoMessage(10,'user','历史记录、子 Agent 和执行的命令都要能看到。'),demoMessage(11,'assistant','我把它们整理到同一个对话里：\n\n- **对话**保留完整上下文\n- **命令**展示具体执行内容\n- 子 Agent 可以独立切换\n\n| 视图 | 内容 |\n|---|---|\n| 对话 | 消息与折叠的操作 |\n| 命令 | 全部命令和输出 |'),demoMessage(12,'tool','python3 -m unittest discover -s tests -v','exec_command','demo-call'),demoMessage(13,'result','Ran 24 tests in 0.08s\nOK\nProcess exited with code 0','执行结果','demo-call'),demoMessage(14,'tool','{"cmd":"rg -n \\"history_ref\\" app"}','exec_command','demo-call-2'),demoMessage(15,'result','app.js:53: const ref=a.history_ref;','执行结果','demo-call-2'),demoMessage(16,'assistant','测试都通过了。展开上面的操作可以看到每条命令和输出，或者点右上角切换到「布局检查」子 Agent。\n\n```bash\nnpm test\n```')];
+  if(r.before!==undefined)messages=[demoMessage(1,'user','先把连接设备和密码保存做好。'),demoMessage(2,'assistant','更早的消息：连接资料和密码会用本机密钥加密保存。')];
+  return{record:rec,messages,children:demoRecords.filter(x=>x.parent===rec.thread),before:r.before!==undefined?0:10,has_more:r.before===undefined&&rec.id==='demo-root'};}
+ if(op==='read')return{text:r.target==='demo:3'?'  Would you like to run the following command?\n\n  $ rm -rf dist .cache\n\n› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n\n  Press enter to confirm or esc to cancel':'$ python3 -m unittest discover -s tests -v\nRan 24 tests\nOK\n\n离线演示，不是真实终端。'};
+ if(op==='prompt'||op==='key')return{sent:false};
+ throw Error('演示不支持此操作');}
+
 async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;render();}catch(e){error(e);}}
 boot();

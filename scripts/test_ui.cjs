@@ -49,7 +49,7 @@ await page.evaluate(()=>nativeResult(pendingConnect,{ok:true,data:{device:S.devi
 await page.getByText('SSH 已连接，正在读取会话',{exact:true}).waitFor();
 assert.equal(await page.getByText('暂时没有会话',{exact:true}).count(),0);
 await page.evaluate(()=>nativeResult(pendingRemote.id,{ok:true,data:{sessions:[{name:'fixture',running:true}]}}));
-await page.getByText('正在识别 Agent 并同步本机和远端历史，首次读取可能需要几十秒。',{exact:true}).waitFor();
+await page.getByText('正在识别 Agent 并关联历史记录…',{exact:true}).waitFor();
 fs.mkdirSync(path.join(root,'ui-artifacts'),{recursive:true});
 await page.screenshot({path:path.join(root,'ui-artifacts/connection-loading-browser.png')});
 await page.evaluate(()=>nativeResult(pendingRemote.id,{ok:false,error:'fixture read timeout'}));
@@ -129,7 +129,7 @@ await page.getByRole('button',{name:'关闭',exact:true}).click();
 console.log('PASS: missing Herdr ID resolves explicit remote history and preserves remote picker context');
 
 await page.getByRole('button',{name:'返回列表',exact:true}).click();
-await page.getByRole('button',{name:'我的',exact:true}).click();
+await page.getByRole('button',{name:'设备',exact:true}).click();
 await page.getByText('workstation.local',{exact:true}).waitFor();
 await page.screenshot({path:path.join(folder,'account-browser.png')});
 await page.getByRole('button',{name:'终端',exact:true}).click();
@@ -148,7 +148,7 @@ assert.equal(await page.evaluate(()=>T.shell.sequence),0,'demo must not send SSH
 await page.screenshot({path:path.join(folder,'ssh-terminal-browser.png')});
 for(const [width,height] of [[320,640],[844,390]]){await page.setViewportSize({width,height});const b=await page.getByRole('button',{name:'执行',exact:true}).boundingBox();assert(b.y+b.height<=height,'terminal composer clipped');assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
 await page.getByRole('button',{name:'返回终端列表',exact:true}).click();
-await page.getByRole('button',{name:'我的',exact:true}).click();
+await page.getByRole('button',{name:'设备',exact:true}).click();
 console.log('PASS: SSH renderer, persistent terminal view, Herdr pane selection, demo input isolation and responsive terminal');
 assert.deepEqual(errors,[]);console.log('PASS: device form, chat, earlier history, commands/results, child switch, target isolation, drafts, narrow/landscape/tablet, SSH info');
 assert.equal(await page.locator('.pane-enter').evaluate(n=>getComputedStyle(n).animationName),'arrive');

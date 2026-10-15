@@ -147,7 +147,7 @@ class MainActivity : Activity() {
                         }
                         "remote" -> {
                             check(connectedDevice != null) { "请先连接设备" }
-                            check(req.optString("op") in setOf("sessions", "agents", "read", "prompt", "key", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey")) { "不支持的操作" }
+                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey")) { "不支持的操作" }
                             success(id, transport.request(req))
                         }
                         else -> error("不支持的操作")
