@@ -184,7 +184,7 @@ def main():
     fill('消息输入框','draft-check');expect('发送消息');screenshot('keyboard')
     run('shell','input','keyevent','4')
     tap('发送消息');expect('草稿已保留')
-    tap('切换 Agent');tap('布局检查 · 子 Agent · demo-chi')
+    tap('切换 Agent');tap('布局检查 · 子 Agent，已结束，打开只读记录')
     expect('子 Agent：布局检查完成。');screenshot('subagent')
     assert find('消息输入框',True) is None,'Child record must not send to parent'
     tap('返回列表');expect('draft-check')
