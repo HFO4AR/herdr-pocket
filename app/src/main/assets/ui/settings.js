@@ -1,11 +1,17 @@
 'use strict';
-// 设置: appearance, alerts, screen protection, cache and updates.
+// 设置: appearance, connection, alerts, screen protection, cache and updates.
 // Preferences live natively (SharedPreferences), so the theme and text size apply before the
 // page draws and survive reinstalling the UI bundle. Update checks and downloads run natively
 // too: the WebView itself never reaches the network.
 const SET={prefs:null,checking:false,download:null,needPermission:false,cache:null,error:''};
 const THEMES=[['system','跟随系统'],['light','浅色'],['dark','深色']];
 const ZOOMS=[[90,'小'],[100,'标准'],[115,'大'],[130,'特大']];
+// 后台保持连接: minutes the background service keeps the SSH session (0 = until 断开).
+const KEEPS=[[15,'15 分钟'],[60,'1 小时'],[240,'4 小时'],[0,'一直保持']];
+function keepText(m){return (KEEPS.find(k=>k[0]===m)||KEEPS[1])[1];}
+// 断开 on the keep-alive notification ended the session natively: show the devices page.
+// (Function declarations are hoisted across the bundle, so this wraps onboard.js's netEvent.)
+{const base=netEvent;netEvent=function(e){if(e&&e.type==='disconnected'){if(S.device&&!S.demo)disconnect().then(()=>toast('已断开和电脑的连接')).catch(()=>{});return;}return base(e);};}
 
 window.applyTheme=t=>{document.documentElement.dataset.theme=t==='dark'?'dark':'light';};
 async function settingsLoad(){try{const p=await rpc('settings');SET.prefs=p;S.alerts=p.alerts!==false;if(S.version!==p.version&&p.version)S.version=p.version;return p;}catch(_){return null;}}
@@ -62,6 +68,12 @@ function settingsPage(main){
  look.append(seg('主题',THEMES,p.theme,v=>settingsSet('theme',v)));
  look.append(seg('文字大小',ZOOMS,p.textZoom,v=>settingsSet('textZoom',v)));
 
+ const conn=group(main,'连接');
+ const keepOn=p.keepAlive!==false,minutes=KEEPS.some(k=>k[0]===p.keepAliveMinutes)?p.keepAliveMinutes:60;
+ conn.append(toggle('后台保持连接','切到后台或划掉 App 后继续连着，回来不用重新登录',keepOn,async on=>{const r=await settingsSet('keepAlive',on);if(!r)return false;toast(on?'切到后台时会保持连接 '+keepText(r.keepAliveMinutes):'切到后台后不再保持连接');paintSettings();return true;}));
+ if(keepOn){
+  conn.append(seg('保持多久',KEEPS,minutes,async v=>{const r=await settingsSet('keepAliveMinutes',v);if(r){toast(v?'后台保持 '+keepText(v)+'，到时自动断开':'会一直保持连接，不用了在通知里点「断开」');paintSettings();}}));
+  conn.append(el('p','set-note',(minutes?'到时间自动断开省电，回来时自动重连。':'一直保持会多耗一点电，不用了在通知里点「断开」。')+(p.notifications===false?'系统通知关着也照样保持，只是通知栏里看不到它。':'保持期间通知栏有一条安静的常驻通知。')));}
  const privacy=group(main,'提醒与隐私');
  privacy.append(toggle('后台提醒','切到后台后，Agent 做完或等你确认时发通知',S.alerts!==false,async on=>{try{S.alerts=(await rpc('setAlerts',{enabled:on})).alerts;toast(S.alerts?'切到后台时会继续关注 Agent':'已关闭后台提醒');return true;}catch(e){error(e);return false;}}));
  if(S.alerts!==false&&p.notifications===false){privacy.append(el('p','set-note error','系统通知被关掉了，后台提醒弹不出来。'));const go=btn('打开系统通知','secondary small',()=>rpc('openNotificationSettings').catch(error));go.classList.add('set-action');privacy.append(go);}

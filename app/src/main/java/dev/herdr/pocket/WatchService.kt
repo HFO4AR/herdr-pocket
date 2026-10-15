@@ -12,13 +12,26 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.SystemClock
 import org.json.JSONObject
 
 /**
- * While the app is in the background, keeps the SSH session alive and polls
- * Herdr state (read-only "status") to notify when an agent finishes or needs
- * confirmation. It never sends input. Stops on return to the app, on
- * disconnect, after repeated failures or after [MAX_RUNTIME_MS].
+ * While the app is in the background (or swiped away from recents), keeps the SSH session alive so
+ * coming back needs no new login. Two parts, each optional:
+ * - keep: holds the process at foreground-service priority so Android does not freeze it and JSch's
+ *   keepalives keep flowing, for the time chosen in 设置 → 后台保持连接 (15 分钟 / 1 小时 / 4 小时 /
+ *   一直保持). When it runs out the session is closed cleanly (battery) and the app reconnects on return.
+ * - alerts: polls Herdr state (read-only "status") to notify when an agent finishes or needs
+ *   confirmation, up to [MAX_RUNTIME_MS].
+ * It never sends input. Stops on return to the app, on disconnect, when the session is gone (keep
+ * only: the app reconnects on return instead of logging in again in the background) and after
+ * repeated failures. With notifications blocked the keep part still runs; Android then hides the
+ * ongoing notification (it stays listed in the system's active-apps list). If the system or an OEM
+ * battery manager kills the process anyway, the session ends with it and the app connects again
+ * when opened.
+ *
+ * No wake lock: in deep sleep JSch's keepalive thread pauses; on return the app checks the session
+ * with one channel open before trusting it (see PocketCore.enterForeground).
  *
  * Sub-agents: Herdr reports only the parent pane, which reads idle/done while its sub-agents
  * still run. Before calling a stop "做完了" the watcher asks the bridge's read-only `glance`
@@ -40,6 +53,10 @@ class WatchService : Service() {
     private var session = ""
     private var deviceName = ""
     private var ongoingText = ""
+    // Keep part: on/off and when it ends (elapsedRealtime, 0 = 一直保持). Alerts end at alertsUntil.
+    private var keep = false
+    private var keepUntil = 0L
+    private var alertsUntil = 0L
 
     private class Posted(val title: String, val text: String, val urgent: Boolean)
 
@@ -55,22 +72,58 @@ class WatchService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val device = PocketCore.connectedDevice
-        if (device == null || intent?.action == ACTION_STOP) { stopSelf(); return START_NOT_STICKY }
+        if (intent?.action == ACTION_DISCONNECT) {
+            // 断开 on the notification: end the session for real; the app shows the devices page.
+            PocketCore.stats.notificationDisconnects.incrementAndGet()
+            if (device != null) { PocketCore.disconnect(); PocketCore.listener?.invoke("disconnected", "") }
+            end(); return START_NOT_STICKY
+        }
+        if (device == null) { end(); return START_NOT_STICKY }
+        if (intent?.action == ACTION_STOP) {
+            // 停止关注: alerts end; the connection stays while the keep part runs.
+            if (!keep || session.isEmpty()) { end(); return START_NOT_STICKY }
+            session = ""; handler.removeCallbacksAndMessages(null)
+            manager().notify(ONGOING_ID, ongoing(emptyList())); handler.postDelayed(::poll, KEEP_TICK_MS)
+            return START_NOT_STICKY
+        }
         session = intent?.getStringExtra(EXTRA_SESSION).orEmpty()
+        keep = intent?.getBooleanExtra(EXTRA_KEEP, false) == true
+        val minutes = intent?.getIntExtra(EXTRA_KEEP_MINUTES, 60) ?: 60
+        val now = SystemClock.elapsedRealtime()
+        keepUntil = if (keep && minutes > 0) now + minutes * 60_000L else 0L
+        alertsUntil = now + MAX_RUNTIME_MS
+        if (!keep && session.isEmpty()) { end(); return START_NOT_STICKY }
         deviceName = device.optString("name")
         intent?.getStringExtra(EXTRA_STATES)?.let { seed(it) }
         kidItems.clear()
         intent?.getStringExtra(EXTRA_KIDS)?.let { raw ->
             try { val o = JSONObject(raw); o.keys().forEach { k -> o.optJSONObject(k)?.let { kidItems[k] = it } } } catch (_: Exception) {}
         }
+        running = true
         val ongoing = ongoing(last.values.toList())
         lastOngoing = ongoingText
         if (Build.VERSION.SDK_INT >= 34) startForeground(ONGOING_ID, ongoing, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(ONGOING_ID, ongoing)
         startedAt = System.currentTimeMillis(); failures = 0
         handler.removeCallbacksAndMessages(null)
-        handler.postDelayed(::poll, POLL_MS)
+        handler.postDelayed(::poll, if (session.isEmpty()) KEEP_TICK_MS else POLL_MS)
         return START_NOT_STICKY
+    }
+
+    /**
+     * Ends what has run out. Returns false when nothing is left and the service stopped. Handler
+     * delays do not advance while the CPU sleeps, so this runs late after deep sleep; the deadlines
+     * use elapsedRealtime, which does count sleep.
+     */
+    private fun stillNeeded(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (session.isNotEmpty() && now > alertsUntil) session = ""
+        val keeping = keep && (keepUntil == 0L || now < keepUntil)
+        if (session.isNotEmpty() || keeping) return true
+        // Time is up: close the session cleanly instead of holding it open for nobody.
+        PocketCore.sleep()
+        end()
+        return false
     }
 
     // The UI hands over the states it already showed, so only later changes notify.
@@ -81,6 +134,7 @@ class WatchService : Service() {
 
     /** Calm and informative: how many agents, what they are doing, on which computer. */
     private fun ongoing(states: List<String>): Notification {
+        if (session.isEmpty()) return keeping()
         val working = states.count { it == "working" || it == "kids" }
         val blocked = states.count { it == "blocked" }
         val text = listOfNotNull(
@@ -102,11 +156,47 @@ class WatchService : Service() {
             .setCategory(Notification.CATEGORY_SERVICE)
             .addAction(Notification.Action.Builder(null, "停止关注",
                 PendingIntent.getService(this, 1, Intent(this, WatchService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)).build())
+            .apply { if (keep) addAction(disconnectAction()) }
             .build()
     }
 
+    /** Keep only: a quiet line saying which computer stays connected and for how long (countdown). */
+    private fun keeping(): Notification {
+        val title = if (deviceName.isEmpty()) "保持和电脑的连接" else "保持和 $deviceName 的连接"
+        val text = if (keepUntil == 0L) "回来直接接着用，不用了点「断开」" else "回来直接接着用，到时间自动断开"
+        ongoingText = "$title\n$text"
+        val b = Notification.Builder(this, CHANNEL_BACKGROUND)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(ACCENT)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setContentIntent(open(null))
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .addAction(disconnectAction())
+        if (keepUntil > 0L) {
+            val left = keepUntil - SystemClock.elapsedRealtime()
+            b.setShowWhen(true).setWhen(System.currentTimeMillis() + left).setUsesChronometer(true).setChronometerCountDown(true)
+        } else b.setShowWhen(false)
+        return b.build()
+    }
+
+    private fun disconnectAction() = Notification.Action.Builder(null, "断开",
+        PendingIntent.getService(this, 3, Intent(this, WatchService::class.java).setAction(ACTION_DISCONNECT), PendingIntent.FLAG_IMMUTABLE)).build()
+
     private fun poll() {
-        if (PocketCore.connectedDevice == null || System.currentTimeMillis() - startedAt > MAX_RUNTIME_MS || session.isEmpty()) { stopSelf(); return }
+        if (PocketCore.connectedDevice == null) { end(); return }
+        val alerting = session.isNotEmpty()
+        if (!stillNeeded()) return
+        if (session.isEmpty()) {
+            // Alerts just ran out: the notification switches to the keep line.
+            if (alerting) manager().notify(ONGOING_ID, ongoing(emptyList()))
+            // Keep only. The session dropped (network gone, keepalives unanswered): nothing to keep.
+            // No background login; the app reconnects once the person opens it.
+            if (!PocketCore.transport.isConnected()) { end(); return }
+            handler.postDelayed(::poll, KEEP_TICK_MS); return
+        }
         try {
             val agents = PocketCore.request(JSONObject().put("op", "status").put("session", session)).getJSONArray("agents")
             failures = 0
@@ -146,7 +236,8 @@ class WatchService : Service() {
             // computer or tunnel is unreachable. Say so instead of silently losing alerts.
             if (++failures >= 5) {
                 notify("watch-stopped", "后台关注停了", "连不上电脑，已停止提醒；回到 App 会重新连接", "", false, grouped = false)
-                stopSelf(); return
+                // Nothing to keep either: the computer is unreachable.
+                end(); return
             }
         }
         handler.postDelayed(::poll, POLL_MS)
@@ -260,7 +351,11 @@ class WatchService : Service() {
         return PendingIntent.getActivity(this, pane?.hashCode() ?: 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
+    /** Stops on its own: from now on nothing keeps the session warm, so the app checks it on return. */
+    private fun end() { PocketCore.keepEnded(); stopSelf() }
+
     override fun onDestroy() {
+        running = false
         handler.removeCallbacksAndMessages(null)
         thread.quitSafely()
         super.onDestroy()
@@ -268,6 +363,12 @@ class WatchService : Service() {
 
     companion object {
         const val ACTION_STOP = "dev.herdr.pocket.STOP_WATCH"
+        const val ACTION_DISCONNECT = "dev.herdr.pocket.DISCONNECT"
+        const val EXTRA_KEEP = "keep"
+        const val EXTRA_KEEP_MINUTES = "keepMinutes"
+        /** True while the service runs (it holds the session for the app). */
+        @Volatile var running = false
+            private set
         const val EXTRA_SESSION = "session"
         const val EXTRA_STATES = "states"
         const val EXTRA_KIDS = "kids"
@@ -282,6 +383,7 @@ class WatchService : Service() {
         private const val GROUP = "dev.herdr.pocket.AGENTS"
         private const val ACCENT = 0xFFF57B4A.toInt()
         private const val POLL_MS = 20_000L
+        private const val KEEP_TICK_MS = 60_000L
         private const val MAX_RUNTIME_MS = 8 * 60 * 60 * 1000L
 
         /**
@@ -304,8 +406,10 @@ class WatchService : Service() {
                 setShowBadge(false)
             })
         }
-        fun start(context: Context, session: String, states: String, kids: String = "{}") {
+        /** [session] empty = no alerts; [keep] = hold the connection for [keepMinutes] (0 = until stopped). */
+        fun start(context: Context, session: String, states: String, kids: String = "{}", keep: Boolean = false, keepMinutes: Int = 60) {
             val intent = Intent(context, WatchService::class.java).putExtra(EXTRA_SESSION, session).putExtra(EXTRA_STATES, states).putExtra(EXTRA_KIDS, kids)
+                .putExtra(EXTRA_KEEP, keep).putExtra(EXTRA_KEEP_MINUTES, keepMinutes)
             context.startForegroundService(intent)
         }
         fun stop(context: Context) { context.stopService(Intent(context, WatchService::class.java)) }

@@ -68,7 +68,10 @@ const HELP=[
   {id:'alerts-how',h:'怎么工作',body:[
    '切到后台时，App 启动一个带常驻通知的前台服务，每 20 秒只读查询一次 Agent 状态。有 Agent 做完或等你确认时发通知，点通知直接打开它。',
    ['通知里只有 Agent 标题和状态，没有消息内容。','后台只读，从不发送任何输入；排队的消息要回到前台才发。','回到 App、断开设备、连续 5 次查询失败或 8 小时后自动停止，通知上也能停。'],
-   '在「设置 → 提醒与隐私」里开关。系统通知被关掉时，设置页会提示，点「打开系统通知」。']}]},
+   '在「设置 → 提醒与隐私」里开关。系统通知被关掉时，设置页会提示，点「打开系统通知」。']},
+  {id:'alerts-keep',h:'后台保持连接',body:[
+   '默认打开：切到后台、锁屏或从最近任务里划掉 App 后，SSH 连接继续保持，回来直接接着用，不用重新登录。通知栏有一条安静的「保持和 … 的连接」，点「断开」随时结束。',
+   ['在「设置 → 连接」里选保持多久：15 分钟、1 小时、4 小时或一直保持。到时间自动断开省电，回来时自动重连。','只保持连接，不发送任何东西。','手机深度休眠后回来，App 先轻轻试一下旧连接，通了就继续用，不通才重连。','系统通知关着也能保持，只是通知栏里看不到它。被系统或省电管家杀掉时连接会断，重新打开 App 再连。']]}]},
  {id:'keys',title:'密钥登录',parts:[
   {id:'keys-make',h:'这台手机的密钥',body:[
    '「设备」页的「登录密钥」：生成一把 Ed25519 密钥，或导入已有私钥（带密码的也行，密码只用一次、不保存）。',
@@ -179,6 +182,8 @@ function helpUa(re){const m=String(navigator.userAgent||'').match(re);return m?m
 // Everything here is a version, a fixed state word or a number. Nothing typed by the person or
 // reported by the computer as free text is copied in.
 async function helpDiagnostics(){
+ // Fresh counts: the cached prefs may be minutes old.
+ if(typeof settingsLoad==='function')try{await helpWithin(settingsLoad(),3000);}catch(_){}
  const p=(typeof SET!=='undefined'&&SET.prefs)||{};const lines=[];const add=(k,v)=>lines.push(k+'：'+v);
  lines.push('Herdr Pocket 诊断信息');
  add('App',(p.version||S.version||'未知')+(p.versionCode?' ('+p.versionCode+')':''));
@@ -196,7 +201,11 @@ async function helpDiagnostics(){
  const c=S.chat;add('当前对话',!c?'无':c.agent?(isCh(c.agent)?'ch 远端':'本机')+' · '+(c.agent.agent||'agent')+(c.stale?' · 已变化':''):c.record?((c.record.remote?'ch 远端':'本机')+' · 历史只读'+(c.record.parent?' · 子 Agent':'')):'无');
  let queued=0;if(typeof Q!=='undefined')for(const q of Q.values())queued+=q.items.length;
  add('数量','保存的设备 '+(S.devices||[]).length+' · 排队消息 '+queued+' · 未确认发送 '+(S.outbox||[]).filter(o=>o.state!=='sent').length+' · 已加载历史 '+(S.records||[]).length);
- add('设置','后台提醒 '+(S.alerts!==false?'开':'关')+' · 系统通知 '+(p.notifications===false?'关':'开')+' · 主题 '+(p.theme||'?')+' · 字号 '+(p.textZoom||100)+'% · 防截图 '+(p.secureScreen?'开':'关'));
+ // Connection counts since the app started (numbers only): how often SSH logged in and why.
+ const cn=p.conn;if(cn){const n=k=>Number(cn[k])||0;
+  add('SSH 登录',n('logins')+' 次（手动连接 '+n('connects')+'，断线重连 '+n('reconnects')+'，静默换新 '+n('quietSwaps')+'，密钥测试 '+n('keyProbes')+'）');
+  add('回到前台',n('reused')+' 次直接复用，'+n('verified')+' 次检查后复用，'+n('verifyFailed')+' 次检查失败；后台保持 '+n('kept')+' 次，到时断开 '+n('slept')+' 次，通知里断开 '+n('notificationDisconnects')+' 次');}
+ add('设置','后台保持连接 '+(p.keepAlive===false?'关':(p.keepAliveMinutes===0?'一直':((p.keepAliveMinutes||60)>=60?(p.keepAliveMinutes||60)/60+' 小时':p.keepAliveMinutes+' 分钟')))+' · 后台提醒 '+(S.alerts!==false?'开':'关')+' · 系统通知 '+(p.notifications===false?'关':'开')+' · 主题 '+(p.theme||'?')+' · 字号 '+(p.textZoom||100)+'% · 防截图 '+(p.secureScreen?'开':'关'));
  add('最近错误代码',HELP_ERR.length?HELP_ERR.map(e=>e.op+(e.code?':'+e.code:'')+(e.n>1?' ×'+e.n:'')+' ('+ago(Date.now()-e.at)+'前)').join('，'):'无');
  return lines.join('\n');}
 const HELP_ISSUE='https://github.com/HFO4AR/herdr-pocket/issues/new';

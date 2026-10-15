@@ -29,7 +29,25 @@
 .qa-text{width:100%;min-height:64px;max-height:140px;padding:10px 12px;border:1px solid var(--accent);border-radius:12px;background:var(--surface);resize:none;outline:none;font-size:15px;line-height:1.5}
 .qa-text::placeholder{color:var(--faint)}
 .qa-foot{display:flex;flex-direction:column;gap:6px;padding:8px 12px 10px;border-top:1px solid var(--line);background:var(--surface)}
-.qa-submit{width:100%;min-height:46px}
+/* 暂不回答 / 关闭 next to the answer button: always there, never the default. */
+.qa-actions{display:flex;gap:8px}
+.qa-submit{flex:1;min-width:0;min-height:46px}
+.qa-close{flex:0 0 auto;min-height:46px;padding:0 14px}
+/* The card put aside: one line above the input with 展开. */
+.qa-mini{display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:8px 8px 8px 10px;border:1px solid var(--soft-line);border-radius:var(--radius-card);background:var(--soft)}
+.qa-mini-icon{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;flex-shrink:0;background:var(--surface);color:var(--accent)}
+.qa-mini-icon svg{width:16px;height:16px}
+.qa-mini.approval{border-color:var(--danger-line);background:var(--danger-soft)}
+.qa-mini.approval .qa-mini-icon{color:var(--danger)}
+.qa-mini .grow{min-width:0;display:flex;flex-direction:column;gap:1px}
+.qa-mini strong{font-size:13.5px;font-weight:650;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qa-mini small{font-size:12px;line-height:1.4;color:var(--muted)}
+.qa-mini .secondary{flex-shrink:0;min-height:44px}
+.qa-reopen .link-btn{display:inline;min-height:0;padding:0;font:inherit;color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+.qa-reopen .link-btn{position:relative}
+.qa-reopen .link-btn:after{content:'';position:absolute;inset:-12px -8px}
+.qa-close-note{margin:0 0 8px;line-height:1.55}
+.menu-item.danger,.menu-item.danger svg{color:var(--danger)}
 .qa-error{font-size:12.5px;line-height:1.5;color:var(--danger)}
 .qa-submit.pending:disabled{opacity:1;background:var(--sunken);color:var(--muted);font-weight:500}
 .qa-submit .spinner{margin-right:8px}
@@ -63,5 +81,7 @@
  .qa-opt{min-height:44px;padding:8px 10px}
  .qa-desc{-webkit-line-clamp:2}
  .qa-foot{padding:6px 10px 8px}
- .qa-submit{min-height:44px}
+ .qa-submit,.qa-close{min-height:44px}
+ .qa-mini{padding:4px 6px 4px 8px}
+ .qa-mini small{display:none}
 }

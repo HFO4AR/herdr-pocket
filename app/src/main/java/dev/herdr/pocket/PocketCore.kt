@@ -48,7 +48,18 @@ object PocketCore {
     private val lock = Any()
     // Session may be unusable although JSch still reports it connected.
     @Volatile private var suspect = false
+    // Check the session with one channel round trip before the next request (see [enterForeground]).
+    @Volatile private var verify = false
+    // The session was closed on purpose (background time ran out): reconnect without the "断了" banner.
+    @Volatile private var asleep = false
     @Volatile private var network: Network? = null
+    // Background bookkeeping is process-wide: the activity can be destroyed (swiped from recents)
+    // while the keep-alive service holds the session, and a new activity resumes it.
+    @Volatile private var backgroundAt = 0L
+    @Volatile private var backgroundUptime = 0L
+    @Volatile private var backgroundKept = false
+    /** SSH connections and checks since the app started; counts only, shown in 反馈问题. */
+    val stats = ConnectionStats()
 
     fun init(context: Context) {
         if (::vault.isInitialized) return
@@ -81,8 +92,35 @@ object PocketCore {
         } catch (_: Exception) { }
     }
 
-    /** The app returns after a long pause with nothing keeping the session warm. */
+    /** The session may be stale: replace it make-before-break before the next request. */
     fun markSuspect() { if (connectedDevice != null) suspect = true }
+
+    /** The UI went to the background; [kept] = the keep-alive service now holds the session. */
+    fun enterBackground(kept: Boolean, elapsed: Long = android.os.SystemClock.elapsedRealtime(), uptime: Long = android.os.SystemClock.uptimeMillis()) {
+        backgroundAt = elapsed; backgroundUptime = uptime; backgroundKept = kept
+        if (kept && connectedDevice != null) stats.keptInBackground.incrementAndGet()
+    }
+
+    /** The service stopped by itself while the app was away (time up, 停止关注, session lost). */
+    fun keepEnded() { backgroundKept = false }
+
+    /**
+     * The UI is visible again. Nothing reconnects here: a session that is down is replaced by the next
+     * request as usual. A session that is still up is reused as is when it was kept warm (the service
+     * held it and the phone did not sleep long enough for keepalives to stop) or the pause was short.
+     * Otherwise (app frozen without the service, or the CPU slept through keepalives) the next request
+     * first opens one channel as a cheap check and reconnects only when that fails.
+     */
+    fun enterForeground(elapsed: Long = android.os.SystemClock.elapsedRealtime(), uptime: Long = android.os.SystemClock.uptimeMillis()) {
+        val at = backgroundAt
+        backgroundAt = 0
+        if (at == 0L || connectedDevice == null || !transport.isConnected()) return
+        val paused = elapsed - at
+        // Time the CPU spent suspended: JSch's keepalive thread did not run during it.
+        val slept = paused - (uptime - backgroundUptime)
+        val warm = if (backgroundKept) slept < SLEEP_GRACE_MS else paused < UNATTENDED_MS
+        if (warm) stats.reused.incrementAndGet() else verify = true
+    }
 
     fun pinId(endpoint: Endpoint) = "pin:${endpoint.host}:${endpoint.port}"
     fun endpointOf(device: JSONObject) = Endpoint(device.getString("host"), device.getInt("port"), device.getString("user"))
@@ -104,9 +142,10 @@ object PocketCore {
     fun connect(device: JSONObject, password: String, progress: (String) -> Unit) = synchronized(lock) {
         val endpoint = endpointOf(device)
         connectedDevice = null
+        stats.connects.incrementAndGet()
         open(device, password, pins.getString(pinId(endpoint), null), progress)
         transport.useBundled(bridge)
-        suspect = false
+        suspect = false; verify = false; asleep = false
         sessionPassword = if (usesKey(device)) null else password
         connectedDevice = JSONObject(device.toString()).apply { remove("password") }
     }
@@ -126,6 +165,7 @@ object PocketCore {
         val pin = pins.getString(pinId(endpoint), null) ?: error("还没信任这台电脑的指纹")
         val result = JSONObject().put("appended", appended)
         val key = identity.material()
+        stats.keyProbes.incrementAndGet()
         try { transport.probeKey(endpoint, pin, key); result.put("verified", true) }
         catch (e: Exception) {
             val friendly = ConnectErrors.connect(e, endpoint, usingKey = true)
@@ -143,8 +183,22 @@ object PocketCore {
     }
 
     fun disconnect() = synchronized(lock) {
-        transport.close(); connectedDevice = null; sessionPassword = null
+        transport.close(); connectedDevice = null; sessionPassword = null; suspect = false; verify = false; asleep = false
     }
+
+    /**
+     * Ends the SSH session (battery) but remembers the device for this run, so coming back to the app
+     * reconnects silently with the stored password or key, exactly like after a dropped connection.
+     */
+    fun sleep() = synchronized(lock) {
+        if (connectedDevice == null) return@synchronized
+        transport.close(); suspect = false; verify = false; asleep = true
+        stats.slept.incrementAndGet()
+    }
+
+    val keepAliveEnabled get() = settings.getBoolean("keepAlive", true)
+    /** How long the background service keeps the session: 15, 60 or 240 minutes, 0 = until stopped. */
+    val keepAliveMinutes get() = settings.getInt("keepAliveMinutes", 60).takeIf { it in KEEP_MINUTES } ?: 60
 
     val alertsEnabled get() = settings.getBoolean("backgroundAlerts", true)
 
@@ -162,12 +216,16 @@ object PocketCore {
         val key = usesKey(stored)
         val password = if (key) "" else stored.optString("password").ifEmpty { sessionPassword ?: "" }
         check(key || password.isNotEmpty()) { "SSH 已断开，请回到设备页重新连接" }
-        suspect = false
+        suspect = false; verify = false
         if (graceful) {
+            stats.quietSwaps.incrementAndGet()
             try { open(stored, password, pin, keepOld = true); transport.useBundled(bridge) } catch (_: Exception) { }
             return
         }
-        listener?.invoke("reconnecting", device.optString("name"))
+        stats.reconnects.incrementAndGet()
+        val quiet = asleep
+        asleep = false
+        if (!quiet) listener?.invoke("reconnecting", device.optString("name"))
         try {
             try {
                 open(stored, password, pin)
@@ -188,7 +246,7 @@ object PocketCore {
             listener?.invoke("reconnect_failed", friendly.message ?: "")
             throw Friendly(friendly.code, "SSH 断了，自动重连没成功（请求没有发出）：" + friendly.message)
         }
-        listener?.invoke("reconnected", device.optString("name"))
+        if (!quiet) listener?.invoke("reconnected", device.optString("name"))
     }
 
     /** Banner 「重试」: reconnects now if the session is gone; sends nothing to Herdr. */
@@ -198,6 +256,16 @@ object PocketCore {
         if (connectedDevice == null) error("请先连接设备")
         if (!transport.isConnected()) reconnect()
         else if (suspect && !transport.hasShell()) reconnect(graceful = true)
+        else if (verify) {
+            verify = false
+            // One channel open on the existing session; no new login when it answers.
+            if (transport.ping(PING_TIMEOUT_MS)) stats.verified.incrementAndGet()
+            else {
+                stats.verifyFailed.incrementAndGet()
+                // A shell would end with the old session; leave it, a dead session still fails over on use.
+                if (!transport.hasShell()) reconnect(graceful = true)
+            }
+        }
     }
 
     fun request(req: JSONObject): JSONObject {
@@ -255,4 +323,29 @@ object PocketCore {
         ensureConnected()
         return transport.terminal(op, req)
     }
+
+    private const val UNATTENDED_MS = 60_000L
+    // Two keepalive intervals: a shorter CPU sleep cannot have let a NAT or tunnel forget the session.
+    private const val SLEEP_GRACE_MS = 30_000L
+    private const val PING_TIMEOUT_MS = 4_000
+    val KEEP_MINUTES = setOf(15, 60, 240, 0)
+}
+
+/** In-memory counters (reset when the process ends). Never carries names or addresses. */
+class ConnectionStats {
+    val connects = java.util.concurrent.atomic.AtomicInteger()
+    val reconnects = java.util.concurrent.atomic.AtomicInteger()
+    val quietSwaps = java.util.concurrent.atomic.AtomicInteger()
+    val keyProbes = java.util.concurrent.atomic.AtomicInteger()
+    val reused = java.util.concurrent.atomic.AtomicInteger()
+    val verified = java.util.concurrent.atomic.AtomicInteger()
+    val verifyFailed = java.util.concurrent.atomic.AtomicInteger()
+    val keptInBackground = java.util.concurrent.atomic.AtomicInteger()
+    val slept = java.util.concurrent.atomic.AtomicInteger()
+    val notificationDisconnects = java.util.concurrent.atomic.AtomicInteger()
+    fun json(logins: Int): JSONObject = JSONObject()
+        .put("logins", logins).put("connects", connects.get()).put("reconnects", reconnects.get())
+        .put("quietSwaps", quietSwaps.get()).put("keyProbes", keyProbes.get()).put("reused", reused.get())
+        .put("verified", verified.get()).put("verifyFailed", verifyFailed.get())
+        .put("kept", keptInBackground.get()).put("slept", slept.get()).put("notificationDisconnects", notificationDisconnects.get())
 }

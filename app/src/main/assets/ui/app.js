@@ -123,7 +123,7 @@ function render(){
  const root=shell();header(root);const main=el('main','main pane-enter');root.append(main);
  if(S.tab==='live')livePage(main);else if(S.tab==='history')historyPage(main);else if(S.tab==='terminals')terminalsPage(main);else if(S.tab==='settings')settingsPage(main);else devicesPage(main);
  const nav=el('nav','bottom-nav');nav.setAttribute('aria-label','主导航');
- const waiting=S.agents.filter(a=>a.agent_status==='blocked').length;
+ const waiting=S.agents.filter(a=>a.agent_status==='blocked'||glanceAsks(a)).length;
  TABS.forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waiting){const badge=el('span','nav-badge',String(waiting));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waiting+' 个 Agent 等你确认';}if(tab==='settings'&&settingsBadge()){n.append(el('span','nav-dot'));n.title='有新版本';}nav.append(n);});
  root.append(nav);}
 function requireDevice(main){if(S.device||cacheBrowsing())return true;if(S.loading){loadingCard(main,'连接正在进行','连接成功后会自动读取会话，请稍候。');return false;}empty(main,'先连接你的电脑','连接后，在线会话、历史记录和终端会出现在这里。',btn('选择设备','primary',()=>setTab('devices')));return false;}
@@ -149,7 +149,7 @@ async function loadAccount(){const epoch=S.epoch;try{const a=await remote('accou
 // is doing right now (state + how long), with a dot when it finished unseen.
 // Rows open on tap; swipe left (or long press) for 关闭.
 function agentRow(a){
- const k=agentKey(a),unread=S.unread.has(k),tone=stateTone(a),st=agentState(a);
+ const k=agentKey(a),unread=S.unread.has(k),asks=!!glanceAsks(a),tone=asks?'alert':stateTone(a),st=agentState(a);
  const n=btn('','card-button agent-row tone-'+tone+(unread?' unread':''),()=>openAgent(a));
  const text=el('div','grow');text.append(el('div','card-title',titleOf(a)));
  // The avatar already says Claude / Codex; the meta line is where it runs, then a one-line
@@ -165,7 +165,8 @@ function agentRow(a){
  // just how long, so the preview gets the width.
  if(st==='blocked'||st==='working'||st==='kids'){const t=at?since(at,'ago'):el('span','',rowTimeText(a));t.classList.add('row-time','state-time','t-'+tone);side.append(t);t.title=stateLabel(a);}
  else{side.append(el('span','row-time',rowTimeText(a)));
-  if(unread){const d=el('span','unread-dot');d.title='做完了，还没看';side.append(d,el('span','sr-only','有新进展'));}
+  if(asks)side.append(el('span','row-state t-ask','在问你'));
+  else if(unread){const d=el('span','unread-dot');d.title='做完了，还没看';side.append(d,el('span','sr-only','有新进展'));}
   else if(st==='done')side.append(el('span','row-state','已完成'));}
  n.append(avatar(a.agent,tone),text,side);closeHold(n,()=>agentActions(a));
  return closeSwipe(n,[['关闭','x','danger',()=>closeSession(a)],['更多','more','',()=>agentActions(a)]]);}
@@ -209,7 +210,9 @@ function livePage(main){
    else empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动，这里会自动出现。',S.device&&S.session?createButton():undefined);
    return;}
   // 子 Agent 运行中 (kids.js) sits with 执行中: the agent is not done while its sub-agents work.
-  const groups=[['等你确认',a=>agentState(a)==='blocked','alert'],['执行中',a=>['working','kids'].includes(agentState(a)),'work'],['空闲',a=>!['blocked','working','kids'].includes(agentState(a)),'']];
+  // An idle Codex with an unanswered question (glance.js) waits for you too.
+  const needs=a=>agentState(a)==='blocked'||!!glanceAsks(a);GL.askSig=glanceAskSig();
+  const groups=[[matches.some(a=>glanceAsks(a))?'等你处理':'等你确认',needs,'alert'],['执行中',a=>!needs(a)&&['working','kids'].includes(agentState(a)),'work'],['空闲',a=>!needs(a)&&!['blocked','working','kids'].includes(agentState(a)),'']];
   for(const [label,test,tone] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;const h=el('div','section-label group-label'+(tone?' g-'+tone:''));h.append(el('span','',label),el('span','group-count',String(items.length)));list.append(h);const g=el('div','card list-card');items.forEach(a=>{g.append(agentRow(a));const kids=kidsStrip(a);if(kids)g.append(kids);});list.append(g);}
   closeHint(list);}
  draw();
@@ -382,12 +385,14 @@ function buildComposer(key){
  const attach=ib('plus','添加附件',imgMenu);attach.classList.add('attach');
  compose.append(attach,input,send);requestAnimationFrame(grow);return compose;}
 function renderLiveState(live,a){
- live.replaceChildren();const st=a.agent_status;S.qaShown='';
+ live.replaceChildren();const st=a.agent_status;S.qaShown='';S.qaBar='';
  if(st==='blocked'){if(qaLive(live,a))return;const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow','等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
   const pre=el('pre','confirm-screen',S.terminalText?tail(S.terminalText,12):'正在读取终端画面…');pre.id='confirm-screen';panel.append(pre);
   const keys=el('div','confirm-keys');[['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);live.append(panel);requestAnimationFrame(()=>{pre.scrollTop=pre.scrollHeight;});}
  else if(st==='working'){const strip=el('div','activity');strip.append(el('span','pulse'));const t=el('div','grow');const label=el('strong','','执行中');const at=statusSince(a)||S.chat.sentAt;if(at)label.append(' ',since(at));t.append(label);const line=el('span','activity-line',S.activity||'正在读取终端…');line.id='activity-line';t.append(line);strip.append(t,interruptButton(a));live.append(strip);}
- else if(S.chat.doneAt&&Date.now()-S.chat.doneAt<8000){const strip=el('div','activity done');strip.setAttribute('role','status');strip.append(icon('check'));const t=el('strong','grow','做完了'+(S.chat.took>=5000?' · 用时 '+dur(S.chat.took):''));strip.append(t);if(!S.stick)strip.append(btn('看结果','link-btn',()=>{S.stick=true;S.unseen=0;scrollBottom();updateJump();}));live.append(strip);}}
+ else if(S.chat.doneAt&&Date.now()-S.chat.doneAt<8000){const strip=el('div','activity done');strip.setAttribute('role','status');strip.append(icon('check'));const t=el('strong','grow','做完了'+(S.chat.took>=5000?' · 用时 '+dur(S.chat.took):''));strip.append(t);if(!S.stick)strip.append(btn('看结果','link-btn',()=>{S.stick=true;S.unseen=0;scrollBottom();updateJump();}));live.append(strip);}
+ // A Codex question put aside with 「暂不回答」 stays one tap away (answer.js).
+ if(st==='idle'||st==='done')qaAsyncBar(live);}
 // 中断 sends Esc: both Claude Code and Codex stop the current turn on Esc and never quit on it,
 // while a second Ctrl+C on an idle Claude would exit it. Ctrl+C stays in 终端按键.
 function interruptButton(a){
@@ -448,8 +453,13 @@ function onAgentStatus(was,now){
   const h=document.getElementById('chat-head');if(h){h.classList.remove('flash');void h.offsetWidth;h.classList.add('flash');}
   const doneAt=S.chat.doneAt;setTimeout(()=>{if(S.chat?.doneAt===doneAt)renderComposer();},8100);}
  renderComposer();updateChatMeta();
+ // Rows depend on the state too (正在工作 / a Codex question becomes answerable once it stops):
+ // repaint now instead of waiting for the transcript to change.
+ if(S.chat?.record&&S.chatMode==='conversation'&&S.messages.length)paintTimeline();
  if(now==='blocked'){fetchTerminal(true);if(S.active)toast('Agent 在等你确认');}
- if(was==='working'&&now!=='working'){S.activity='';fetchHistory();}}
+ // Just stopped: it may have asked something. Read now and once more shortly after, in case the
+ // transcript's last lines land a moment after Herdr's state.
+ if(was==='working'&&now!=='working'){S.activity='';fetchHistory();const c=S.chat;setTimeout(()=>{if(S.chat===c&&!S.paused)fetchHistory();},1500);}}
 // A screen read carries Herdr's state from the same request. Act on "blocked"/"working" at once so a
 // question card shows without waiting for the next status poll; idle/done stay with the poll, because
 // right after a send Herdr may not have noticed the new turn yet.
@@ -460,7 +470,8 @@ function applyReadStatus(now){
 async function fetchTerminal(quiet=false){
  if(!S.chat?.agent){if(!quiet)toast('这条历史没有在线终端');return;}const epoch=S.epoch;
  // Polls skip while a read for this chat is still out: on a slow link they would pile up behind each other.
- if(quiet&&S.reading===epoch)return;S.reading=epoch;
+ // A read asked for while one is out (e.g. the agent just stopped on a menu) runs right after it.
+ if(quiet&&S.reading===epoch){S.readAgain=epoch;return;}S.reading=epoch;S.readAgain=null;
  try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;applyReadStatus(r.agent_status);qaScreen(r);modeScreen(r);
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
   const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;const c=document.getElementById('confirm-screen');if(c){c.textContent=tail(r.text,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
@@ -468,7 +479,7 @@ async function fetchTerminal(quiet=false){
  catch(e){if(epoch!==S.epoch)return;if(!quiet)error(e);
   // Never leave 「正在读取…」 up after a failed read: say what happened and how to retry.
   if(!S.terminalText){const msg='读取终端画面失败：'+(e.message||e)+'。点「刷新」再试';const n=document.getElementById('terminal-output');if(n)n.textContent=msg;const c=document.getElementById('confirm-screen');if(c)c.textContent=msg;const l=document.getElementById('activity-line');if(l)l.textContent='读取终端失败，稍后会自动再试';}}
- finally{if(S.reading===epoch)S.reading=null;}}
+ finally{if(S.reading===epoch)S.reading=null;if(S.readAgain===epoch&&S.epoch===epoch){S.readAgain=null;setTimeout(()=>fetchTerminal(true),0);}}}
 
 // ─── Sheets ─────────────────────────────────────────────────────────────────
 function agentSwitcher(){
@@ -581,13 +592,22 @@ window.setForeground=v=>{S.active=v;if(v){netForeground();refreshStatus();if(S.c
 // A ch pane's history is read over SSH on the other computer (~1 s a read), so it is polled
 // half as often: every 5 s while the agent works, every 10 s when idle. Reads never overlap.
 function historyDue(busy,n){return S.chat?.record?.remote?n%(busy?2:4)===0:busy||n%3===0;}
+// Beat: 1.25 s. Reads keep their 2.5 s pace; the cheap Herdr status (~0.1 s) is asked every beat
+// while the open agent works or just changed state or got a message, so a stop (and a question
+// asked right before it) shows within about a second. The list polls every 2.5 s while anything
+// works or waits, else every 7.5 s.
+const POLL_BEAT=1250,POLL_HOT=15000;
+function pollHot(){const c=S.chat,a=c?.agent;if(!a||c.stale)return false;if(a.agent_status==='working')return true;
+ const rec=S.since.get(agentKey(a));return Date.now()-Math.max(c.sentAt||0,rec?.at||0)<POLL_HOT;}
+function listHot(){return S.agents.some(a=>['working','blocked'].includes(a.agent_status)||Date.now()-(statusSince(a)||0)<POLL_HOT);}
 let tick=0;
-setInterval(()=>{
- if(!S.active||S.demo||!S.device)return;tick++;
+function pollBeat(){
+ if(!S.active||S.demo||!S.device)return;tick++;const beat=tick%2===0,n=tick>>1;
  const busy=S.chat?.agent&&!S.chat.stale&&['working','blocked'].includes(S.chat.agent.agent_status);
- if(S.chat){if(!S.paused&&!S.polling&&S.chatMode!=='terminal'&&historyDue(busy,tick))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);refreshStatus();}
- else if(S.tab==='live'&&tick%3===0)refreshStatus().then(()=>glanceRefresh());
-},2500);
+ if(S.chat){if(beat){if(!S.paused&&!S.polling&&S.chatMode!=='terminal'&&historyDue(busy,n))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);}
+  if(beat||pollHot())refreshStatus();}
+ else if(S.tab==='live'&&tick%(listHot()?2:6)===0)refreshStatus().then(()=>glanceRefresh());}
+setInterval(pollBeat,POLL_BEAT);
 
 async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;settingsLoad().then(updateAutoCheck);if(r.connected&&!S.device){S.device=r.connected;setTab('live');return;}render();}catch(e){error(e);}}
 // terminals.js is a later <script>: start once every script has run, or a fast native reply

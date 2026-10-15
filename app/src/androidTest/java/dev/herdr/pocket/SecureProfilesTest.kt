@@ -18,8 +18,8 @@ class SecureProfilesTest : Instrumentation() {
             testConnectErrors()
             testShareIn()
             testIdentity()
-            if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeyLogin() }
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-key-login: PASS" else "ssh-pty: SKIPPED") })
+            if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeepAlive(); testKeyLogin() }
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS" else "ssh-pty: SKIPPED") })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
@@ -315,6 +315,61 @@ class SecureProfilesTest : Instrumentation() {
             PocketCore.transport.simulateDrop()
             check(PocketCore.request(JSONObject().put("op", "hello")).getInt("protocol") == 1) { "No key reconnect" }
             check(events == listOf("reconnecting", "reconnected")) { "Unexpected events $events" }
+        } finally {
+            PocketCore.disconnect(); PocketCore.listener = null
+            PocketCore.vault.delete(id)
+            PocketCore.pins.edit().apply { if (previousPin == null) remove(pinKey) else putString(pinKey, previousPin) }.commit()
+        }
+    }
+
+    /**
+     * Coming back from the background reuses the session: no new SSH login while it was kept warm, one
+     * channel check (still no login) after the CPU slept or the app was left unattended, and a quiet
+     * reconnect only after the background time ran out and the session was closed on purpose.
+     */
+    private fun testKeepAlive() {
+        PocketCore.init(targetContext)
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+        PocketCore.listener = { type, _ -> events.add(type) }
+        val endpoint = Endpoint("10.0.2.2", 22222, "pocket-fixture")
+        val pinKey = PocketCore.pinId(endpoint)
+        val previousPin = PocketCore.pins.getString(pinKey, null)
+        val id = PocketCore.vault.save(JSONObject().put("name", "fixture-keep").put("host", endpoint.host).put("port", endpoint.port)
+            .put("user", endpoint.user).put("password", "pocket-fixture-password").put("remember", true)).getString("id")
+        val hello = { check(PocketCore.request(JSONObject().put("op", "hello")).getInt("protocol") == 1) }
+        val stats = PocketCore.stats
+        try {
+            PocketCore.pins.edit().putString(pinKey, fixturePin).commit()
+            PocketCore.connect(PocketCore.vault.get(id), "pocket-fixture-password") {}
+            PocketCore.transport.install(PocketCore.bridge)
+            hello()
+            val logins = PocketCore.transport.logins.get()
+            val generation = PocketCore.transport.generation
+            // Kept by the service for an hour, phone awake: reused as is.
+            val reused = stats.reused.get()
+            PocketCore.enterBackground(kept = true, elapsed = 10_000_000, uptime = 5_000_000)
+            PocketCore.enterForeground(elapsed = 13_600_000, uptime = 8_600_000)
+            hello()
+            check(stats.reused.get() == reused + 1) { "Kept session not reused" }
+            // Kept, but the CPU slept 10 minutes (keepalives paused): one channel check, no login.
+            val verified = stats.verified.get()
+            PocketCore.enterBackground(kept = true, elapsed = 20_000_000, uptime = 9_000_000)
+            PocketCore.enterForeground(elapsed = 20_900_000, uptime = 9_300_000)
+            hello()
+            check(stats.verified.get() == verified + 1) { "Slept session not checked" }
+            // Not kept (alerts and keep off), 2 minutes away: checked the same way.
+            PocketCore.enterBackground(kept = false, elapsed = 30_000_000, uptime = 10_000_000)
+            PocketCore.enterForeground(elapsed = 30_120_000, uptime = 10_120_000)
+            hello()
+            check(stats.verified.get() == verified + 2) { "Unattended session not checked" }
+            check(PocketCore.transport.logins.get() == logins && PocketCore.transport.generation == generation) { "Reconnected although the session was alive" }
+            check(events.isEmpty()) { "Unexpected events $events" }
+            // Background time ran out: closed on purpose, the next request reconnects without the banner.
+            PocketCore.sleep()
+            check(!PocketCore.transport.isConnected())
+            hello()
+            check(PocketCore.transport.logins.get() == logins + 1) { "Expected one login after sleep" }
+            check(events.isEmpty()) { "Wake-up reconnect was announced $events" }
         } finally {
             PocketCore.disconnect(); PocketCore.listener = null
             PocketCore.vault.delete(id)

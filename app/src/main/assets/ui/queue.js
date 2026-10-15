@@ -99,6 +99,11 @@ async function queueNow(key,qid){
   await queueRun(c,key,q,true);
  }
  finally{if(it.state==='interrupting')it.state='queued';if(!handed)q.inflight=false;queueTidy(key);paintTimeline();renderComposer();}}
+// Waiting on a question or a confirmation, 立即发送 means Esc on that dialog first: say what that
+// does there (answer.js qaEscText) and go only after a yes. Working or idle: as before.
+function queueNowAsk(key,qid){
+ const a=S.chat?.agent;if(a?.agent_status!=='blocked'||S.demo)return queueNow(key,qid);
+ const menu=qaFresh(a);confirmAction('先取消它在等的'+(menu?.kind==='approval'?'确认':'问题')+'？',(menu?qaEscText(menu,a):'会按 Esc 取消它正在等的确认框。')+'然后发这条消息。','按 Esc 再发',()=>queueNow(key,qid),true);}
 // Why the head of the queue cannot go now ('' = it can). Pauses that need a person are set here.
 function queueBlock(c,key,q,force){
  const head=q.items[0];if(!head)return 'empty';
@@ -211,7 +216,7 @@ function queueTimeline(list){
    acts:can?{sig:[it.state,live?1:0,now?1:0,now&&idle?1:0].join('|'),build:()=>{const acts=el('div','queue-actions');
     acts.append(btn('删掉','',()=>queueDrop(key,it.qid)));acts.append(btn(live?'修改':'复制','',()=>queueEdit(key,it.qid)));
     // 立即发送: interrupts a busy agent first (see queueNow); an idle one just gets it now.
-    if(now){const b=btn('立即发送','now',()=>queueNow(key,it.qid));b.title=idle?'现在就发':'先中断它正在做的事，再发这条';acts.append(b);}
+    if(now){const b=btn('立即发送','now',()=>queueNowAsk(key,it.qid));b.title=idle?'现在就发':c?.agent?.agent_status==='blocked'?'先按 Esc 取消它在等的问题，再发这条':'先中断它正在做的事，再发这条';acts.append(b);}
     return acts;}}:null}));});
  // Patch in place: rows that stay are never detached.
  const want=new Set(kids);[...box.childNodes].forEach(n=>{if(!want.has(n))n.remove();});

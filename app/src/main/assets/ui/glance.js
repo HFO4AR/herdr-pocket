@@ -29,7 +29,7 @@ async function glanceRefresh(all=false){
    // Nothing to show (yet): remember that too, so an idle agent is not asked every poll.
    if(v.missing){if(old&&!old.missing)changed=true;GL.map.set(k,{missing:true,status:status.get(k)||''});continue;}
    GL.map.set(k,{...v,status:status.get(k)||''});changed=true;}
-  if(changed){glanceSave();glancePaint();}}
+  if(changed){glanceSave();if(!glanceRegroup())glancePaint();}}
  catch(e){if(/Unknown operation|不支持的操作/.test(e?.message||''))GL.unsupported=true;}
  finally{GL.busy=false;}}
 // The list opened: show what we had, then refresh if it is not fresh.
@@ -39,8 +39,15 @@ async function glanceRestore(){
  const dev=glanceDevice();if(!dev||S.demo||GL.restored===dev)return;GL.restored=dev;
  const v=await cacheGet('glance',dev);if(!v?.items||dev!==GL.dev)return;let added=false;
  for(const [k,g] of v.items)if(!GL.map.has(k)&&g&&typeof g==='object'){GL.map.set(k,g);added=true;}
- if(added)glancePaint();}
+ if(added&&!glanceRegroup())glancePaint();}
 
+// An idle Codex that asked with request_user_input_async (bridge: preview.ask) waits for you like a
+// blocked agent does, unless that question was put aside with 「暂不回答」 (answer.js).
+function glanceAsks(a){if(!['idle','done'].includes(a?.agent_status))return null;const ask=glanceOf(a)?.ask;return ask&&!qaAside('async:'+ask.call_id)?ask:null;}
+// Who asks decides the list's groups: when that changes, the list is drawn again, not just patched.
+function glanceAskSig(){return S.agents.filter(glanceAsks).map(agentKey).join('|');}
+function glanceRegroup(){const sig=glanceAskSig();if(sig===GL.askSig)return false;GL.askSig=sig;
+ if(S.tab==='live'&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount){render();return true;}return false;}
 // The bridge already sends one clean line; stay defensive about older or odd input.
 function glanceLine(t){return (String(t||'').split('\n').map(x=>x.replace(/^\s*(#{1,6}\s+|>\s*)/,'').trim()).find(Boolean)||'').slice(0,200);}
 // Each piece is its own span so the line can ellipsize without spilling out of the row:
@@ -64,6 +71,8 @@ function glancePreview(a){
   return null;}
  if(st==='working'){
   if(!act)return null;n.classList.add('g-work');return glanceAction(act,n);}
+ if(g.ask&&['idle','done'].includes(st)){n.classList.add(glanceAsks(a)?'g-ask':'g-done');gtext(n,'问：','gt-lead');
+  return gtext(n,(glanceLine(g.ask.text)||'有个问题等你回答')+(g.ask.count>1?' 等 '+g.ask.count+' 个':''));}
  if(reply?.text&&(reply.current||!act)){n.classList.add('g-done');return gtext(n,glanceLine(reply.text));}
  if(act?.kind==='note'){n.classList.add('g-done');return gtext(n,glanceLine(act.text));}
  const t=g.turn||{};const bits=[];if(t.files)bits.push('改了 '+t.files+' 个文件');if(t.tools)bits.push('执行 '+t.tools+' 步');if(t.failed)bits.push(t.failed+' 步失败');

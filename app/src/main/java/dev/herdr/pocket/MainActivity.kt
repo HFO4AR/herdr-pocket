@@ -34,7 +34,6 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.Executors
 
-private const val UNATTENDED_PAUSE_MS = 60_000L
 private const val PICK_GALLERY = 41
 private const val PICK_CAMERA = 42
 private const val PICK_FILES = 43
@@ -61,7 +60,6 @@ class MainActivity : Activity() {
     @Volatile private var watchSession = ""
     @Volatile private var watchStates = "{}"
     @Volatile private var watchKids = "{}"
-    private var pausedAt = 0L
     private var watched = false
     // One picker at a time: the request waiting for it, how many pictures it may add, the camera target.
     private var pickId: String? = null
@@ -254,6 +252,8 @@ class MainActivity : Activity() {
         .put("autoUpdate", core.settings.getBoolean("autoUpdate", true))
         .put("seenUpdate", core.settings.getString("seenUpdate", ""))
         .put("alerts", core.alertsEnabled).put("notifications", notificationsAllowed())
+        .put("keepAlive", core.keepAliveEnabled).put("keepAliveMinutes", core.keepAliveMinutes)
+        .put("conn", core.stats.json(core.transport.logins.get()))
         .put("version", Updater.currentName(this)).put("versionCode", Updater.currentCode(this))
         .put("update", core.settings.getString("updateResult", null)?.let { JSONObject(it) } ?: JSONObject.NULL)
 
@@ -340,6 +340,8 @@ class MainActivity : Activity() {
                                 "secureScreen" -> edit.putBoolean("secureScreen", req.getBoolean("value"))
                                 "autoUpdate" -> edit.putBoolean("autoUpdate", req.getBoolean("value"))
                                 "seenUpdate" -> edit.putString("seenUpdate", req.getString("value").take(64))
+                                "keepAlive" -> edit.putBoolean("keepAlive", req.getBoolean("value"))
+                                "keepAliveMinutes" -> edit.putInt("keepAliveMinutes", req.getInt("value").also { require(it in PocketCore.KEEP_MINUTES) { "不支持的时长" } })
                                 else -> error("不支持的设置")
                             }
                             edit.commit()
@@ -593,29 +595,35 @@ class MainActivity : Activity() {
     override fun onBackPressed() { if (started) web.evaluateJavascript("window.pocketBack()", null) else super.onBackPressed() }
     override fun onPause() {
         if (started) web.evaluateJavascript("window.setForeground(false)", null)
-        pausedAt = android.os.SystemClock.elapsedRealtime(); watched = false
-        // Hand over to the watcher while the app is not visible; it only reads state.
-        // With notifications blocked the watcher could not tell anyone anything: do not hold a hidden service.
-        if (core.connectedDevice != null && core.alertsEnabled && watchSession.isNotEmpty() && !isChangingConfigurations && notificationsAllowed()) {
-            try { WatchService.start(this, watchSession, watchStates, watchKids); watched = true } catch (_: Exception) {}
+        watched = false
+        // Hand over to the service while the app is not visible. It keeps the SSH session (设置 →
+        // 后台保持连接) and/or watches agents read-only (后台提醒). Alerts need notifications; keeping the
+        // connection does not (Android then hides the ongoing notification but runs the service).
+        if (core.connectedDevice != null && !isChangingConfigurations) {
+            val alerts = core.alertsEnabled && watchSession.isNotEmpty() && notificationsAllowed()
+            val keep = core.keepAliveEnabled
+            if (alerts || keep) {
+                try { WatchService.start(this, if (alerts) watchSession else "", watchStates, watchKids, keep, core.keepAliveMinutes); watched = true } catch (_: Exception) {}
+            }
         }
+        core.enterBackground(kept = watched)
         super.onPause()
     }
     override fun onResume() {
         super.onResume()
         WatchService.stop(this)
-        // Without the watcher Android may freeze the app in the background, so keepalives stop and a
-        // carrier NAT or the frp tunnel can drop the TCP connection without telling us. Swap in a
-        // fresh session before the first refresh instead of waiting for a channel to time out.
-        if (pausedAt > 0 && !watched && android.os.SystemClock.elapsedRealtime() - pausedAt > UNATTENDED_PAUSE_MS) core.markSuspect()
-        pausedAt = 0
+        watched = false
+        // Reuse the session when it stayed warm; otherwise the next request checks it with one channel
+        // open and reconnects only if that fails (PocketCore.enterForeground).
+        core.enterForeground()
         if (started) web.evaluateJavascript("window.setForeground(true)", null)
     }
     override fun onDestroy() {
         destroyed = true
         core.listener = null
-        // Leaving the app ends the connection unless the watcher is keeping it for alerts.
-        if (isFinishing) { WatchService.stop(this); core.disconnect() }
+        // Swiped away from recents (back never finishes the activity): the connection stays while the
+        // service keeps it (same time limit as in the background); otherwise it ends here.
+        if (isFinishing && !(watched && core.connectedDevice != null)) { WatchService.stop(this); core.disconnect() }
         if (Build.VERSION.SDK_INT >= 33) (backCallback as? OnBackInvokedCallback)?.let { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it) }
         executor.shutdownNow(); pictures.shutdownNow(); web.removeJavascriptInterface("PocketNative"); web.destroy(); super.onDestroy()
     }

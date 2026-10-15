@@ -114,6 +114,24 @@ class GlanceTests(unittest.TestCase):
         again = self.ask(dict(item, stamp=out["stamp"]))["s/b"]
         self.assertEqual(again, {"same": True, "stamp": out["stamp"]})
 
+    def test_codex_async_question_waits_until_a_user_message(self):
+        rel = "2026/10/15/rollout-2026-10-15T09-00-00-" + CODEX_THREAD + ".jsonl"
+        args = {"questions": [{"title": "今天先做哪件？", "options": ["修测试", "写文档"]}, {"title": "要提交吗？"}]}
+        rows = [codex_msg("user", "用选择题问我"),
+                codex({"type": "function_call", "name": "request_user_input_async", "call_id": "call_q", "arguments": json.dumps(args, ensure_ascii=False)}),
+                codex({"type": "function_call_output", "call_id": "call_q", "output": "{\"accepted\":true}"}),
+                codex_msg("assistant", "问题已发出。", phase="final_answer")]
+        self.write("codex", rel, rows)
+        item = {"key": "s/q", "provider": "codex", "thread": CODEX_THREAD, "record_id": self.key("codex", rel)}
+        out = self.ask(item)["s/q"]
+        self.assertEqual(out["ask"], {"text": "今天先做哪件？", "count": 2, "call_id": "call_q", "at": "2026-10-15T08:00:00.000Z"})
+        # Any later user message (the reply, or a new message instead) ends it.
+        self.write("codex", rel, rows + [codex_msg("user", "<send_user_message_question_reply>\n[]\n</send_user_message_question_reply>")])
+        self.assertNotIn("ask", self.ask(item)["s/q"])
+        # A blocking request_user_input is Herdr's "blocked", not this.
+        self.write("codex", rel, [rows[0], codex({"type": "function_call", "name": "request_user_input", "call_id": "c", "arguments": json.dumps(args)})])
+        self.assertNotIn("ask", self.ask(item)["s/q"])
+
     def test_reads_only_the_tail(self):
         rel = "-work-demo/" + CLAUDE_THREAD + ".jsonl"
         filler = [claude("user", "旧消息 " + "x" * 2000) for _ in range(800)]

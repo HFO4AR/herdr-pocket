@@ -42,6 +42,8 @@ class SshTransport : AutoCloseable {
     @Volatile private var bridgePath = ""
     private val inflight = HashMap<Session, Int>() // guarded by this
     private val retiring = HashSet<Session>() // guarded by this
+    /** Every SSH login this transport started (main sessions, reconnects, key probes): for 反馈问题 counts. */
+    val logins = java.util.concurrent.atomic.AtomicInteger()
 
     /**
      * Opens a new session. With [keepOld] the current session stays usable until the new one is
@@ -92,6 +94,7 @@ class SshTransport : AutoCloseable {
             override fun getHostKey(host: String?, type: String?): Array<HostKey> = emptyArray()
         })
         val candidate = jsch.getSession(endpoint.user, endpoint.host, endpoint.port)
+        logins.incrementAndGet()
         if (identity != null) {
             // JSch parses a copy; our bytes are wiped by the caller, JSch's copy by removeAllIdentity below.
             jsch.addIdentity("herdr-pocket", identity.prv.copyOf(), identity.pub.copyOf(), null)
@@ -299,6 +302,20 @@ class SshTransport : AutoCloseable {
     fun useBundled(bytes: ByteArray) { bridgePath = "$home/.herdr-pocket/${bridgeName(bytes)}" }
     private fun bridgeName(bytes: ByteArray) = "bridge-" + MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } + ".py"
     fun isConnected() = session?.isConnected == true
+
+    /**
+     * Cheap liveness check on the current session: opens one exec channel (`true`) and closes it.
+     * One round trip, no new login. False when the channel does not open within [timeoutMs].
+     */
+    fun ping(timeoutMs: Int): Boolean {
+        val (ssh, _) = try { acquire() } catch (_: NotSent) { return false }
+        try {
+            if (!ssh.isConnected) return false
+            val channel = ssh.openChannel("exec") as ChannelExec
+            return try { channel.setCommand("true"); channel.connect(timeoutMs); true }
+            catch (_: Exception) { false } finally { channel.disconnect() }
+        } catch (_: Exception) { return false } finally { release(ssh) }
+    }
     /** True while an interactive shell is open; it would not survive a reconnect. */
     fun hasShell() = shell != null
     /** Instrumented tests only: drop the TCP session as a network loss would. */

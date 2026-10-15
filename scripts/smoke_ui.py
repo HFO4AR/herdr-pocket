@@ -60,12 +60,25 @@ def find(text, editable=False):
     return None
 
 
+def stable(text, editable=False):
+    """The node once its position stops changing: sheets slide in, and on a slow emulator a tap at
+    the first-seen bounds can land on the field below (a name typed into the user field)."""
+    node=find(text,editable)
+    for _ in range(8):
+        if node is None: return None
+        time.sleep(.35)
+        again=find(text,editable)
+        if again is not None and again.attrib.get('bounds')==node.attrib.get('bounds'): return again
+        node=again
+    return node
+
+
 def tap(text, editable=False):
     for _ in range(5):
-        node=find(text,editable)
+        node=stable(text,editable)
         if node is not None:
             x1,y1,x2,y2=map(int,re.findall(r'\d+',node.attrib['bounds']))
-            run('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2));time.sleep(.6);return
+            run('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2));time.sleep(.6);return node
         if editable:
             run('shell','input','swipe','540','1200','540','650','250')
         time.sleep(.6)
@@ -73,7 +86,13 @@ def tap(text, editable=False):
 
 
 def fill(label,text):
-    tap(label,True);run('shell','input','text',text)
+    # Type only once the intended field has the focus; otherwise tap it again.
+    for _ in range(4):
+        target=tap(label,True)
+        focused=[n for n in screen().iter('node') if n.get('focused')=='true' and 'EditText' in n.get('class','')]
+        if not focused or focused[0].attrib.get('bounds')==target.attrib.get('bounds'): break
+        time.sleep(.5)
+    run('shell','input','text',text)
 
 
 def expect(text):
@@ -118,7 +137,7 @@ def main():
     started=time.monotonic()
     vault=run('shell','am','instrument','-w',*fixture,'dev.herdr.pocket.test/dev.herdr.pocket.SecureProfilesTest',timeout=240).decode()
     print('instrumented tests took %.0f s'%(time.monotonic()-started),flush=True)
-    if fixture: assert 'ssh-pty: PASS' in vault and 'ssh-reconnect: PASS' in vault and 'ssh-key-login: PASS' in vault,vault
+    if fixture: assert 'ssh-pty: PASS' in vault and 'ssh-reconnect: PASS' in vault and 'ssh-keep: PASS' in vault and 'ssh-key-login: PASS' in vault,vault
     assert 'ssh-identity: PASS' in vault,vault
     assert 'terminal-buffer: PASS' in vault,vault
     assert 'vault-tests: PASS (2 tests)' in vault,vault

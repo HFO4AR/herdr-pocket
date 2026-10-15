@@ -147,6 +147,18 @@ class ParseMenuTests(unittest.TestCase):
         self.assertEqual(len(menu["options"]), 3)
         self.assertFalse(any(r["input"] for r in menu["options"]))
 
+    def test_what_esc_does_comes_from_the_screen(self):
+        # Claude question: "Esc to cancel"; permission dialogs mark the row Esc picks.
+        self.assertEqual(bridge.parse_menu(CLAUDE_SINGLE, "claude")["esc"], {"action": "cancel", "option": None})
+        self.assertEqual(bridge.parse_menu(CLAUDE_BASH, "claude")["esc"], {"action": "cancel", "option": 3})
+        self.assertEqual(bridge.parse_menu(CODEX_APPROVAL, "codex")["esc"], {"action": "cancel", "option": 3})
+        # Codex's blocking question: Esc interrupts the whole turn.
+        self.assertEqual(bridge.parse_menu(CODEX_QUESTION, "codex")["esc"], {"action": "interrupt", "option": None})
+        # Not part of the fingerprint: an older screen parse keeps matching.
+        bare = CLAUDE_SINGLE.replace(" · Esc to cancel", "")
+        self.assertIsNone(bridge.parse_menu(bare, "claude")["esc"])
+        self.assertEqual(bridge.parse_menu(bare, "claude")["fingerprint"], bridge.parse_menu(CLAUDE_SINGLE, "claude")["fingerprint"])
+
     def test_codex_approval_and_inline_descriptions(self):
         menu = bridge.parse_menu(CODEX_APPROVAL, "codex")
         self.assertEqual(menu["kind"], "approval")

@@ -1319,10 +1319,16 @@ def glance_summary(items):
     if reply: result["reply"] = {"text": glance_line(reply["text"]), "at": reply.get("timestamp") or "",
                                  "current": any(x is reply for x in after)}
     answered = {x["call_id"] for x in after if x["kind"] == "result" and x.get("call_id")}
-    activity, files, tools, failed = None, set(), 0, 0
+    activity, files, tools, failed, ask = None, set(), 0, 0, None
     for x in after:
         if x["kind"] == "tool":
             tools += 1; glance_edits(x, files)
+            # Codex's async question ends the turn and waits for a reply as the next user message:
+            # one still after the newest user message is unanswered.
+            if x["title"] == "request_user_input_async":
+                try: count = len(json.loads(x["text"]).get("questions") or [])
+                except (ValueError, TypeError, AttributeError): count = 0
+                ask = {"text": glance_tool(x["title"], x["text"])["text"], "count": count, "call_id": x.get("call_id") or "", "at": x.get("timestamp") or ""}
             activity = dict(glance_tool(x["title"], x["text"]), kind="tool", at=x.get("timestamp") or "",
                             open=bool(x.get("call_id")) and x["call_id"] not in answered)
         elif x["kind"] == "result" and x.get("title") == "执行失败": failed += 1
@@ -1331,6 +1337,7 @@ def glance_summary(items):
         elif x["kind"] == "agent" and glance_line(x["text"]):
             activity = {"kind": "agent", "text": glance_line(x["text"]), "title": glance_line(x["title"], 40), "at": x.get("timestamp") or "", "open": False}
     if activity: result["activity"] = activity
+    if ask: result["ask"] = ask
     result["turn"] = {"tools": tools, "files": len(files), "failed": failed}
     stamps = [x.get("timestamp") for x in items if x.get("timestamp")]
     if stamps: result["at"] = stamps[-1]
@@ -2031,6 +2038,22 @@ def menu_loose_match(a, b):
     return a[:size] == b[:size]
 
 
+MENU_ESC = re.compile(r"(?i)\besc(?:ape)?\s+to\s+(cancel|interrupt|exit|close|go back|dismiss)")
+MENU_ESC_ROW = re.compile(r"(?i)\((?:esc|escape)\)\s*$")
+
+
+def menu_esc(lines, run, last_line):
+    """What Esc does on this dialog, as its own hint line says: {"action": "cancel"|"interrupt"|…,
+    "option": n of the row marked "(esc)" or None}. None when the screen does not say."""
+    action = None
+    for raw in lines[last_line + 1:last_line + 14]:
+        found = MENU_ESC.search(raw)
+        if found: action = found.group(1).lower(); break
+    option = next((r["n"] for r in run if MENU_ESC_ROW.search(r["label"] + " " + r["description"])), None)
+    if not action and option is None: return None
+    return {"action": action or "cancel", "option": option}
+
+
 def parse_menu(text, provider=""):
     """Find the newest numbered menu at the bottom of an agent screen; None if unsure."""
     lines = [menu_clean(x) for x in str(text or "").split("\n")][-70:]
@@ -2113,7 +2136,7 @@ def parse_menu(text, provider=""):
         row["input"] = provider == "claude" and kind == "question" and (
             bool(MENU_INPUT.match(row["label"])) or row["n"] == (chat or 0) - 1 or bool(multi and submit and row is run[-1]))
     stable = [kind, multi, context, [(r["n"], r["label"]) for r in run if not r["input"]]]
-    return {"kind": kind, "multi": multi, "cursor": cursor, "question": question, "context": context,
+    return {"kind": kind, "multi": multi, "cursor": cursor, "question": question, "context": context, "esc": menu_esc(lines, run, last_line),
             "tabs": [t for t in tabs if t["label"].lower() != "submit"],
             "options": [{k: r[k] for k in ("n", "label", "description", "checked", "chosen", "input", "chat")} for r in run],
             "submit": submit["label"] if submit else None,

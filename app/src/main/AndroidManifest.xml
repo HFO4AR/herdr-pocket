@@ -44,7 +44,7 @@
         <provider android:name=".UpdateFiles" android:authorities="dev.herdr.pocket.update" android:exported="false" android:grantUriPermissions="true" />
         <service android:name=".WatchService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keeps the user's own SSH session open while the app is in the background to notify when a coding agent finishes or waits for confirmation." />
+                android:value="Keeps the user's own SSH session to their computer open while the app is in the background, for a time the user chooses, so returning needs no new login; optionally notifies when a coding agent finishes or waits for confirmation." />
         </service>
     </application>
 </manifest>
