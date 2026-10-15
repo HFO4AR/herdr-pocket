@@ -31,12 +31,13 @@ let remote=(op,args={})=>S.demo?demoRequest(op,args):rpc('remote',{op,...args});
 const S={tab:'devices',devices:[],device:null,demo:false,version:'',agents:[],session:'',sessions:[],records:[],next:null,total:0,
  chat:null,chatMode:'conversation',messages:[],children:[],before:0,more:false,drafts:new Map(),bindings:new Map(),outbox:[],
  epoch:0,active:true,polling:false,paused:false,loading:false,connecting:null,connectStage:'',connectError:'',liveLoading:false,liveError:'',
- chatStack:[],search:'',filter:'all',account:null,activity:'',statusBusy:false,statusSupported:true};
+ chatStack:[],search:'',filter:'all',account:null,activity:'',statusBusy:false,statusSupported:true,
+ since:new Map(),unread:new Set(),stick:true,unseen:0};
 const app=document.getElementById('app'),overlay=document.getElementById('overlay');
 
 // ─── Feedback ───────────────────────────────────────────────────────────────
 let toastTimer;
-function toast(text){const n=document.getElementById('toast');n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.classList.remove('show'),4200);}
+function toast(text){const n=document.getElementById('toast');const c=document.getElementById('composer');n.style.bottom=c?c.offsetHeight+14+'px':'';n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.classList.remove('show'),4200);}
 function error(e){toast(e.message||String(e));}
 async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const t=el('textarea');t.value=text;document.body.append(t);t.select();document.execCommand('copy');t.remove();}toast('已复制');}
 function sheet(title){overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);back.onclick=e=>{if(e.target===back)closeSheet();};overlay.append(back);return body;}
@@ -64,6 +65,31 @@ function dayLabel(v){const d=toDate(v);if(!d)return '';const today=new Date();to
 function relative(v){const d=toDate(v);if(!d)return '';const s=(Date.now()-d)/1000;if(s<60)return '刚刚';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400&&dayLabel(v)==='今天')return clock(v);return dayLabel(v)==='昨天'?'昨天 '+clock(v):time(v);}
 function avatar(kind,status){const n=el('div','avatar '+(kind||''),kind==='claude'?'Cl':kind==='codex'?'Cx':'');if(!kind)n.append(icon('device'));if(status)n.append(el('span','status-dot '+status));return n;}
 function draftKey(){return S.chat?.agent?S.session+'/'+S.chat.agent.identity:S.chat?.record?.id||'';}
+// Durations: a running clock under an hour ("2:05"), coarse after that.
+function dur(ms){const s=Math.max(0,Math.floor(ms/1000));if(s<3600)return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');const h=Math.floor(s/3600);return h<24?h+' 小时 '+Math.floor(s%3600/60)+' 分':Math.floor(h/24)+' 天';}
+function ago(ms){const s=ms/1000;return s<60?'刚刚':s<3600?Math.floor(s/60)+' 分钟':s<86400?Math.floor(s/3600)+' 小时':Math.floor(s/86400)+' 天';}
+// A live-updating duration node; the 1 s ticker below rewrites every [data-since].
+function since(at,fmt='dur',prefix=''){const n=el('span','since',prefix+(fmt==='ago'?ago(Date.now()-at):dur(Date.now()-at)));n.dataset.since=at;n.dataset.fmt=fmt;n.dataset.prefix=prefix;return n;}
+
+// ─── Agent status memory (this run only) ────────────────────────────────────
+// Herdr reports the current state but not when it changed, so the UI remembers
+// when it saw each change. Agents that finish while you look elsewhere get an
+// unread dot until you open them (or start them again from the computer).
+function agentKey(a){return S.session+'/'+a.identity;}
+function statusSince(a){return a?S.since.get(agentKey(a))?.at||null:null;}
+function lastActivity(a){const at=statusSince(a);if(at)return at;const m=Number(a.history_ref?.record?.modified);return m?m*1000:0;}
+function viewingKey(){return S.chat?.agent&&!S.chat.stale?agentKey(S.chat.agent):'';}
+function noteStatus(list){
+ const viewing=viewingKey(),now=Date.now();
+ for(const a of list){const k=agentKey(a),s=a.agent_status||'',prev=S.since.get(k);
+  if(!prev){S.since.set(k,{status:s,at:null});if(s==='done'&&k!==viewing)S.unread.add(k);continue;}
+  if(prev.status===s)continue;
+  S.since.set(k,{status:s,at:now,prevAt:prev.at,prev:prev.status});
+  if(s==='working'||s==='blocked'||(prev.status==='done'&&s==='idle'))S.unread.delete(k);
+  if(k===viewing||!S.active)continue;
+  if(prev.status==='working'&&(s==='idle'||s==='done')){S.unread.add(k);toast('「'+titleOf(a)+'」做完了');}
+  else if(s==='blocked')toast('「'+titleOf(a)+'」在等你确认');}}
+setInterval(()=>{if(!S.active)return;document.querySelectorAll('[data-since]').forEach(n=>{const ms=Date.now()-Number(n.dataset.since);n.textContent=(n.dataset.prefix||'')+(n.dataset.fmt==='ago'?ago(ms):dur(ms));});},1000);
 
 // ─── App shell & navigation ─────────────────────────────────────────────────
 const TABS=[['live','chat','会话'],['history','history','历史'],['terminals','terminal','终端'],['devices','device','设备']];
@@ -126,15 +152,27 @@ async function startDemo(){if(S.loading){toast('正在连接，请稍候');retur
 async function loadAccount(){const epoch=S.epoch;try{const a=await remote('account');if(epoch!==S.epoch)return;S.account=a;if(S.tab==='devices'&&!S.chat)render();}catch(e){if(epoch===S.epoch)error(e);}}
 
 // ─── Live agents ────────────────────────────────────────────────────────────
+// One row per agent: what it is (title), where (provider · project), and what it
+// is doing right now (state + how long), with a dot when it finished unseen.
 function agentRow(a){
- const n=btn('','card-button agent-row tone-'+stateTone(a),()=>openAgent(a));
+ const k=agentKey(a),unread=S.unread.has(k),tone=stateTone(a),st=a.agent_status;
+ const n=btn('','card-button agent-row tone-'+tone+(unread?' unread':''),()=>openAgent(a));
  const text=el('div','grow');text.append(el('div','card-title',titleOf(a)));
  const meta=el('div','card-meta');meta.append(el('span','',providerName(a.agent)));const project=projectOf(a);if(project)meta.append(el('span','sep',project));
  const ref=a.history_ref;if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(el('span','sep warn','历史未关联'));
- text.append(meta);n.append(avatar(a.agent,stateTone(a)),text,el('span','badge '+stateTone(a),stateLabel(a)));return n;}
+ text.append(meta);
+ const side=el('div','row-side');const at=statusSince(a);
+ if(st==='blocked'||st==='working'){side.append(el('span','badge '+tone,stateLabel(a)));if(at)side.append(since(at,'ago'));}
+ else{const last=lastActivity(a);side.append(el('span','row-time',last?(at?ago(Date.now()-at)+'前':relative(last/1000)).replace('刚刚前','刚刚'):''));
+  if(unread){const d=el('span','unread-dot');d.title='做完了，还没看';side.append(d,el('span','sr-only','有新进展'));}
+  else if(st==='done')side.append(el('span','row-state','已完成'));}
+ n.append(avatar(a.agent,tone),text,side);return n;}
+// Within a group: unseen results first, then whatever changed most recently.
+function sortAgents(items){return items.map((a,i)=>({a,i,u:S.unread.has(agentKey(a))?1:0,t:lastActivity(a)})).sort((x,y)=>y.u-x.u||y.t-x.t||x.i-y.i).map(x=>x.a);}
 function livePage(main){
  const actions=el('div','row');if(S.sessions.length>1)actions.append(btn(S.session||'选择会话','pill',chooseSession,'folder'));actions.append(ib('refresh','刷新会话',loadLive));
- pageHead(main,'','会话',S.device?(S.agents.length?S.agents.length+' 个 Agent 在线':''):'',actions);
+ const unread=S.agents.filter(a=>S.unread.has(agentKey(a))).length;
+ pageHead(main,'','会话',S.device?(S.agents.length?S.agents.length+' 个 Agent 在线'+(unread?' · '+unread+' 个有新进展':''):''):'',actions);
  if(!requireDevice(main))return;
  if(S.liveLoading&&!S.agents.length){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并关联历史记录…');skeleton(main,3);return;}
  if(S.liveError){empty(main,'会话读取失败',S.liveError,btn('重新读取','primary',loadLive));return;}
@@ -143,7 +181,7 @@ function livePage(main){
  function draw(){list.replaceChildren();const q=S.search.toLowerCase();const matches=S.agents.filter(a=>(titleOf(a)+' '+a.agent+' '+projectOf(a)).toLowerCase().includes(q));
   if(!matches.length){empty(list,'暂时没有会话',S.search?'没有匹配的 Agent。':'在电脑的 Herdr 里启动 Codex 或 Claude，再刷新。');return;}
   const groups=[['等你确认',a=>a.agent_status==='blocked'],['执行中',a=>a.agent_status==='working'],['空闲',a=>!['blocked','working'].includes(a.agent_status)]];
-  for(const [label,test] of groups){const items=matches.filter(test);if(!items.length)continue;list.append(el('div','section-label',label+' · '+items.length));const g=el('div','card list-card');items.forEach(a=>g.append(agentRow(a)));list.append(g);}}
+  for(const [label,test] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;list.append(el('div','section-label',label+' · '+items.length));const g=el('div','card list-card');items.forEach(a=>g.append(agentRow(a)));list.append(g);}}
  draw();
  if(S.liveLoading)main.append(el('p','fine center','正在刷新…'));}
 function chooseSession(){const box=sheet('切换 Herdr 会话');S.sessions.forEach(name=>menuItem(box,name,()=>{S.session=name;loadLive();},name===S.session?'check':'folder'));}
@@ -151,7 +189,7 @@ async function loadLive(){
  if(!S.device)return;const epoch=++S.epoch;S.liveLoading=S.agents.length?'agents':'sessions';S.liveError='';if(S.tab==='live'&&!S.chat)render();
  try{const r=await remote('sessions');if(epoch!==S.epoch)return;S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];return;}
   S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
-  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;syncWatch();if(S.pendingPane){S.liveLoading=false;openPending();return;}}
+  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;noteStatus(S.agents);syncWatch();if(S.pendingPane){S.liveLoading=false;openPending();return;}}
  catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
  finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
 // Lightweight status refresh: Herdr state only, keeps resolved history refs.
@@ -161,7 +199,7 @@ async function refreshStatus(){
   const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}if(old.agent_status!==a.agent_status||titleOf(old)!==titleOf(a))changed=true;return {...old,...a,history_ref:old.history_ref};});
   if(next.length!==S.agents.length)changed=true;
   const fresh=next.filter(a=>!known.has(a.pane_id)||known.get(a.pane_id).identity!==a.identity);
-  S.agents=next;if(changed)syncWatch();
+  noteStatus(next);S.agents=next;if(changed)syncWatch();
   if(S.chat?.agent){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status};onAgentStatus(was,cur.agent_status);}}
   if(fresh.length&&S.tab==='live'&&!S.chat){loadLive();return;}
   if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}
@@ -169,98 +207,154 @@ async function refreshStatus(){
  finally{S.statusBusy=false;}}
 
 // ─── Chat ───────────────────────────────────────────────────────────────────
-function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.activity='';S.chatMode='conversation';S.paused=false;}
+function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.activity='';S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;}
 async function openAgent(a){
- S.chatStack=[];resetChat({agent:a,record:null,title:titleOf(a),provider:a.agent});const epoch=++S.epoch;renderChat();
+ S.unread.delete(agentKey(a));S.chatStack=[];resetChat({agent:a,record:null,title:titleOf(a),provider:a.agent});const epoch=++S.epoch;renderChat();
  const ref=a.history_ref;
  if(ref?.record){S.bindings.delete(S.session+'/'+a.identity);S.chat.record=ref.record;await fetchHistory(false,true);return;}
  const remembered=S.bindings.get(S.session+'/'+a.identity);if(remembered){S.chat.record=remembered;S.chat.manual=true;await fetchHistory(false,true);return;}
  const id=ref?.thread||(a.agent_session?.kind!=='path'?a.agent_session?.value:null);
  if(id&&ref?.status!=='pending'){try{const r=await remote('catalog',{thread:id});if(epoch!==S.epoch)return;const rec=r.records.find(x=>x.provider===a.agent&&(!ref?.record_id||x.id===ref.record_id));if(rec){S.chat.record=rec;await fetchHistory(false,true);return;}}catch(e){if(epoch===S.epoch)error(e);}}
- if(epoch===S.epoch){S.chat.historyIssue=historyIssueText(ref);renderChat();if(a.agent_status==='working'||a.agent_status==='blocked')fetchTerminal(true);}}
-// Bridge reasons are specific; fall back to generic copy only for older bridges.
+ if(epoch===S.epoch){S.chat.historyIssue=historyIssueText(ref);paintTimeline();if(a.agent_status==='working'||a.agent_status==='blocked')fetchTerminal(true);}}
 function historyIssueText(ref){const reason=ref?.reason;switch(ref?.status){case 'remote_error':return '远端历史读取失败：'+(reason||'连接不可用');case 'pending':return (reason||'会话刚开始，历史文件还没写出')+'。稍后会自动出现。';case 'remote_candidates':case 'ambiguous':case 'unavailable':return (reason||'没有能唯一确认的会话标识')+(ref?.candidates?.length?'，下面列出了候选。':'。');case 'remote_missing':return reason||'远端这个工作目录下还没有历史记录。';case 'remote':return '这个窗格通过 SSH 连到别的电脑，历史在那台电脑上；终端输出仍可查看。';case 'missing':return reason||'会话标识已知，但没找到对应的历史文件。';default:return reason||'没有能确认的会话标识，可以手动选择历史，或查看终端输出。';}}
 function openRecord(r,push=false){
- if(push&&S.chat)S.chatStack.push({...S.chat,mode:S.chatMode,savedMessages:S.messages,savedChildren:S.children,savedBefore:S.before,savedMore:S.more,savedScroll:document.getElementById('chat-scroll')?.scrollTop||0});else S.chatStack=[];
+ if(push&&S.chat)S.chatStack.push({...S.chat,mode:S.chatMode,savedMessages:S.messages,savedChildren:S.children,savedBefore:S.before,savedMore:S.more,savedScroll:document.getElementById('chat-scroll')?.scrollTop||0,savedStick:S.stick});else S.chatStack=[];
  resetChat({record:r,agent:null,title:r.title,provider:r.provider});S.epoch++;renderChat();fetchHistory(false,true);}
 async function fetchHistory(older=false,initial=false){
  if(!S.chat?.record||(S.polling&&S.fetchEpoch===S.epoch))return;S.polling=true;const epoch=S.epoch;S.fetchEpoch=epoch;const record=S.chat.record;
- if(initial){S.chat.historyLoading=true;renderTimeline();}
+ if(initial){S.chat.historyLoading=true;paintTimeline();}
  const args={record_id:record.id};if(record.remote)args.remote=record.remote;if(older)args.before=S.before;
- const scroll=document.getElementById('chat-scroll');const oldHeight=scroll?.scrollHeight||0,oldTop=scroll?.scrollTop||0;
  try{const r=await remote('history',args);if(epoch!==S.epoch)return;const hadError=!!S.chat.historyError;S.chat.historyError=null;S.chat.historyLoading=false;const prior=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
-  if(older){const seen=new Set(S.messages.map(x=>x.id));S.messages=r.messages.filter(m=>!seen.has(m.id)).concat(S.messages);}
+  const known=new Set(S.messages.map(x=>x.id));
+  if(older)S.messages=r.messages.filter(m=>!known.has(m.id)).concat(S.messages);
   else if(initial)S.messages=r.messages;
   else{const map=new Map(S.messages.map(x=>[x.id,x]));r.messages.forEach(m=>map.set(m.id,m));S.messages=[...map.values()].sort((a,b)=>Number(a.id.split(':')[0])-Number(b.id.split(':')[0])||Number(a.id.split(':')[1])-Number(b.id.split(':')[1]));}
   S.children=r.children||[];if(initial||older){S.before=r.before;S.more=r.has_more;}
   S.historyNote=r.bounded?'本页到了读取窗口边界，可以继续加载更早记录。':'';
   settleOutbox();
   const now=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
-  if(prior!==now||initial||older||hadError){const nearBottom=!scroll||oldHeight-oldTop-scroll.clientHeight<120;renderTimeline();const n=document.getElementById('chat-scroll');if(older&&n)n.scrollTop=oldTop+n.scrollHeight-oldHeight;else if((initial||nearBottom)&&n)n.scrollTop=n.scrollHeight;else if(!initial)showJump(true);}
+  if(prior!==now||initial||older||hadError){
+   const n=document.getElementById('chat-scroll');
+   if(older&&n){const h=n.scrollHeight,top=n.scrollTop;renderTimeline();n.scrollTop=top+n.scrollHeight-h;}
+   else{if(initial)S.stick=true;else if(!S.stick)S.unseen+=S.messages.filter(m=>!known.has(m.id)&&(m.kind==='user'||m.kind==='assistant')).length;paintTimeline();}}
   updateChatMeta();}
- catch(e){if(epoch===S.epoch){S.paused=true;S.chat.historyLoading=false;S.chat.historyError='历史读取失败：'+e.message;renderTimeline();}}
+ catch(e){if(epoch===S.epoch){S.paused=true;S.chat.historyLoading=false;S.chat.historyError='历史读取失败：'+e.message;paintTimeline();}}
  finally{if(S.fetchEpoch===epoch)S.polling=false;}}
-function chatSubtitle(){const c=S.chat;if(!c)return '';if(c.stale)return '窗格已变化 · 只读';if(c.agent){const parts=[stateLabel(c.agent)];const p=projectOf(c.agent);if(p)parts.push(p);if(c.manual)parts.push('手动关联');if(S.children.length)parts.push(S.children.length+' 个子 Agent');return parts.join(' · ');}return (c.record?.parent?'子 Agent · ':'')+'历史只读'+(S.children.length?' · '+S.children.length+' 个子 Agent':'');}
-function updateChatMeta(){const n=document.getElementById('chat-meta');if(n)n.textContent=chatSubtitle();const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(S.chat?.agent&&!S.chat.stale?stateTone(S.chat.agent):'muted');}
+// Re-render the timeline but keep the reader where they are: follow the bottom
+// only when they were already there, otherwise hold position and count news.
+function paintTimeline(){const n=document.getElementById('chat-scroll');const top=n?n.scrollTop:0;renderTimeline();if(!n)return;n.scrollTop=S.stick?n.scrollHeight:top;updateJump();}
+function updateJump(){const j=document.getElementById('jump');if(!j)return;j.classList.toggle('hidden',S.stick);j.classList.toggle('has-count',S.unseen>0);const t=j.querySelector('.jump-text');if(t)t.textContent=S.unseen?S.unseen+' 条新消息':'';}
+function showJump(v){S.stick=!v;updateJump();}
+function chatSubtitle(){const c=S.chat;if(!c)return '';if(c.stale)return '窗格已变化 · 只读';if(c.agent){const parts=[stateLabel(c.agent),providerName(c.agent.agent)];const p=projectOf(c.agent);if(p)parts.splice(1,0,p);if(c.manual)parts.push('手动关联');return parts.join(' · ');}return (c.record?.parent?'子 Agent · ':'')+providerName(c.provider)+' · 历史只读';}
+// Subtitle: "执行中 2:05 · 项目" — state first so it survives truncation; the
+// avatar already says Claude/Codex.
+function updateChatMeta(){
+ const n=document.getElementById('chat-meta'),c=S.chat;
+ if(n&&c){n.replaceChildren();const a=c.agent&&!c.stale?c.agent:null;
+  if(!a)n.append(chatSubtitle());
+  else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=a.agent_status==='working'||a.agent_status==='blocked'?statusSince(a)||(a.agent_status==='working'&&c.sentAt)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}}
+ const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(c?.agent&&!c.stale?stateTone(c.agent):'muted');
+ const b=document.getElementById('child-count');if(b){b.textContent=String(S.children.length);b.classList.toggle('hidden',!S.children.length);}}
 function renderChat(){
- const root=shell();root.classList.add('chat-shell');const head=el('header','chat-head');head.append(ib('back','返回列表',pocketBack));
- const av=avatar(S.chat.provider);const dot=el('span','status-dot '+(S.chat.agent&&!S.chat.stale?stateTone(S.chat.agent):'muted'));dot.id='chat-dot';av.append(dot);head.append(av);
- const name=el('div','grow');name.append(el('h2','',S.chat.title||'对话'));const sub=el('small','',chatSubtitle());sub.id='chat-meta';name.append(sub);head.append(name);
- head.append(ib('branch','切换 Agent',agentSwitcher),ib('more','更多操作',chatMenu));root.append(head);
- const tabs=el('div','chat-tabs');[['conversation','对话'],['commands','命令'],['terminal','终端']].forEach(([mode,title])=>{const b=btn(title,S.chatMode===mode?'active':'',()=>{if(S.chatMode===mode)return;S.chatMode=mode;S.epoch++;renderChat();if(mode==='terminal')fetchTerminal();else if(S.chat.record&&!S.messages.length)fetchHistory(false,true);});b.setAttribute('aria-pressed',String(S.chatMode===mode));tabs.append(b);});root.append(tabs);
- const wrap=el('div','chat-body-wrap');const body=el('main','chat-body');body.id='chat-scroll';body.onscroll=()=>{if(body.scrollHeight-body.scrollTop-body.clientHeight<80)showJump(false);};wrap.append(body);
- const jump=btn('','jump-btn hidden',()=>{body.scrollTop=body.scrollHeight;showJump(false);},'down');jump.id='jump';jump.setAttribute('aria-label','回到最新');wrap.append(jump);root.append(wrap);
- renderTimeline();
- const footer=el('footer','composer-wrap');footer.id='composer';root.append(footer);renderComposer();
- const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
-function showJump(v){document.getElementById('jump')?.classList.toggle('hidden',!v);}
+ const root=shell();root.classList.add('chat-shell');const head=el('header','chat-head');head.id='chat-head';head.append(ib('back','返回列表',pocketBack));
+ const av=avatar(S.chat.provider);const dot=el('span','status-dot');dot.id='chat-dot';av.append(dot);head.append(av);
+ const name=el('div','grow chat-id');name.append(el('h2','',S.chat.title||'对话'));const sub=el('small','chat-meta');sub.id='chat-meta';name.append(sub);head.append(name);
+ const sw=ib('branch','切换 Agent',agentSwitcher);sw.classList.add('with-count');const count=el('span','icon-count hidden');count.id='child-count';count.setAttribute('aria-hidden','true');sw.append(count);
+ const more=ib('more','更多操作',chatMenu);sw.classList.add('head-act');more.classList.add('head-act');head.append(sw,more);root.append(head);
+ const tabs=el('div','chat-tabs');tabs.setAttribute('role','group');tabs.setAttribute('aria-label','视图');[['conversation','对话'],['commands','命令'],['terminal','终端']].forEach(([mode,title])=>{const b=btn(title,S.chatMode===mode?'active':'',()=>{if(S.chatMode===mode)return;S.chatMode=mode;S.stick=true;S.unseen=0;S.epoch++;renderChat();if(mode==='terminal')fetchTerminal();else if(S.chat.record&&!S.messages.length)fetchHistory(false,true);});b.setAttribute('aria-pressed',String(S.chatMode===mode));tabs.append(b);});head.append(tabs);
+ const wrap=el('div','chat-body-wrap');const body=el('main','chat-body');body.id='chat-scroll';let lastTop=0;
+ body.onscroll=()=>{const bottom=body.scrollHeight-body.scrollTop-body.clientHeight<80;if(bottom!==S.stick||(bottom&&S.unseen)){S.stick=bottom;if(bottom)S.unseen=0;updateJump();}
+  // Reading upwards near the top pulls in the previous page (position is kept).
+  const up=body.scrollTop<lastTop;lastTop=body.scrollTop;
+  if(up&&body.scrollTop<160&&S.more&&!S.polling&&S.chatMode!=='terminal'&&S.chat?.record&&S.messages.length)fetchHistory(true);};
+ // Keyboard opening or the live strip growing shrinks the view: stay pinned to the latest.
+ if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>{if(S.stick)body.scrollTop=body.scrollHeight;}).observe(body);
+ wrap.append(body);
+ const jump=btn('','jump-btn hidden',()=>{S.stick=true;S.unseen=0;body.scrollTop=body.scrollHeight;updateJump();},'down');jump.id='jump';jump.setAttribute('aria-label','回到最新');jump.append(el('span','jump-text'));wrap.append(jump);root.append(wrap);
+ const footer=el('footer','composer-wrap');footer.id='composer';root.append(footer);
+ renderTimeline();renderComposer();updateChatMeta();
+ const n=document.getElementById('chat-scroll');if(n&&S.stick)n.scrollTop=n.scrollHeight;}
 
-// Composer, live activity and confirmation panel.
+// Composer, live activity and confirmation panel. The input itself survives
+// status changes so typing (and the keyboard) is never interrupted.
 function renderComposer(){
- const footer=document.getElementById('composer');if(!footer||!S.chat)return;footer.replaceChildren();const a=S.chat.agent;
- if(!a||S.chat.stale){footer.append(el('div','readonly',S.chat.stale?'这个窗格的 Agent 已变化，回到列表重新打开':S.chat.record?.parent?'子 Agent 的历史记录 · 只读，不会向父会话发送':'历史只读 · 在「会话」里打开在线 Agent 才能继续对话'));return;}
- if(a.agent_status==='blocked'){const panel=el('section','confirm-panel');const h=el('div','confirm-head');h.append(icon('alert'),el('strong','grow','Agent 在等你确认'),btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
-  const pre=el('pre','confirm-screen',S.terminalText?tail(S.terminalText,12):'正在读取终端画面…');pre.id='confirm-screen';panel.append(pre);
-  const keys=el('div','confirm-keys');[['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);footer.append(panel);}
- else if(a.agent_status==='working'){const strip=el('div','activity');strip.append(el('span','pulse'));const t=el('div','grow');t.append(el('strong','',providerName(a.agent)+' 正在工作'));const line=el('span','activity-line',S.activity||'');line.id='activity-line';t.append(line);strip.append(t,btn('中断','secondary small',()=>confirmAction('中断 Agent？','向 '+titleOf(a)+' 发送 Ctrl+C，会打断它正在执行的操作。','发送 Ctrl+C',()=>sendKey('ctrl+c','Ctrl+C'),true)));footer.append(strip);}
- const compose=el('div','composer');const input=el('textarea');input.rows=1;input.placeholder=a.agent_status==='working'?'Agent 执行中，可以先写好…':'说点什么，继续这段对话…';input.setAttribute('aria-label','消息输入框');const key=draftKey();input.value=S.drafts.get(key)||'';
- const grow=()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,140)+'px';};
+ const footer=document.getElementById('composer');if(!footer||!S.chat)return;const a=S.chat.agent;
+ if(!a||S.chat.stale){footer.replaceChildren(el('div','readonly',S.chat.stale?'这个窗格的 Agent 已变化，回到列表重新打开':S.chat.record?.parent?'子 Agent 的历史记录 · 只读，不会向父会话发送':'历史只读 · 在「会话」里打开在线 Agent 才能继续对话'));return;}
+ const key=draftKey();let live=document.getElementById('live-state'),compose=footer.querySelector('.composer');
+ if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
+ renderLiveState(live,a);
+ const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status;
+ input.placeholder=st==='working'?'执行中，可以先写好，停下后再发':st==='blocked'?'先处理上面的确认':'说点什么，继续这段对话…';
+ if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
+ send.classList.toggle('later',st==='working'||st==='blocked');send.disabled=!input.value.trim();}
+function buildComposer(key){
+ const compose=el('div','composer');compose.dataset.key=key;const input=el('textarea');input.rows=1;input.setAttribute('aria-label','消息输入框');input.setAttribute('enterkeyhint','enter');input.value=S.drafts.get(key)||'';
  const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');
- input.oninput=()=>{S.drafts.set(key,input.value);grow();};compose.append(input,send);footer.append(compose);requestAnimationFrame(grow);}
+ const grow=()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,innerHeight<560?96:140)+'px';};compose.grow=grow;
+ // Enter is a newline on phones; Ctrl/⌘+Enter sends with a hardware keyboard.
+ input.onkeydown=e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMessage(input);}};
+ input.oninput=()=>{if(input.value)S.drafts.set(key,input.value);else S.drafts.delete(key);send.disabled=!input.value.trim();grow();};
+ compose.append(input,send);requestAnimationFrame(grow);return compose;}
+function renderLiveState(live,a){
+ live.replaceChildren();const st=a.agent_status;
+ if(st==='blocked'){const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow','等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
+  const pre=el('pre','confirm-screen',S.terminalText?tail(S.terminalText,12):'正在读取终端画面…');pre.id='confirm-screen';panel.append(pre);
+  const keys=el('div','confirm-keys');[['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);live.append(panel);requestAnimationFrame(()=>{pre.scrollTop=pre.scrollHeight;});}
+ else if(st==='working'){const strip=el('div','activity');strip.append(el('span','pulse'));const t=el('div','grow');const label=el('strong','','执行中');const at=statusSince(a)||S.chat.sentAt;if(at)label.append(' ',since(at));t.append(label);const line=el('span','activity-line',S.activity||'正在读取终端…');line.id='activity-line';t.append(line);strip.append(t,btn('中断','secondary small',()=>confirmAction('中断 Agent？','向 '+titleOf(a)+' 发送 Ctrl+C，会打断它正在执行的操作。','发送 Ctrl+C',()=>sendKey('ctrl+c','Ctrl+C'),true)));live.append(strip);}
+ else if(S.chat.doneAt&&Date.now()-S.chat.doneAt<8000){const strip=el('div','activity done');strip.setAttribute('role','status');strip.append(icon('check'));const t=el('strong','grow','做完了'+(S.chat.took>=5000?' · 用时 '+dur(S.chat.took):''));strip.append(t);if(!S.stick)strip.append(btn('看结果','link-btn',()=>{S.stick=true;S.unseen=0;scrollBottom();updateJump();}));live.append(strip);}}
 async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'已发送 '+label);setTimeout(()=>{refreshStatus();fetchTerminal(true);},700);}catch(e){toast('按键未确认：'+e.message+'。不会自动重发。');}}
 async function sendMessage(input){
  const text=input.value;const a=S.chat?.agent;if(!text.trim()||!a)return;
- if(['working','blocked'].includes(a.agent_status)&&!S.demo){toast(a.agent_status==='working'?'Agent 还在执行，等它停下再发（草稿已保留）':'Agent 在等你确认，先处理上面的提示');return;}
+ if(['working','blocked'].includes(a.agent_status)&&!S.demo){toast(a.agent_status==='working'?'还在执行，等它停下再发（草稿已保留）':'它在等你确认，先处理上面的提示');return;}
  const epoch=S.epoch,key=draftKey();const button=document.querySelector('.send');button.disabled=true;
  const item={key,text,at:Date.now(),state:'sending'};
- if(!S.demo){S.outbox.push(item);renderTimeline();scrollBottom();}
+ if(!S.demo){S.outbox.push(item);S.stick=true;paintTimeline();}
  try{await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text,id:uuid()});
   if(S.demo){toast('演示模式：未发送，草稿已保留');return;}
   item.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
-  if(S.chat?.agent){S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
-  renderTimeline();scrollBottom();if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);}
- catch(e){item.state='failed';renderTimeline();toast('发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
- finally{button.disabled=false;}}
+  if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
+  S.stick=true;paintTimeline();if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);}
+ catch(e){item.state='failed';paintTimeline();toast('发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
+ finally{button.disabled=!input.value.trim();}}
 function scrollBottom(){const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
 // A pending bubble disappears once the transcript shows the same user text.
 function settleOutbox(){if(!S.outbox.length)return;const recent=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>m.text.trim());S.outbox=S.outbox.filter(o=>!(o.state==='sent'&&recent.includes(o.text.trim()))&&Date.now()-o.at<180000);}
-function onAgentStatus(was,now){renderComposer();updateChatMeta();if(now==='blocked'){fetchTerminal(true);if(!S.active)return;toast('Agent 在等你确认');}if(was==='working'&&now!=='working'){S.activity='';fetchHistory();}}
+// A finish only counts when Herdr itself reported working → stopped just now;
+// the optimistic "working" set after sending must not flash "做完了".
+function onAgentStatus(was,now){
+ const rec=S.chat?.agent?S.since.get(agentKey(S.chat.agent)):null;
+ if(was==='working'&&(now==='idle'||now==='done')&&rec?.prev==='working'&&rec.status===now&&Date.now()-rec.at<15000){
+  S.chat.doneAt=Date.now();S.chat.took=rec.prevAt?rec.at-rec.prevAt:S.chat.sentAt?rec.at-S.chat.sentAt:0;
+  const h=document.getElementById('chat-head');if(h){h.classList.remove('flash');void h.offsetWidth;h.classList.add('flash');}
+  const doneAt=S.chat.doneAt;setTimeout(()=>{if(S.chat?.doneAt===doneAt)renderComposer();},8100);}
+ renderComposer();updateChatMeta();
+ if(now==='blocked'){fetchTerminal(true);if(S.active)toast('Agent 在等你确认');}
+ if(was==='working'&&now!=='working'){S.activity='';fetchHistory();}}
 async function fetchTerminal(quiet=false){
  if(!S.chat?.agent){if(!quiet)toast('这条历史没有在线终端');return;}const epoch=S.epoch;
  try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
-  const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;const c=document.getElementById('confirm-screen');if(c)c.textContent=tail(r.text,12);const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
-  if(!S.chat.record&&S.chatMode==='conversation')renderTimeline();}
+  const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;const c=document.getElementById('confirm-screen');if(c){c.textContent=tail(r.text,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
+  if(!S.chat.record&&S.chatMode==='conversation')paintTimeline();}
  catch(e){if(epoch===S.epoch&&!quiet)error(e);}}
 
 // ─── Sheets ─────────────────────────────────────────────────────────────────
 function agentSwitcher(){
  const box=sheet('切换 Agent');
  if(S.chat?.record?.parent)menuItem(box,'返回父会话',async()=>{try{const r=await remote('catalog',{thread:S.chat.record.parent,...(S.chat.record.remote?{remote:S.chat.record.remote}:{})});if(r.records.length)openRecord(r.records[0],true);else toast('没找到父会话记录');}catch(e){error(e);}},'back');
- if(S.children.length){box.append(el('div','section-label','这段对话的子 Agent'));S.children.forEach(r=>{const b=btn('','menu-item',()=>{closeSheet();openRecord(r,true);},'branch');b.append(el('span','grow menu-label',(r.role||r.title)+' · '+r.thread.slice(0,8)));box.append(b);});}
- else box.append(el('p','fine','这段对话里还没有子 Agent。'));
  box.append(el('div','section-label','在线 Agent'));
- S.agents.forEach(a=>{const b=btn('','menu-item',()=>{closeSheet();openAgent(a);});b.append(avatar(a.agent,stateTone(a)));const t=el('span','grow');t.append(el('span','menu-label',titleOf(a)),el('small','',providerName(a.agent)+(projectOf(a)?' · '+projectOf(a):'')));b.append(t,el('span','badge '+stateTone(a),stateLabel(a)));box.append(b);});}
+ if(!S.agents.length)box.append(el('p','fine','还没读到在线 Agent，回到列表刷新一下。'));
+ const current=S.chat?.agent?agentKey(S.chat.agent):'';const order={blocked:0,working:1};
+ sortAgents(S.agents).sort((x,y)=>(order[x.agent_status]??2)-(order[y.agent_status]??2)).forEach(a=>{const k=agentKey(a),here=k===current;
+  const b=btn('','menu-item agent-pick'+(here?' current':''),()=>{closeSheet();if(!here)openAgent(a);});if(here)b.setAttribute('aria-current','true');
+  b.append(avatar(a.agent,stateTone(a)));const t=el('span','grow');t.append(el('span','menu-label',titleOf(a)),el('small','',(here?'当前 · ':'')+providerName(a.agent)+(projectOf(a)?' · '+projectOf(a):'')));b.append(t);
+  if(S.unread.has(k))b.append(el('span','unread-dot'));b.append(el('span','badge '+stateTone(a),stateLabel(a)));box.append(b);});
+ box.append(el('div','section-label','这段对话的子 Agent'+(S.children.length?' · '+S.children.length:'')));
+ if(!S.children.length){box.append(el('p','fine','这段对话里还没有子 Agent。'));return;}
+ const child=r=>{const b=btn('','menu-item',()=>{closeSheet();openRecord(r,true);},'branch');b.append(el('span','grow menu-label',(r.role||r.title)+' · '+r.thread.slice(0,8)));return b;};
+ // Long runs of sub-agents show the latest five; the rest are one tap away.
+ const kids=el('div');const fill=list=>kids.replaceChildren(...list.map(child));box.append(kids);
+ if(S.children.length>6){fill(S.children.slice(-5));const all=btn('显示全部 '+S.children.length+' 个','link-btn',()=>{all.remove();fill(S.children);});box.append(all);}else fill(S.children);}
 function chatMenu(){
  const box=sheet('对话操作');
  menuItem(box,'刷新对话',()=>{S.paused=false;fetchHistory(false,true);},'refresh');
@@ -309,10 +403,11 @@ async function loadCatalog(query='',more=false){
 function pocketBack(){
  if(overlay.childElementCount){closeSheet();return;}
  if(T.view){leaveTerminal();render();return;}
- if(S.chatStack.length){const prev=S.chatStack.pop();S.chat=prev;S.chatMode=prev.mode||'conversation';S.messages=prev.savedMessages||[];S.children=prev.savedChildren||[];S.before=prev.savedBefore||0;S.more=!!prev.savedMore;S.epoch++;renderChat();document.getElementById('chat-scroll').scrollTop=prev.savedScroll||0;if(prev.record&&!S.messages.length)fetchHistory(false,true);return;}
+ if(S.chatStack.length){const prev=S.chatStack.pop();S.chat=prev;S.chatMode=prev.mode||'conversation';S.messages=prev.savedMessages||[];S.children=prev.savedChildren||[];S.before=prev.savedBefore||0;S.more=!!prev.savedMore;S.stick=prev.savedStick!==false;S.unseen=0;S.epoch++;renderChat();if(!S.stick)document.getElementById('chat-scroll').scrollTop=prev.savedScroll||0;if(prev.record&&!S.messages.length)fetchHistory(false,true);return;}
  if(S.chat){S.chat=null;S.epoch++;render();return;}
  if(S.tab!=='live'&&S.device)setTab('live');else if(S.tab!=='devices')setTab('devices');else toast('设备和保存的密码都在，可以直接关闭应用');}
 window.pocketBack=pocketBack;
+addEventListener('resize',()=>{const c=document.getElementById('confirm-screen');if(c)c.scrollTop=c.scrollHeight;});
 window.setForeground=v=>{S.active=v;if(v){refreshStatus();if(S.chat?.record&&!S.paused)fetchHistory();}};
 // Busy agents refresh faster; nothing polls in the background or in demo mode.
 let tick=0;

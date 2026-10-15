@@ -743,19 +743,33 @@ def readable_output(value):
 
 def normalize_record(row, provider, offset):
     timestamp = row.get("timestamp", ""); result = []
-    def add(kind, text, title="", call_id=""):
+    def add(kind, text, title="", call_id="", phase=""):
         if not text: return
-        result.append({"id": str(offset) + ":" + str(len(result)), "kind": kind,
-                       "text": text.encode("utf-8")[:16000].decode("utf-8", errors="ignore"), "title": title, "call_id": call_id,
-                       "timestamp": timestamp, "truncated": len(text.encode("utf-8")) > 16000})
+        item = {"id": str(offset) + ":" + str(len(result)), "kind": kind,
+                "text": text.encode("utf-8")[:16000].decode("utf-8", errors="ignore"), "title": title, "call_id": call_id,
+                "timestamp": timestamp, "truncated": len(text.encode("utf-8")) > 16000}
+        # Codex marks progress notes ("commentary") vs the turn's reply ("final_answer");
+        # the UI folds the former and highlights the latter.
+        if phase: item["phase"] = phase
+        result.append(item)
     if provider == "codex":
         if row.get("type") != "response_item": return []
         value = row.get("payload", {}); kind = value.get("type")
         if kind == "message" and value.get("role") in ("user", "assistant"):
             if value.get("channel") not in ("analysis", "summary"):
                 text = text_content(value.get("content", []))
+                # Codex appends machine-readable memory citations to replies; they are not for people.
+                if value.get("role") == "assistant": text = re.sub(r"\s*<oai-mem-citation>.*?</oai-mem-citation>\s*", "\n", text, flags=re.S).strip()
                 if value.get("role") != "user" or not text.startswith(("# AGENTS.md", "<environment_context>", "<INSTRUCTIONS>")):
-                    add(value["role"], text)
+                    add(value["role"], text, phase=value.get("phase") if isinstance(value.get("phase"), str) else "")
+        elif kind == "agent_message":
+            # Inter-agent message (sub-Agent → parent). Only the visible header/payload is shown;
+            # encrypted content stays hidden.
+            text = text_content(value.get("content", [])); header, _, payload = text.partition("Payload:")
+            fields = dict(line.split(": ", 1) for line in header.splitlines() if ": " in line)
+            sender = str(value.get("author") or fields.get("Sender") or "子 Agent")
+            add("agent", payload.strip() or "（内容只对 Agent 可见）", sender, "",
+                fields.get("Message Type", "").strip().lower())
         elif kind in ("function_call", "custom_tool_call"):
             args = value.get("arguments", value.get("input", ""))
             if not isinstance(args, str): args = json.dumps(args, ensure_ascii=False, indent=2)

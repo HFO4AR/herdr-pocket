@@ -1,26 +1,102 @@
-/* Markdown rendering (markdown.js). Uses tokens from app.css. */
-/* Markdown */
-.md>*+*{margin-top:.6em}
-.md p{line-height:1.7}
-.md h3,.md h4,.md h5,.md h6{font-size:15px;font-weight:700;margin-top:.9em}
-.md h3{font-size:16px}
-.md ul,.md ol{margin:0;padding-left:1.35em}
-.md li+li{margin-top:.25em}
-.md li.task{list-style:none;margin-left:-1.2em}
-.md .box{display:inline-grid;place-items:center;width:15px;height:15px;border:1.5px solid var(--line-strong);border-radius:4px;margin-right:6px;font-size:10px;vertical-align:-2px}
+/* Markdown rendering (markdown.js). Uses tokens from app.css.
+ * Body copy is ink-2 so bold, headings and the lead sentence read as emphasis in ink. */
+.md{min-width:0;max-width:100%;color:var(--ink-2);line-height:1.72;text-autospace:normal;line-break:strict;word-break:normal;overflow-wrap:anywhere}
+.md>*+*{margin-top:.7em}
+.md p{line-height:inherit}
+.md strong{color:var(--ink);font-weight:650}
+.md em{font-style:italic}
+.md del{color:var(--muted)}
+
+/* Lead: a leading bold sentence is the takeaway — own line, slightly larger. */
+.md>.md-lead>strong:first-child{font-size:16px;line-height:1.55}
+.md>.md-lead>strong.md-takeaway{display:block;margin-bottom:.3em}
+
+/* Headings, sized for a 390px column. */
+.md .md-h{color:var(--ink);font-weight:700;line-height:1.4;letter-spacing:-.1px}
+.md>.md-h{margin-top:1.15em}
+.md>.md-h:first-child{margin-top:0}
+.md .md-h+*{margin-top:.4em}
+.md .md-h1{font-size:18px}
+.md .md-h2{font-size:16.5px}
+.md .md-h3{font-size:15.5px}
+.md .md-h4,.md .md-h5,.md .md-h6{font-size:15px;color:var(--ink-2)}
+
+/* Lists */
+.md ul,.md ol{margin:0;padding-left:1.4em}
+.md li{padding-left:.15em}
+.md li+li{margin-top:.3em}
+.md ul.loose>li+li,.md ol.loose>li+li{margin-top:.6em}
+.md li>*+*{margin-top:.35em}
+.md li>ul,.md li>ol{margin-top:.3em}
+.md ul{list-style:disc}
+.md ul ul{list-style:circle}
+.md li::marker{color:var(--faint)}
+.md ol>li::marker{color:var(--muted);font-variant-numeric:tabular-nums;font-weight:600}
+.md li.task{list-style:none;margin-left:-1.3em}
+.md .box{display:inline-grid;place-items:center;width:15px;height:15px;border:1.5px solid var(--line-strong);border-radius:4px;margin-right:6px;font-size:10px;line-height:1;vertical-align:-2px}
 .md .box.done{background:var(--success);border-color:var(--success);color:#fff}
-.md code{font-family:var(--mono);font-size:.86em;background:#0000000b;padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
-.md blockquote{margin:0;padding:2px 0 2px 12px;border-left:3px solid var(--line-strong);color:var(--ink-2)}
-.md hr{border:0;border-top:1px solid var(--line);margin:1em 0}
-.md .md-link{color:var(--accent);text-decoration:underline;text-decoration-color:var(--soft-line);overflow-wrap:anywhere}
-.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius-control)}
-.md table{border-collapse:collapse;font-size:13px;min-width:100%}
-.md th,.md td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-.md th{background:var(--sunken);font-weight:600;white-space:nowrap}
-.md tr:last-child td{border-bottom:0}
-.code-block{border:1px solid var(--line);border-radius:var(--radius-control);overflow:hidden;background:#fafaf8}
-.code-bar{display:flex;align-items:center;justify-content:space-between;padding:0 4px 0 12px;font-size:11px;color:var(--muted);background:var(--sunken);border-bottom:1px solid var(--line)}
-.code-copy{display:inline-flex;align-items:center;gap:4px;min-height:30px;padding:0 8px;font-size:11px;color:var(--muted)}
-.code-copy svg{width:13px;height:13px}
-.code-block pre{margin:0;padding:10px 12px;overflow-x:auto;font:12.5px/1.6 var(--mono)}
-.code-block code{background:none;padding:0;font-size:inherit}
+
+/* Inline code, file references and links. Tapping a file or link copies it (navigation is blocked). */
+.md code,.md .md-file{font-variant-ligatures:none}
+.md code{font-family:var(--mono);font-size:.85em;background:#0000000a;border:1px solid #0000000d;padding:.5px 4px;border-radius:5px;overflow-wrap:anywhere;word-break:break-word;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+.md .md-file{font-family:var(--mono);font-size:.85em;color:var(--accent);background:var(--soft);border:1px solid var(--soft-line);padding:.5px 4px;border-radius:5px;overflow-wrap:anywhere;cursor:pointer;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+.md .md-file code,.md .md-link code{border:0;background:none;padding:0;font-size:inherit;color:inherit}
+.md .md-link{color:var(--accent);text-decoration:underline;text-decoration-color:var(--soft-line);text-underline-offset:3px;overflow-wrap:anywhere;cursor:pointer}
+.md .md-file:active,.md .md-link:active{background:var(--soft-line)}
+.md .md-file:focus-visible,.md .md-link:focus-visible{outline:2px solid #8c2c00;outline-offset:1px}
+
+.md blockquote{margin:0;padding:6px 0 6px 12px;border-left:3px solid var(--soft-line);color:var(--muted)}
+.md blockquote>*+*{margin-top:.5em}
+.md hr{border:0;border-top:1px solid var(--line);margin:1.2em 0}
+.md hr:first-child,.md hr:last-child{display:none}
+
+/* Tables: scroll sideways with edge shadows; wide ones become cards on phones. */
+.table-box{position:relative;max-width:100%;border:1px solid var(--line);border-radius:var(--radius-control);overflow:hidden}
+.table-box::before,.table-box::after{content:'';position:absolute;top:0;bottom:0;width:16px;pointer-events:none;opacity:0;transition:opacity .15s;z-index:1}
+.table-box::before{left:0;background:linear-gradient(to right,#0000001c,#0000)}
+.table-box::after{right:0;background:linear-gradient(to left,#0000001c,#0000)}
+.table-box.more-left::before,.table-box.more-right::after{opacity:1}
+.table-wrap{overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+.md table{border-collapse:collapse;font-size:13.5px;line-height:1.55;min-width:100%}
+.md th,.md td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;min-width:4.5em}
+.md td.long{min-width:13em;max-width:22em}
+.md th{background:var(--sunken);color:var(--ink);font-weight:600;font-size:12.5px;word-break:keep-all}
+.md tbody tr:last-child td{border-bottom:0}
+.md td:first-child{color:var(--ink)}
+.md-cards{display:flex;flex-direction:column;gap:8px}
+.md-card{border:1px solid var(--line);border-radius:var(--radius-control);padding:9px 12px 10px;background:var(--surface)}
+.md-card-title{color:var(--ink);font-weight:650;line-height:1.5}
+.md-card-badge{display:inline-block;margin-right:7px;padding:0 7px;border-radius:999px;background:var(--soft);color:var(--accent);font-size:12px;font-weight:600;line-height:20px;vertical-align:1px}
+.md-card dl{display:grid;grid-template-columns:fit-content(6.5em) minmax(0,1fr);gap:4px 10px;margin:6px 0 0;font-size:14px;line-height:1.6}
+.md-card dt{color:var(--muted);font-size:12.5px;line-height:1.85}
+.md-card dd{margin:0;min-width:0}
+.md-card-body{margin-top:4px;font-size:14px;line-height:1.65}
+.md td code,.md td .md-file{overflow-wrap:break-word}
+@media (max-width:599px){.table-box.wide{display:none}}
+@media (min-width:600px){.md-cards{display:none}}
+
+/* Code blocks */
+.code-block{max-width:100%;border:1px solid var(--line);border-radius:var(--radius-control);overflow:hidden;background:#fafaf8}
+.md>.code-block,.md li>.code-block{margin-top:.6em}
+.code-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 2px 0 12px;font-size:11.5px;color:var(--muted);background:var(--sunken);border-bottom:1px solid var(--line)}
+.code-lang{font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.code-copy{display:inline-flex;align-items:center;gap:4px;min-height:40px;padding:0 10px;font-size:12px;color:var(--muted);border-radius:8px}
+.code-copy svg{width:14px;height:14px}
+.code-block pre{margin:0;padding:10px 12px;overflow-x:auto;overscroll-behavior-x:contain;font:12.5px/1.6 var(--mono);color:var(--ink);tab-size:4;font-variant-ligatures:none}
+.code-block code{background:none;border:0;padding:0;font-size:inherit;white-space:pre;overflow-wrap:normal;word-break:normal}
+.code-block.clipped pre{max-height:calc(16 * 1.6em + 20px);overflow-y:hidden;-webkit-mask-image:linear-gradient(#000 70%,#0000);mask-image:linear-gradient(#000 70%,#0000)}
+.code-more{display:flex;width:100%;align-items:center;justify-content:center;min-height:44px;font-size:12.5px;color:var(--accent);border-top:1px solid var(--line);border-radius:0}
+.code-block .d-add{color:#0b6b52;background:#10816514;display:inline-block;min-width:100%}
+.code-block .d-del{color:#a61d1d;background:#c923230f;display:inline-block;min-width:100%}
+.code-block .d-hunk{color:var(--muted)}
+
+/* Long messages fold to roughly a screen; the button sits under the fade. */
+.md-fold:not(.open):not(.short)>.md{max-height:520px;overflow:hidden;-webkit-mask-image:linear-gradient(#000 calc(100% - 96px),#0000);mask-image:linear-gradient(#000 calc(100% - 96px),#0000)}
+.md-more{display:flex;align-items:center;justify-content:center;gap:4px;width:100%;margin-top:2px;min-height:44px;font-size:13.5px;font-weight:600;color:var(--accent);border-radius:var(--radius-control)}
+.md-more svg{width:16px;height:16px;transition:transform .2s var(--ease)}
+.md-more-size{font-weight:400;color:var(--muted);font-size:12.5px}
+.md-fold.open>.md-more svg{transform:rotate(180deg)}
+.md-fold.open>.md-more{color:var(--muted);font-weight:500}
+.md-fold.short>.md-more{display:none}
+.md-fold.measuring>.md-more{visibility:hidden}
+@media (prefers-reduced-motion:reduce){.table-box::before,.table-box::after,.md-more svg{transition:none}}

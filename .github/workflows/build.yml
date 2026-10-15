@@ -32,6 +32,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: node scripts/test_markdown.cjs
       - name: Offline responsive chat checks
         run: |
           export CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable)"

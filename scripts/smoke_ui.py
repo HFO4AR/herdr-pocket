@@ -109,6 +109,7 @@ def main():
     expect('个 Agent 在线');screenshot('agents')
     tap('把移动端做成真正的聊天工具')
     expect('历史记录、子 Agent 和执行的命令都要能看到。')
+    expect('工作过程');expect('测试都通过了')
     screenshot('agent')
     run('shell','input','swipe','540','700','540','1900','300')
     tap('加载更早消息')

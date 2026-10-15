@@ -40,6 +40,25 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(values[-2]["call_id"], values[-1]["call_id"])
         self.assertNotIn("private thoughts", json.dumps(values))
 
+    def test_codex_phase_marks_progress_and_final_reply(self):
+        rows = [codex("user", "改一下"), codex("assistant", "我先看一下代码。", phase="commentary"),
+                codex("assistant", "改好了。", phase="final_answer"), codex("assistant", "旧版没有 phase")]
+        values = sum([bridge.normalize_record(r, "codex", i) for i, r in enumerate(rows)], [])
+        self.assertEqual([v.get("phase") for v in values], [None, "commentary", "final_answer", None])
+        self.assertNotIn("phase", values[0])
+        cited = bridge.normalize_record(codex("assistant", "已发布。\n\n<oai-mem-citation>\n<rollout_ids>x</rollout_ids>\n</oai-mem-citation>", phase="final_answer"), "codex", 9)[0]
+        self.assertEqual(cited["text"], "已发布。")
+
+    def test_codex_agent_message_shows_only_visible_payload(self):
+        def message(text):
+            return {"type": "response_item", "payload": {"type": "agent_message", "author": "/root/fix", "recipient": "/root",
+                    "content": [{"type": "input_text", "text": text}, {"type": "encrypted_content", "encrypted_content": "gAAAA-secret"}]}}
+        final = bridge.normalize_record(message("Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/fix\nPayload:\n修复完成。"), "codex", 0)[0]
+        self.assertEqual((final["kind"], final["title"], final["text"], final["phase"]), ("agent", "/root/fix", "修复完成。", "final_answer"))
+        hidden = bridge.normalize_record(message("Message Type: MESSAGE\nSender: /root/fix\nPayload:\n"), "codex", 1)[0]
+        self.assertEqual(hidden["text"], "（内容只对 Agent 可见）")
+        self.assertNotIn("gAAAA", json.dumps(hidden))
+
     def test_claude_tools_and_results(self):
         row = {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "private"}, {"type": "text", "text": "Testing"}, {"type": "tool_use", "name": "Bash", "id": "b", "input": {"command": "npm test"}}]}}
         values = bridge.normalize_record(row,"claude",0)

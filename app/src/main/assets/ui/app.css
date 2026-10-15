@@ -85,6 +85,15 @@ small,.muted{color:var(--muted);font-size:12px;line-height:1.5}
 .badge.work{background:var(--warn-soft);color:var(--warn)}
 .badge.alert{background:var(--danger-soft);color:var(--danger)}
 .agent-row.tone-alert{background:#fffafa}
+.row-side{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0;min-width:44px;font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+.row-time{white-space:nowrap}
+.row-state{font-size:11px;color:var(--success);font-weight:600}
+.unread-dot{width:9px;height:9px;border-radius:50%;background:var(--accent-raw);flex-shrink:0}
+.agent-row.unread .card-title{color:var(--ink);font-weight:700}
+.agent-row.unread .row-time{color:var(--accent);font-weight:600}
+.agent-pick.current{background:var(--sunken)}
+.agent-pick .unread-dot{margin-right:-4px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .empty{text-align:center;padding:40px 20px;color:var(--muted);font-size:14px}
 .empty.small{padding:24px 12px;font-size:13px}
 .empty-icon{margin:0 auto 14px;width:52px;height:52px;border-radius:16px;background:var(--soft);color:var(--accent);display:grid;place-items:center}
@@ -188,17 +197,10 @@ label{display:block;font-size:12px;font-weight:600;margin:14px 0 6px;color:var(-
  .nav-badge{position:static}
  .sheet-backdrop{align-items:center}
  .sheet{border-radius:var(--radius-sheet);max-height:86%}
- .chat-body{padding:20px 28px}
  .message.user{max-width:72%}
 }
 @media(max-height:500px){
  .topbar{height:46px;min-height:46px}
- .chat-head{min-height:46px;padding-top:2px;padding-bottom:2px}
- .chat-tabs{margin-top:4px}.chat-tabs button{min-height:30px}
- .composer-wrap{padding:5px 12px}
- .activity{margin-bottom:5px;padding:3px 6px 3px 10px}
- .confirm-screen{max-height:70px}
- .chat-body{padding:8px 12px}
  .nav-item{min-height:40px;flex-direction:row;gap:6px}
  .terminal-keys{padding:2px 6px}.terminal-keys button{min-height:34px}
  .terminal-input-options .check{margin:0}

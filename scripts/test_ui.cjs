@@ -68,8 +68,30 @@ console.log('PASS: persistent SSH stages, duplicate connect disabled, loading ve
 await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
 await page.getByRole('button',{name:/把移动端做成真正的聊天工具/}).click();
 await page.getByText('历史记录、子 Agent 和执行的命令都要能看到。',{exact:true}).waitFor();
+// Turns: progress notes and commands fold into 「工作过程」, the final reply stays visible.
+assert.equal(await page.locator('.turn').count(),2);
+assert.equal(await page.locator('.message.reply').count(),2);
+await page.getByText('测试都通过了。',{exact:false}).waitFor();
+assert.equal(await page.getByText('我先看一下历史读取和子 Agent 关联现在是怎么做的。',{exact:true}).count(),0,'progress notes start folded');
+assert.match(await page.locator('details.work .work-stats').first().textContent(),/2 条进展 · 5 个操作/);
+assert.match(await page.locator('details.work').nth(1).textContent(),/1 个失败/);
+await page.locator('details.work summary').first().click();
+await page.getByText('我先看一下历史读取和子 Agent 关联现在是怎么做的。',{exact:true}).waitFor();
+await page.getByText('layout_check 完成',{exact:true}).waitFor();
+assert(await page.getByRole('button',{name:'展开全文 · 14 行',exact:true}).isVisible(),'long prompt is clamped');
 await page.getByRole('button',{name:'加载更早消息',exact:true}).click();
 await page.getByText('先把连接设备和密码保存做好。',{exact:true}).waitFor();
+await page.getByText('改好了：连接资料和密码会用本机密钥加密保存，卸载应用后一起清除。',{exact:true}).waitFor();
+assert.equal(await page.locator('.turn').count(),3);
+assert.equal(await page.locator('details.work[open]').count(),1,'open work block survives loading earlier pages');
+// Turn inference for transcripts without phases, harness notices and a page that starts mid-turn.
+assert.deepEqual(await page.evaluate(()=>{const m=(id,kind,text,extra={})=>({id:id+':0',kind,text,title:kind==='tool'?'Bash':'',call_id:extra.c||'',timestamp:new Date(1e12+id*1000).toISOString(),...extra});
+ const msgs=[m(1,'tool','ls',{c:'a'}),m(2,'result','x',{c:'a'}),m(3,'assistant','前一轮的回复'),m(4,'user','真正的问题'),m(5,'assistant','我先看看'),m(6,'tool','pytest',{c:'b'}),
+  m(7,'user','<task-notification>\n<status>failed</status>\n<summary>构建失败</summary>\n</task-notification>'),m(8,'result','Exit code 1',{c:'b'}),m(9,'assistant','修好了'),
+  m(10,'user','<task-notification>\n<summary>后台完成</summary>\n</task-notification>'),m(11,'assistant','后台任务也好了'),m(12,'user','继续'),m(13,'assistant','正在跑'),m(14,'tool','npm test',{c:'c'})];
+ const done=buildTurns(msgs,false),live=buildTurns(msgs,true);
+ return [done.map(t=>[!!t.partial,t.prompt?.text||t.notice?.n.label||'',t.final?.m.text||'',t.stats.notes,t.stats.ops,t.stats.failed]),live.at(-1).final,userNotice('[Request interrupted by user for tool use]').label];}),
+ [[[true,'','前一轮的回复',0,1,0],[false,'真正的问题','修好了',1,1,1],[false,'后台任务','后台任务也好了',0,0,0],[false,'继续','',1,1,0]],null,'已中断']);
 const folder=path.join(root,'ui-artifacts');fs.mkdirSync(folder,{recursive:true});
 await page.screenshot({path:path.join(folder,'chat-browser.png')});
 await page.getByRole('button',{name:'命令',exact:true}).click();
@@ -90,6 +112,12 @@ assert.equal(await page.getByRole('textbox',{name:'消息输入框',exact:true})
 await page.getByRole('button',{name:'切换 Agent',exact:true}).click();
 await page.getByRole('button',{name:/检查接口与回归测试/}).click();
 await page.getByText('这是 Claude 的独立会话。',{exact:true}).waitFor();
+// A running turn has no reply yet: its newest progress is shown live and the work block says so.
+await page.getByText('Claude · 最新进展',{exact:true}).waitFor();
+await page.getByText('正在工作',{exact:true}).waitFor();
+await page.locator('details.work summary').last().click();
+await page.getByText('后台构建已完成',{exact:true}).waitFor();
+console.log('PASS: turns fold progress and commands, keep replies prominent, survive pagination, live progress and harness notices');
 assert.equal(await page.getByText('子 Agent：布局检查完成。',{exact:true}).count(),0);
 for(const [width,height] of [[320,640],[844,390],[1024,768]]){
  await page.setViewportSize({width,height});
