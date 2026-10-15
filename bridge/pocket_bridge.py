@@ -223,8 +223,8 @@ def normalize_record(row, provider, offset):
     def add(kind, text, title="", call_id=""):
         if not text: return
         result.append({"id": str(offset) + ":" + str(len(result)), "kind": kind,
-                       "text": text[:16000], "title": title, "call_id": call_id,
-                       "timestamp": timestamp, "truncated": len(text) > 16000})
+                       "text": text.encode("utf-8")[:16000].decode("utf-8", errors="ignore"), "title": title, "call_id": call_id,
+                       "timestamp": timestamp, "truncated": len(text.encode("utf-8")) > 16000})
     if provider == "codex":
         if row.get("type") != "response_item": return []
         value = row.get("payload", {}); kind = value.get("type")
