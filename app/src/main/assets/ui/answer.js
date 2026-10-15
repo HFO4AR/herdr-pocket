@@ -170,5 +170,5 @@ async function qaSendAsync(m,p,st,model){
  const text=qaAsyncReply(p,answers);st.busy=true;st.error='';paintTimeline();
  try{await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text,id:uuid()});
   if(S.demo)toast('演示：没有真的发送');else{st.sent=Date.now();toast('已回答');S.chat.sentAt=Date.now();S.chat.doneAt=0;S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();setTimeout(()=>fetchHistory(),900);}}
- catch(e){st.error='发送未确认：'+e.message+'。不会自动重发。';toast(st.error);}
+ catch(e){st.error=/^没发出去/.test(e.message)?e.message+'。可以再选一次。':'发送未确认：'+e.message+'。不会自动重发。';toast(st.error);}
  finally{st.busy=false;S.stick=true;paintTimeline();}}

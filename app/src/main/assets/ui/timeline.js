@@ -204,6 +204,6 @@ function renderTimeline(){
  if(commandsOnly){const items=buildItems(S.messages,true);count=items.length;for(const it of items){dayMark(it.entry.timestamp);list.append(toolRow(it.entry,true));}}
  else{// A just-sent prompt means the newest transcript turn is already finished.
   const live=tlWorking()&&!S.outbox.some(o=>o.key===draftKey()&&o.state!=='failed');const turns=buildTurns(S.messages,live);count=turns.length;for(const turn of turns){dayMark(turn.start);list.append(turnView(turn,who,open));}}
- for(const o of S.outbox.filter(o=>o.key===draftKey())){const row=el('article','message user pending'+(o.state==='failed'?' failed':''));const meta=el('div','message-label');meta.append(el('span','',o.state==='failed'?'发送未确认':o.state==='sending'?'发送中…':'已送达 Agent'));const b=el('div','bubble');b.append(userText(o.text));row.append(meta,b);list.append(row);}
+ for(const o of S.outbox.filter(o=>o.key===draftKey())){const row=el('article','message user pending'+(o.state==='failed'||o.state==='rejected'?' failed':''));const meta=el('div','message-label');meta.append(el('span','',o.state==='rejected'?'没发出去':o.state==='failed'?'发送未确认':o.state==='sending'?'发送中…':'已送达 Agent'));const b=el('div','bubble');b.append(userText(o.text));row.append(meta,b);list.append(row);}
  if(!count&&!S.chat.historyError)list.append(el('div','empty small',S.chat.historyLoading?'正在读取对话记录…':commandsOnly?'这段记录里还没有执行过命令。':S.more?'这一页没有可显示的消息，继续加载更早记录。':'这条记录暂无可显示的消息。'));}
 function tail(text,n){return text.replace(/\s+$/,'').split('\n').slice(-n).join('\n');}

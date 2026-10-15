@@ -1,3 +1,4 @@
+import json
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -40,6 +41,25 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn("history_ref", result["agents"][0])
         # Only the Herdr list call: no process walk or transcript scan.
         self.assertFalse(any("process-info" in c for c in self.commands))
+
+    def test_herdr_rejection_is_reported_as_not_sent(self):
+        def call(args):
+            self.commands.append(args)
+            if args == ["session", "list", "--json"]: return {"sessions": [{"name": "default", "running": True}]}
+            if args[-2:] == ["agent", "list"]: return {"agents": [self.agent]}
+            raise bridge.HerdrRejected("agent_blocked", "agent is waiting at a dialog")
+        self.mock.stop(); patcher = patch.object(bridge, "call", side_effect=call); patcher.start(); self.addCleanup(patcher.stop)
+        req = self.request()
+        with self.assertRaisesRegex(bridge.BridgeError, "没发出去"):
+            bridge.handle(req, self.state)
+        import sqlite3
+        row = sqlite3.connect(self.state / "receipts.sqlite").execute("SELECT result FROM receipts").fetchone()
+        self.assertEqual(json.loads(row[0]), {"sent": False, "rejected": "agent_blocked"})
+
+    def test_herdr_json_error_is_parsed(self):
+        exc = bridge.herdr_error('{"error":{"code":"agent_not_found","message":"agent target w1:p9 not found"},"id":"x"}')
+        self.assertEqual((exc.code, exc.detail), ("agent_not_found", "agent target w1:p9 not found"))
+        self.assertIsNone(bridge.herdr_error("plain text"))
 
     def test_sessions_only_exposes_public_fields(self):
         self.assertEqual(bridge.handle({"v": 1, "op": "sessions"}),

@@ -23,6 +23,30 @@ class BridgeError(Exception):
     pass
 
 
+class HerdrRejected(BridgeError):
+    """Herdr answered with a structured error code instead of performing the request."""
+    def __init__(self, code, message):
+        super().__init__((code + ": " + message)[:2000])
+        self.code, self.detail = code, message
+
+
+# Herdr checks these before writing anything to the pane, so the input was not sent.
+NOT_SENT = {
+    "agent_blocked": "没发出去：Agent 正停在一个提问或授权框上，先处理它（看不清就点“用按键操作”看屏幕）",
+    "agent_not_found": "没发出去：这个窗格里找不到这个 Agent 了，回到列表刷新一下",
+    "agent_not_ready": "没发出去：Agent 还没准备好，等它空闲了再发",
+    "pane_not_found": "没发出去：这个窗格已经不在了，回到列表刷新一下",
+}
+
+
+def herdr_error(raw):
+    try: value = json.loads(raw).get("error")
+    except (ValueError, AttributeError): return None
+    if isinstance(value, dict) and isinstance(value.get("code"), str):
+        return HerdrRejected(value["code"], str(value.get("message", "")))
+    return None
+
+
 def call(args):
     binary = shutil.which("herdr") or str(Path.home() / ".local/bin/herdr")
     env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
@@ -34,7 +58,7 @@ def call(args):
     except OSError as exc:
         raise BridgeError("Herdr executable unavailable. Install Herdr for this SSH user.") from exc
     if result.returncode:
-        raise BridgeError((result.stderr or result.stdout or "Herdr command failed")[:2000])
+        raise herdr_error(result.stdout) or herdr_error(result.stderr) or BridgeError((result.stderr or result.stdout or "Herdr command failed")[:2000])
     # Herdr 0.8.x agent read emits plain text, while list/control emit JSON.
     command_args = args[2:] if args[:1] == ["--session"] else args
     if command_args[:2] in (["agent", "read"], ["pane", "read"]):
@@ -44,7 +68,7 @@ def call(args):
     except ValueError as exc:
         raise BridgeError("Herdr returned non-JSON output; check CLI compatibility.") from exc
     if data.get("error"):
-        raise BridgeError(str(data["error"])[:2000])
+        raise herdr_error(result.stdout) or BridgeError(str(data["error"])[:2000])
     return data.get("result", data)
 
 
@@ -147,7 +171,14 @@ def mutate(request, prefix, agent, state_dir):
         # 在写入终端之前持久化请求；中断后相同 ID 也不能再次执行。
         db.execute("INSERT INTO receipts VALUES (?, ?, NULL)", (req_id, digest))
         db.commit()
-        value = answer_question(request, prefix, agent) if op == "answer" else call(prefix + args)
+        try:
+            value = answer_question(request, prefix, agent) if op == "answer" else call(prefix + args)
+        except HerdrRejected as exc:
+            if exc.code not in NOT_SENT: raise
+            # Rejected before any input reached the pane: record why, and say it can be resent.
+            db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps({"sent": False, "rejected": exc.code}), req_id))
+            db.commit()
+            raise BridgeError(NOT_SENT[exc.code]) from exc
         result = {"sent": True, "receipt": req_id, "result": value}
         db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
         db.commit()

@@ -315,7 +315,7 @@ async function sendMessage(input){
   item.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
   if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
   S.stick=true;paintTimeline();if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);}
- catch(e){item.state='failed';paintTimeline();toast('发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
+ catch(e){const notSent=/^没发出去/.test(e.message);item.state=notSent?'rejected':'failed';item.reason=e.message;paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
  finally{button.disabled=!input.value.trim();}}
 function scrollBottom(){const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
 // A pending bubble disappears once the transcript shows the same user text.
