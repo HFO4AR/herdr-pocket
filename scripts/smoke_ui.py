@@ -512,9 +512,12 @@ if __name__=='__main__':
         # screen reader is an emulator/tooling problem, not an app failure: keep the evidence, warn,
         # and do not block the release on it. Real assertion failures still fail the run.
         try: real_ssh(constants)
-        except subprocess.TimeoutExpired as exc:
-            save_failure()
-            print('WARN: real SSH UI walk skipped: uiautomator could not read the screen (%s); see ui-artifacts/failure-*'%exc,flush=True)
+        except (subprocess.SubprocessError, ET.ParseError, OSError) as exc:
+            # Seen on CI: the emulator itself disappeared mid-walk ("device not found"), or its screen
+            # reader hung. Device/tooling trouble, not an app assertion: warn and keep the evidence.
+            try: save_failure()
+            except Exception: pass
+            print('WARN: real SSH UI walk did not finish (device/tooling: %s); see ui-artifacts/failure-*'%exc,flush=True)
     except Exception:
         save_failure()
         raise
