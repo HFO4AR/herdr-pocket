@@ -1,0 +1,38 @@
+/* Pictures: composer tray, thumbnails in the timeline, full-screen viewer. Tokens from app.css. */
+.composer{flex-wrap:wrap;padding-left:4px}
+.composer .attach{width:40px;min-width:40px;min-height:40px;border-radius:50%;color:var(--muted)}
+.composer .attach svg{width:21px;height:21px}
+/* The attach button leaves less room: keep a long placeholder on one line. */
+.composer textarea::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.att-tray{flex:0 0 100%;display:flex;align-items:center;gap:8px;padding:6px 6px 4px;overflow-x:auto;scrollbar-width:none}
+.att{position:relative;flex-shrink:0;width:64px;height:64px;border-radius:var(--radius-control);overflow:hidden;background:var(--sunken);box-shadow:inset 0 0 0 1px #0000000f}
+.att img{display:block;width:100%;height:100%;object-fit:cover}
+/* 44px hit area; the visible dot sits in the corner. */
+.att-x{position:absolute;top:0;right:0;width:44px;min-width:44px;min-height:44px;padding:4px;display:grid;place-items:start end;border-radius:0}
+.att-x svg{width:12px;height:12px;padding:4px;box-sizing:content-box;border-radius:50%;background:#000000a6;color:#fff;stroke-width:2.6}
+.att-x:active{background:none}
+.att-note{flex-shrink:0;font-size:12px;color:var(--muted);white-space:nowrap;padding-left:2px}
+.img-strip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;width:min(236px,100%);margin-top:6px}
+.img-strip.one{grid-template-columns:minmax(0,1fr);width:min(200px,100%)}
+.message.user>.img-strip:nth-child(2){margin-top:0}
+.img-tile{position:relative;display:grid;place-items:center;min-height:0;padding:0;aspect-ratio:1;border-radius:var(--radius-control);overflow:hidden;background:var(--sunken);box-shadow:inset 0 0 0 1px #0000000f}
+.img-tile img{display:block;width:100%;height:100%;object-fit:cover}
+.img-strip.one .img-tile{aspect-ratio:auto;min-height:44px}
+.img-strip.one .img-tile img{height:auto;max-height:240px}
+.img-strip.one .img-tile.loading,.img-strip.one .img-tile.broken{aspect-ratio:4/3}
+.img-tile.loading{background:linear-gradient(100deg,var(--sunken) 40%,#ecebe6 50%,var(--sunken) 60%) 0 0/300% 100%;animation:img-shimmer 1.3s linear infinite}
+.img-tile.broken{gap:4px;align-content:center;color:var(--faint);font-size:11.5px;line-height:1.3;padding:6px;text-align:center}
+.img-tile.broken svg{width:20px;height:20px}
+.message.pending .img-tile{opacity:.75}
+.message.failed .img-tile{box-shadow:inset 0 0 0 1.5px var(--danger)}
+@keyframes img-shimmer{to{background-position:-300% 0}}
+.reduce-motion .img-tile.loading{animation:none}
+@media(prefers-reduced-motion:reduce){.img-tile.loading{animation:none}}
+.img-viewer{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;background:#0b0b0c;color:#fff;animation:fade .18s}
+.img-bar{display:flex;align-items:center;gap:4px;padding:4px 6px 4px 16px;min-height:52px}
+.img-bar .icon-btn{color:#fff}
+.img-bar .icon-btn:active{background:#ffffff1f}
+.img-count{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.img-status{font-size:12px;color:#ffffffb3;white-space:nowrap}
+.img-stage{flex:1;min-height:0;display:grid;place-items:center;padding:0 12px calc(16px + env(safe-area-inset-bottom))}
+.img-stage img{max-width:100%;max-height:100%;object-fit:contain;border-radius:4px}

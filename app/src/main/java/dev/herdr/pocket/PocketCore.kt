@@ -156,6 +156,20 @@ object PocketCore {
         }
     }
 
+    /** Uploading is idempotent (content-addressed), so a broken session is replaced and it is retried once. */
+    fun upload(picture: Prepared, day: String): JSONObject {
+        ensureConnected()
+        val started = transport.generation
+        return try {
+            transport.upload(picture, day)
+        } catch (e: Exception) {
+            val gen = (e as? NotSent)?.generation ?: started
+            if (e !is NotSent && transport.isConnected()) throw e
+            synchronized(lock) { if (transport.generation == gen) reconnect() }
+            transport.upload(picture, day)
+        }
+    }
+
     fun terminal(op: String, req: JSONObject): JSONObject {
         ensureConnected()
         return transport.terminal(op, req)

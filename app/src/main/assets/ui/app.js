@@ -3,7 +3,7 @@
 // terminals.js shares the helpers and state declared here (S, el, btn, ib, sheet, remote…).
 
 // ─── Icons & DOM helpers ────────────────────────────────────────────────────
-const paths={chat:'M4 4h16v12H8l-4 4V4z',history:'M3 12a9 9 0 1 0 3-6M3 3v6h6M12 7v5l3 2',device:'M4 4h16v12H4zM8 20h8M12 16v4',account:'M20 21v-2a7 7 0 0 0-14 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',plus:'M12 5v14M5 12h14',back:'M15 5l-7 7 7 7',close:'M6 6l12 12M18 6L6 18',search:'M21 21l-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16',chevron:'M9 5l7 7-7 7',down:'M6 9l6 6 6-6',send:'M12 19V5M5 12l7-7 7 7',more:'M5 12h.01M12 12h.01M19 12h.01',terminal:'M4 6l6 6-6 6M12 18h8',branch:'M6 3v12a4 4 0 0 0 8 0V9M10 9l4-4 4 4',refresh:'M20 7a8 8 0 1 0 1 7M20 3v5h-5',lock:'M5 10h14v11H5zM8 10V6a4 4 0 0 1 8 0v4',check:'M4 12l5 5L20 6',edit:'M16 3l5 5-12 12H4v-5z',folder:'M3 6h7l2 2h9v12H3z',pause:'M8 5v14M16 5v14',file:'M6 2h8l5 5v15H6zM14 2v5h5',pen:'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',globe:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18',tool:'M14 7a4 4 0 0 0 5 5l-8 8-4-4 8-8z',x:'M7 7l10 10M17 7L7 17',copy:'M9 9h11v11H9zM5 15V4h11',alert:'M12 3l10 18H2zM12 10v5M12 18h.01',stop:'M6 6h12v12H6z',plug:'M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4'};
+const paths={chat:'M4 4h16v12H8l-4 4V4z',history:'M3 12a9 9 0 1 0 3-6M3 3v6h6M12 7v5l3 2',device:'M4 4h16v12H4zM8 20h8M12 16v4',account:'M20 21v-2a7 7 0 0 0-14 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',plus:'M12 5v14M5 12h14',back:'M15 5l-7 7 7 7',close:'M6 6l12 12M18 6L6 18',search:'M21 21l-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16',chevron:'M9 5l7 7-7 7',down:'M6 9l6 6 6-6',send:'M12 19V5M5 12l7-7 7 7',more:'M5 12h.01M12 12h.01M19 12h.01',terminal:'M4 6l6 6-6 6M12 18h8',branch:'M6 3v12a4 4 0 0 0 8 0V9M10 9l4-4 4 4',refresh:'M20 7a8 8 0 1 0 1 7M20 3v5h-5',lock:'M5 10h14v11H5zM8 10V6a4 4 0 0 1 8 0v4',check:'M4 12l5 5L20 6',edit:'M16 3l5 5-12 12H4v-5z',folder:'M3 6h7l2 2h9v12H3z',pause:'M8 5v14M16 5v14',file:'M6 2h8l5 5v15H6zM14 2v5h5',pen:'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',globe:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18',tool:'M14 7a4 4 0 0 0 5 5l-8 8-4-4 8-8z',x:'M7 7l10 10M17 7L7 17',copy:'M9 9h11v11H9zM5 15V4h11',alert:'M12 3l10 18H2zM12 10v5M12 18h.01',stop:'M6 6h12v12H6z',plug:'M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4',image:'M4 5h16v14H4zM4 16l5-5 4 4 2-2 5 5M15.5 9.5h.01',camera:'M3 8h4l2-3h6l2 3h4v11H3zM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7'};
 function icon(name){const n=document.createElementNS('http://www.w3.org/2000/svg','svg');n.setAttribute('viewBox','0 0 24 24');n.setAttribute('aria-hidden','true');const p=document.createElementNS(n.namespaceURI,'path');p.setAttribute('d',paths[name]||paths.chat);n.append(p);return n;}
 function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;}
 function btn(text,cls,fn,name){const n=el('button',cls);n.type='button';if(name)n.append(icon(name));if(text)n.append(document.createTextNode(text));n.onclick=fn;return n;}
@@ -231,9 +231,9 @@ async function fetchHistory(older=false,initial=false){
   else{const map=new Map(S.messages.map(x=>[x.id,x]));r.messages.forEach(m=>map.set(m.id,m));S.messages=[...map.values()].sort((a,b)=>Number(a.id.split(':')[0])-Number(b.id.split(':')[0])||Number(a.id.split(':')[1])-Number(b.id.split(':')[1]));}
   S.children=r.children||[];if(initial||older){S.before=r.before;S.more=r.has_more;}
   S.historyNote=r.bounded?'本页到了读取窗口边界，可以继续加载更早记录。':'';
-  settleOutbox();
+  const settled=settleOutbox();
   const now=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
-  if(prior!==now||initial||older||hadError){
+  if(prior!==now||initial||older||hadError||settled){
    const n=document.getElementById('chat-scroll');
    if(older&&n){const h=n.scrollHeight,top=n.scrollTop;renderTimeline();n.scrollTop=top+n.scrollHeight-h;}
    else{if(initial)S.stick=true;else if(!S.stick)S.unseen+=S.messages.filter(m=>!known.has(m.id)&&(m.kind==='user'||m.kind==='assistant')).length;paintTimeline();}}
@@ -286,15 +286,16 @@ function renderComposer(){
  const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status;
  input.placeholder=st==='working'?'执行中，可以先写好，停下后再发':st==='blocked'?'先处理上面的确认':'说点什么，继续这段对话…';
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
- send.classList.toggle('later',st==='working'||st==='blocked');send.disabled=!input.value.trim();}
+ send.classList.toggle('later',st==='working'||st==='blocked');imgTray(compose,key);send.disabled=!input.value.trim()&&!imgAttached(key).length;}
 function buildComposer(key){
  const compose=el('div','composer');compose.dataset.key=key;const input=el('textarea');input.rows=1;input.setAttribute('aria-label','消息输入框');input.setAttribute('enterkeyhint','enter');input.value=S.drafts.get(key)||'';
  const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');
  const grow=()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,innerHeight<560?96:140)+'px';};compose.grow=grow;
  // Enter is a newline on phones; Ctrl/⌘+Enter sends with a hardware keyboard.
  input.onkeydown=e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMessage(input);}};
- input.oninput=()=>{if(input.value)S.drafts.set(key,input.value);else S.drafts.delete(key);send.disabled=!input.value.trim();grow();};
- compose.append(input,send);requestAnimationFrame(grow);return compose;}
+ input.oninput=()=>{if(input.value)S.drafts.set(key,input.value);else S.drafts.delete(key);send.disabled=!input.value.trim()&&!imgAttached(key).length;grow();};
+ const attach=ib('image','添加图片',imgMenu);attach.classList.add('attach');
+ compose.append(attach,input,send);requestAnimationFrame(grow);return compose;}
 function renderLiveState(live,a){
  live.replaceChildren();const st=a.agent_status;
  if(st==='blocked'){if(qaLive(live,a))return;const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow','等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
@@ -304,22 +305,26 @@ function renderLiveState(live,a){
  else if(S.chat.doneAt&&Date.now()-S.chat.doneAt<8000){const strip=el('div','activity done');strip.setAttribute('role','status');strip.append(icon('check'));const t=el('strong','grow','做完了'+(S.chat.took>=5000?' · 用时 '+dur(S.chat.took):''));strip.append(t);if(!S.stick)strip.append(btn('看结果','link-btn',()=>{S.stick=true;S.unseen=0;scrollBottom();updateJump();}));live.append(strip);}}
 async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'已发送 '+label);setTimeout(()=>{refreshStatus();fetchTerminal(true);},700);}catch(e){toast('按键未确认：'+e.message+'。不会自动重发。');}}
 async function sendMessage(input){
- const text=input.value;const a=S.chat?.agent;if(!text.trim()||!a)return;
+ const text=input.value;const a=S.chat?.agent;const key=draftKey();const pics=imgAttached(key).slice();if((!text.trim()&&!pics.length)||!a)return;
  if(followHoldsSend())return;
  if(['working','blocked'].includes(a.agent_status)&&!S.demo){toast(a.agent_status==='working'?'还在执行，等它停下再发（草稿已保留）':'它在等你确认，先处理上面的提示');return;}
- const epoch=S.epoch,key=draftKey();const button=document.querySelector('.send');button.disabled=true;
- const item={key,text,at:Date.now(),state:'sending'};
+ const epoch=S.epoch;const button=document.querySelector('.send');button.disabled=true;
+ const item={key,text,images:pics.map(p=>({url:p.thumb})),at:Date.now(),state:'sending'};
  if(!S.demo){S.outbox.push(item);S.stick=true;paintTimeline();}
- try{await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text,id:uuid()});
+ try{
+  // Pictures go up first; only then is the one prompt sent (never resent automatically).
+  const images=pics.length?await imgUpload(pics,stage=>{item.stage=stage;paintTimeline();}):null;item.stage='';
+  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{})});
   if(S.demo){toast('演示模式：未发送，草稿已保留');return;}
   item.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
+  if(pics.length){imgSet(key,imgAttached(key).filter(p=>!pics.includes(p)));rpc('dropImages',{ids:pics.map(p=>p.id)}).catch(()=>{});}
   if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
   S.stick=true;paintTimeline();if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);}
- catch(e){const notSent=/^没发出去/.test(e.message);item.state=notSent?'rejected':'failed';item.reason=e.message;paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
- finally{button.disabled=!input.value.trim();}}
+ catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);item.state=notSent?'rejected':'failed';item.reason=e.message;paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
+ finally{button.disabled=!input.value.trim()&&!imgAttached(key).length;}}
 function scrollBottom(){const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
 // A pending bubble disappears once the transcript shows the same user text.
-function settleOutbox(){if(!S.outbox.length)return;const recent=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>m.text.trim());S.outbox=S.outbox.filter(o=>!(o.state==='sent'&&recent.includes(o.text.trim()))&&Date.now()-o.at<180000);}
+function settleOutbox(){if(!S.outbox.length)return false;const count=S.outbox.length;const recent=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>{const x=imgSplit(m);return x.text+'\u0000'+(x.specs.length?1:0);});S.outbox=S.outbox.filter(o=>!(o.state==='sent'&&recent.includes(o.text.trim()+'\u0000'+(o.images?.length?1:0)))&&Date.now()-o.at<180000);return S.outbox.length!==count;}
 // A finish only counts when Herdr itself reported working → stopped just now;
 // the optimistic "working" set after sending must not flash "做完了".
 function onAgentStatus(was,now){

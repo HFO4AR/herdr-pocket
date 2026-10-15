@@ -4,10 +4,14 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.ext.SdkExtensions
+import android.provider.MediaStore
 import android.provider.Settings
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
@@ -16,14 +20,22 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.Executors
 
 private const val UNATTENDED_PAUSE_MS = 60_000L
+private const val PICK_GALLERY = 41
+private const val PICK_CAMERA = 42
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/app.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/app.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -39,6 +51,10 @@ class MainActivity : Activity() {
     @Volatile private var watchStates = "{}"
     private var pausedAt = 0L
     private var watched = false
+    // One picker at a time: the request waiting for it, how many pictures it may add, the camera target.
+    private var pickId: String? = null
+    private var pickMax = 4
+    private var shot: File? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -193,6 +209,25 @@ class MainActivity : Activity() {
                             if (req.getBoolean("enabled")) runOnUiThread { core.settings.edit().putBoolean("askedNotifications", false).apply(); askNotificationPermission() }
                             success(id, JSONObject().put("alerts", core.alertsEnabled))
                         }
+                        "pickImages" -> runOnUiThread { pick(id, req.optString("source"), req.optInt("max", 4).coerceIn(1, 4)) }
+                        "dropImages" -> {
+                            val ids = req.optJSONArray("ids") ?: JSONArray()
+                            for (i in 0 until ids.length()) ImagePrep.drop(ids.optString(i))
+                            success(id, JSONObject())
+                        }
+                        "uploadImage" -> {
+                            val picture = ImagePrep.get(req.getString("id")) ?: error("这张图片已失效，删掉重新选一下")
+                            val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
+                            success(id, core.upload(picture, day))
+                        }
+                        "image" -> {
+                            // The bridge serves at most ~1.35 MB; the WebView only gets a small JPEG.
+                            val query = JSONObject().put("op", "image")
+                            for (k in listOf("kind", "name", "address", "record_id", "item", "block", "remote", "variant")) if (req.has(k)) query.put(k, req.get(k))
+                            val data = core.request(query)
+                            val bytes = android.util.Base64.decode(data.getString("data"), android.util.Base64.DEFAULT)
+                            success(id, ImagePrep.shrink(bytes, if (req.optString("variant") == "full") 1600 else 360))
+                        }
                         "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> success(id, core.terminal(op, req))
                         "remote" -> {
                             check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey")) { "不支持的操作" }
@@ -202,6 +237,51 @@ class MainActivity : Activity() {
                     }
                 } catch (e: Exception) { failure(id, e) }
             }
+        }
+    }
+
+    /** System photo picker (no storage permission) or the camera app writing into [CameraFiles]. */
+    private fun pick(id: String, source: String, max: Int) {
+        if (pickId != null) { failure(id, IllegalStateException("正在选图片，先把上一个选完")); return }
+        val intent = if (source == "camera") {
+            val (file, uri) = try { CameraFiles.newShot(this) } catch (e: Exception) { failure(id, e); return }
+            shot = file
+            Intent(MediaStore.ACTION_IMAGE_CAPTURE).putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .apply { clipData = ClipData.newRawUri("", uri) }
+        } else if (Build.VERSION.SDK_INT >= 33 || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 2)) {
+            Intent("android.provider.action.PICK_IMAGES").setType("image/*").apply { if (max > 1) putExtra("android.provider.extra.PICK_IMAGES_MAX", max) }
+        } else {
+            Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_ALLOW_MULTIPLE, max > 1)
+        }
+        try {
+            pickId = id; pickMax = max
+            startActivityForResult(intent, if (source == "camera") PICK_CAMERA else PICK_GALLERY)
+        } catch (e: ActivityNotFoundException) {
+            pickId = null; shot?.delete(); shot = null
+            failure(id, IllegalStateException(if (source == "camera") "手机上没找到相机应用" else "手机上没找到相册"))
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != PICK_GALLERY && requestCode != PICK_CAMERA) return
+        val id = pickId ?: return
+        pickId = null
+        val file = shot.takeIf { requestCode == PICK_CAMERA }; shot = null
+        val uris = when {
+            resultCode != RESULT_OK -> emptyList()
+            file != null -> if (file.length() > 0) listOf(android.net.Uri.fromFile(file)) else emptyList()
+            else -> data?.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data?.data)
+        }.take(pickMax)
+        executor.execute {
+            val images = JSONArray(); var failed = 0; var reason = ""
+            for (uri in uris) {
+                try { images.put(ImagePrep.describe(ImagePrep.prepare(contentResolver, uri))) }
+                catch (e: Throwable) { failed++; reason = if (e is OutOfMemoryError) "图片太大了" else e.message ?: "" }
+            }
+            file?.delete()
+            success(id, JSONObject().put("images", images).put("failed", failed).put("reason", reason))
         }
     }
 

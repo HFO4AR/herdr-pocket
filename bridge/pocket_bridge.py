@@ -143,8 +143,12 @@ def mutate(request, prefix, agent, state_dir):
         if op == "prompt":
             if agent.get("agent_status") not in ("idle", "done"):
                 raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
-            if not isinstance(text, str) or not text.strip() or len(text.encode()) > 16000 or "\x00" in text:
-                raise BridgeError("Prompt must contain 1–16000 UTF-8 bytes without NUL")
+            images = request.get("images")
+            if not isinstance(text, str) or (not text.strip() and not images) or len(text.encode()) > 15000 or "\x00" in text:
+                raise BridgeError("Prompt must contain 1–15000 UTF-8 bytes without NUL")
+            if images is not None:
+                # Checked and (for ch routes) shared before the receipt: a failure here sent nothing.
+                text = compose_prompt(text, prompt_images(images, request, prefix, agent))
             args = ["agent", "prompt", agent["pane_id"], text]
         elif op == "key":
             if key not in ("up", "down", "left", "right", "enter", "esc", "ctrl+c"):
@@ -180,6 +184,7 @@ def mutate(request, prefix, agent, state_dir):
             db.commit()
             raise BridgeError(NOT_SENT[exc.code]) from exc
         result = {"sent": True, "receipt": req_id, "result": value}
+        if op == "prompt" and request.get("images") is not None: result["text"] = text
         db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
         db.commit()
         return result
@@ -564,6 +569,7 @@ def remote_read(route, request, limit=None):
     code += "op = request['op']\n"
     code += "if op == 'resolve': result = {'routes': remote_resolve(request.get('items', []))}\n"
     code += "elif op == 'history': result = remote_history_page(request)\n"
+    code += "elif op == 'image':\n    try: result = remote_transcript_image(request)\n    except BridgeError as exc: result = {'image_error': str(exc)[:200]}\n"
     code += "elif op == 'catalog': result = {'records': [public_record(x) for x in scoped_records(request.get('provider','claude'), request['workspace'], 100)]}\n"
     code += "else: result = {'error': 'unknown remote op'}\n"
     code += "encoded = json.dumps(result, ensure_ascii=False)\nprint(encoded if len(encoded.encode()) <= 2_000_000 else '{\"error\":\"history response exceeds 2 MB\"}')\n"
@@ -820,11 +826,18 @@ def normalize_record(row, provider, offset):
         value = row.get("payload", {}); kind = value.get("type")
         if kind == "message" and value.get("role") in ("user", "assistant"):
             if value.get("channel") not in ("analysis", "summary"):
-                text = text_content(value.get("content", []))
+                content = value.get("content", [])
+                pictures = [i for i, b in enumerate(content) if embedded_image(b)] if isinstance(content, list) and value.get("role") == "user" else []
+                if pictures:
+                    # Codex wraps each pasted picture in <image name=…> … </image> text blocks.
+                    content = [b for i, b in enumerate(content) if i not in pictures and not (
+                        isinstance(b, dict) and re.fullmatch(r"\s*(<image\b[^>]*>|</image>)\s*", str(b.get("text", ""))))]
+                text = text_content(content)
                 # Codex appends machine-readable memory citations to replies; they are not for people.
                 if value.get("role") == "assistant": text = re.sub(r"\s*<oai-mem-citation>.*?</oai-mem-citation>\s*", "\n", text, flags=re.S).strip()
                 if value.get("role") != "user" or not text.startswith(("# AGENTS.md", "<environment_context>", "<INSTRUCTIONS>")):
                     add(value["role"], text, phase=value.get("phase") if isinstance(value.get("phase"), str) else "")
+                    if pictures: attach_images(result, "user", pictures, add)
         elif kind == "agent_message":
             # Inter-agent message (sub-Agent → parent). Only the visible header/payload is shown;
             # encrypted content stays hidden.
@@ -851,6 +864,7 @@ def normalize_record(row, provider, offset):
         if isinstance(content, str):
             if not content.startswith(("<local-command", "<command-name", "<system-reminder")): add(row["type"], content)
         elif isinstance(content, list):
+            pictures = [i for i, b in enumerate(content) if embedded_image(b)]
             for block in content:
                 if not isinstance(block, dict): continue
                 if block.get("type") == "text": add(row["type"], block.get("text", ""))
@@ -859,8 +873,19 @@ def normalize_record(row, provider, offset):
                     add("tool", text or json.dumps(args, ensure_ascii=False, indent=2), block.get("name", "工具调用"), block.get("id", ""))
                 elif block.get("type") == "tool_result":
                     add("result", text_content(block.get("content", "")), "执行失败" if block.get("is_error") else "执行结果", block.get("tool_use_id", ""))
-                elif block.get("type") == "image": add(row["type"], "[图片附件 · 请在电脑查看]")
+                elif block.get("type") == "image" and not embedded_image(block): add(row["type"], "[图片附件 · 请在电脑查看]")
+            if pictures: attach_images(result, row["type"], pictures, add)
     return result
+
+
+def attach_images(result, kind, blocks, add):
+    """Embedded pictures ride on the row's text message (or an empty one); the phone loads them lazily."""
+    images = [{"block": i} for i in blocks[:8]]
+    owner = next((x for x in reversed(result) if x["kind"] == kind), None)
+    if owner is None:
+        add(kind, " ")
+        owner = result[-1]; owner["text"] = ""
+    owner["images"] = images
 
 
 def history_page(request, catalog):
@@ -1245,6 +1270,209 @@ def answer_question(request, prefix, agent):
     return {"answered": True, "options": sorted(wanted), "steps": steps}
 
 
+# ─── Images ─────────────────────────────────────────────────────────────────
+# The phone uploads re-encoded pictures over SFTP to ~/.herdr-pocket/uploads/<day>/<sha256>.<ext>
+# (plus a small <sha256>.thumb.jpg). A prompt names them by that relative name only; the bridge
+# checks the hash and puts the absolute path into the prompt. For a pane that is a ch-cli route to
+# another computer the path would mean nothing there, so the file is handed to `ch share-image`
+# (it only caches it locally and prints a ch-file:// address the remote agent can fetch).
+# The phone only ever reads back files under those two folders, or pictures embedded in a transcript.
+UPLOAD_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})/([a-f0-9]{64})\.(jpg|png)")
+CH_ADDRESS = re.compile(r"ch-file://([a-f0-9]{64})\.(png|jpg|jpeg|gif|webp)")
+IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
+UPLOAD_LIMIT = 8_000_000
+# Largest picture sent back in one response: base64 of it must stay under the app's 2 MB cap.
+SERVE_LIMIT = 1_350_000
+THUMB_EDGE = 480
+UPLOAD_KEEP_DAYS = 14
+
+
+def uploads_root():
+    return Path.home() / ".herdr-pocket/uploads"
+
+
+def owned_file(path, root, limit):
+    """A regular file of this user directly inside an un-symlinked root; never follows links."""
+    try:
+        if root.is_symlink() or path.is_symlink() or path.parent.is_symlink(): return None
+        if not path.resolve().is_relative_to(root.resolve()): return None
+        info = path.lstat()
+    except OSError: return None
+    if not stat_module.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > limit: return None
+    return path
+
+
+def upload_path(name):
+    match = UPLOAD_NAME.fullmatch(name) if isinstance(name, str) else None
+    if not match: raise BridgeError("Invalid image name")
+    return owned_file(uploads_root() / name, uploads_root(), UPLOAD_LIMIT), match
+
+
+def prompt_images(images, request, prefix, agent):
+    if not isinstance(images, list) or not 1 <= len(images) <= 4:
+        raise BridgeError("一条消息最多带 4 张图片")
+    try: prune_uploads()
+    except OSError: pass
+    files = []
+    for item in images:
+        if not isinstance(item, dict): raise BridgeError("Invalid image")
+        path, match = upload_path(item.get("name"))
+        if not path: raise BridgeError("没发出去：图片还没传到电脑上，删掉重新选一下")
+        if item.get("sha256") != match.group(2) or hashlib.sha256(path.read_bytes()).hexdigest() != match.group(2):
+            raise BridgeError("没发出去：电脑上的图片和手机上的不一致，删掉重新选一下")
+        files.append((path, match.group(2)))
+    probe = probe_pane(agent, prefix, agent.get("agent") or "")
+    if not probe["ok"]: raise BridgeError("没发出去：看不清这个窗格运行在哪台电脑上，刷新后再试")
+    if probe["route"]: return [("remote", share_image(path, sha)) for path, sha in files]
+    if probe["remote"] or request.get("remote"):
+        raise BridgeError("没发出去：这个窗格连着别的电脑，又不是 ch 路由，图片传不过去")
+    return [("local", str(path)) for path, _ in files]
+
+
+def share_image(path, sha):
+    binary = shutil.which("ch") or str(Path.home() / ".local/bin/ch")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
+    try:
+        result = subprocess.run([binary, "share-image", str(path)], capture_output=True, text=True, timeout=20, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise BridgeError("没发出去：图片没能交给 ch 共享（找不到 ch 或超时）") from exc
+    address = result.stdout.strip()
+    match = CH_ADDRESS.fullmatch(address)
+    if result.returncode or not match or match.group(1) != sha:
+        raise BridgeError("没发出去：图片没能交给 ch 共享（ch share-image 失败）")
+    return address
+
+
+def compose_prompt(text, refs):
+    # One short line per picture after the person's words, so the agent knows to open it.
+    lines = ["[图片] " + ref if kind == "local" else "[图片 · ch-local fetch] " + ref for kind, ref in refs]
+    body = text.rstrip()
+    return (body + "\n\n" if body.strip() else "") + "\n".join(lines)
+
+
+def embedded_image(block):
+    """A picture pasted into a transcript: Claude base64 source or Codex data URL."""
+    if not isinstance(block, dict): return None
+    if block.get("type") == "image":
+        source = block.get("source")
+        if isinstance(source, dict) and source.get("type") == "base64" and isinstance(source.get("data"), str):
+            return source.get("media_type", ""), source["data"]
+    if block.get("type") == "input_image":
+        url = block.get("image_url")
+        if isinstance(url, dict): url = url.get("url")
+        if isinstance(url, str):
+            match = re.match(r"data:(image/[a-z+.-]+);base64,", url[:80])
+            if match: return match.group(1), url[match.end():]
+    return None
+
+
+def fit_image(data, mime, variant):
+    """Return picture bytes the phone may receive; shrink with Pillow when it is installed."""
+    small = variant == "thumb" and len(data) > 200_000
+    if len(data) <= SERVE_LIMIT and not small: return data, mime
+    try:
+        from io import BytesIO
+        from PIL import Image
+        with Image.open(BytesIO(data)) as picture:
+            picture.thumbnail((THUMB_EDGE, THUMB_EDGE) if variant == "thumb" else (1600, 1600))
+            if picture.mode not in ("RGB", "L"): picture = picture.convert("RGB")
+            out = BytesIO(); picture.save(out, "JPEG", quality=80)
+        if out.tell() <= SERVE_LIMIT: return out.getvalue(), "image/jpeg"
+    except Exception:
+        if len(data) <= SERVE_LIMIT: return data, mime
+    raise BridgeError("图片太大，手机上看不了，在电脑上打开吧")
+
+
+def image_payload(data, mime, variant):
+    if mime not in IMAGE_TYPES.values(): raise BridgeError("不支持的图片格式")
+    data, mime = fit_image(data, mime, variant)
+    import base64
+    return {"mime": mime, "data": base64.b64encode(data).decode(), "bytes": len(data)}
+
+
+def cached_picture(sha, ext, variant):
+    """An uploaded picture (or its thumbnail), else a ch attachment cached on this computer."""
+    root = uploads_root()
+    try: days = sorted((d for d in root.iterdir() if re.fullmatch(r"\d{4}-\d{2}-\d{2}", d.name)), reverse=True) if root.is_dir() else []
+    except OSError: days = []
+    for day in days:
+        names = ([sha + ".thumb.jpg"] if variant == "thumb" else []) + [sha + ".jpg", sha + ".png"]
+        for name in names:
+            path = owned_file(day / name, root, UPLOAD_LIMIT)
+            if path: return path, "image/jpeg" if name.endswith(".jpg") else "image/png"
+    attachments = Path.home() / ".local/share/ch/attachments"
+    path = owned_file(attachments / (sha + "." + ext), attachments, 40_000_000)
+    if path: return path, IMAGE_TYPES[ext]
+    return None, None
+
+
+def transcript_image(entry, item, block, variant):
+    if not isinstance(item, str) or not re.fullmatch(r"\d{1,15}:\d{1,4}", item) or not isinstance(block, int) or isinstance(block, bool):
+        raise BridgeError("Invalid image reference")
+    offset = int(item.split(":")[0])
+    if offset >= entry["_path"].stat().st_size: raise BridgeError("Invalid image reference")
+    with entry["_path"].open("rb") as stream:
+        stream.seek(offset); line = stream.readline(40_000_001)
+    try: row = json.loads(line)
+    except ValueError as exc: raise BridgeError("这张图片在记录里已经找不到了") from exc
+    content = (row.get("payload", {}) if entry["provider"] == "codex" else row.get("message", {})).get("content")
+    found = embedded_image(content[block]) if isinstance(content, list) and 0 <= block < len(content) else None
+    if not found: raise BridgeError("这张图片在记录里已经找不到了")
+    import base64, binascii
+    try: data = base64.b64decode(found[1], validate=False)
+    except (binascii.Error, ValueError) as exc: raise BridgeError("图片数据损坏") from exc
+    return image_payload(data, found[0], variant)
+
+
+def image_request(request):
+    variant = request.get("variant", "thumb")
+    if variant not in ("thumb", "full"): raise BridgeError("Invalid image variant")
+    kind = request.get("kind")
+    if kind == "upload":
+        path, match = upload_path(request.get("name"))
+        sha = match.group(2); ext = match.group(3)
+    elif kind == "ch":
+        match = CH_ADDRESS.fullmatch(request.get("address", "")) if isinstance(request.get("address"), str) else None
+        if not match: raise BridgeError("Invalid image address")
+        sha, ext = match.groups()
+    elif kind == "transcript":
+        if request.get("remote") is not None:
+            route = route_for_context(request["remote"]); key = request.get("record_id", ""); prefix = "remote:" + route["key"] + ":"
+            if not isinstance(key, str) or not key.startswith(prefix) or not re.fullmatch(r"[a-f0-9]{64}", key[len(prefix):]):
+                raise BridgeError("Invalid remote history record")
+            data = remote_read(route, {"op": "image", "record_id": key[len(prefix):], "provider": request["remote"].get("provider", "claude"),
+                                       "item": request.get("item"), "block": request.get("block"), "variant": variant}, 25)
+            if data.get("image_error") or not isinstance(data.get("data"), str): raise BridgeError(data.get("image_error") or "远端图片读取失败")
+            return {k: data.get(k) for k in ("mime", "data", "bytes")}
+        entry = next((x for x in transcript_catalog() if x["id"] == request.get("record_id")), None)
+        if not entry: raise BridgeError("历史记录已不存在，请刷新列表")
+        return transcript_image(entry, request.get("item"), request.get("block"), variant)
+    else: raise BridgeError("Invalid image kind")
+    path, mime = cached_picture(sha, ext, variant)
+    if not path: raise BridgeError("这张图片在电脑上已经清理掉了")
+    return image_payload(path.read_bytes(), mime, variant)
+
+
+def remote_transcript_image(request):
+    entry = next((x for x in catalog_for_history(request["record_id"], request.get("provider", "claude")) if x["id"] == request["record_id"]), None)
+    if not entry: raise BridgeError("历史记录已不存在")
+    return transcript_image(entry, request.get("item"), request.get("block"), request.get("variant", "thumb"))
+
+
+def prune_uploads(now=None):
+    """Opportunistic cleanup: day folders older than UPLOAD_KEEP_DAYS, only files the phone writes."""
+    root = uploads_root()
+    if root.is_symlink() or not root.is_dir(): return
+    cutoff = time.strftime("%Y-%m-%d", time.gmtime((now or time.time()) - UPLOAD_KEEP_DAYS * 86400))
+    for day in root.iterdir():
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day.name) or day.name >= cutoff or day.is_symlink() or not day.is_dir(): continue
+        for item in day.iterdir():
+            if re.fullmatch(r"[a-f0-9]{64}(\.thumb)?\.(jpg|png)(\.[\w-]+\.tmp)?", item.name) and not item.is_symlink() and item.is_file():
+                item.unlink()
+        try: day.rmdir()
+        except OSError: pass
+
+
 def ssh_info():
     import getpass
     import socket
@@ -1260,6 +1488,10 @@ def handle(request, state_dir=None):
         return {"version": VERSION, "protocol": 1}
     if op == "account":
         return ssh_info()
+    if op == "image":
+        try: prune_uploads()
+        except OSError: pass
+        return image_request(request)
     if op in ("catalog", "history"):
         if request.get("remote") is not None: return remote_history_request(request)
         catalog = transcript_catalog()

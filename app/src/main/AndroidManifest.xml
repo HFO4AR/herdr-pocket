@@ -11,6 +11,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Target file for a photo taken with the system camera app; reachable only via a one-off URI grant. -->
+        <provider android:name=".CameraFiles" android:authorities="dev.herdr.pocket.camera" android:exported="false" android:grantUriPermissions="true" />
         <service android:name=".WatchService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps the user's own SSH session open while the app is in the background to notify when a coding agent finishes or waits for confirmation." />

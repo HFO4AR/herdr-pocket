@@ -118,6 +118,46 @@ class SshTransport : AutoCloseable {
             bridgePath = path
         } finally { sftp.disconnect() }
     }
+    /**
+     * Uploads a prepared picture to ~/.herdr-pocket/uploads/<day>/<sha256>.<ext> plus a small
+     * <sha256>.thumb.jpg (folders 0700, files 0600). Content-addressed, so a retry after an unknown
+     * outcome just finds or rewrites the same file; it is not a mutation of any agent. The bridge
+     * re-checks the hash before the picture is put into a prompt.
+     */
+    fun upload(picture: Prepared, day: String): JSONObject {
+        val (ssh, gen) = acquire()
+        try {
+            if (!ssh.isConnected) throw NotSent(gen, true, IllegalStateException("SSH 已断开"))
+            val sftp = try { ssh.openChannel("sftp") as ChannelSftp } catch (e: JSchException) { throw NotSent(gen, !ssh.isConnected, e) }
+            try {
+                try { sftp.connect(10000) } catch (e: JSchException) { throw NotSent(gen, !ssh.isConnected, e) }
+                var folder = home
+                for (part in listOf(".herdr-pocket", "uploads", day)) {
+                    folder = "$folder/$part"
+                    try { sftp.lstat(folder) } catch (e: SftpException) {
+                        if (e.id != ChannelSftp.SSH_FX_NO_SUCH_FILE) throw e
+                        sftp.mkdir(folder)
+                    }
+                    check(sftp.lstat(folder).isDir) { "上传目录异常：$part 不是普通文件夹" }
+                    sftp.chmod(448, folder)
+                }
+                val name = "${picture.sha256}.${picture.ext}"
+                put(sftp, "$folder/$name", picture.bytes)
+                put(sftp, "$folder/${picture.sha256}.thumb.jpg", picture.thumb)
+                return JSONObject().put("name", "$day/$name").put("sha256", picture.sha256).put("bytes", picture.bytes.size)
+            } finally { sftp.disconnect() }
+        } finally { release(ssh) }
+    }
+    private fun put(sftp: ChannelSftp, path: String, bytes: ByteArray) {
+        val existing = try { sftp.lstat(path) } catch (e: SftpException) { if (e.id != ChannelSftp.SSH_FX_NO_SUCH_FILE) throw e; null }
+        if (existing != null && existing.isReg && existing.size == bytes.size.toLong()) return
+        if (existing != null) sftp.rm(path)
+        val temp = "$path.${java.util.UUID.randomUUID()}.tmp"
+        sftp.put(bytes.inputStream(), temp)
+        sftp.chmod(384, temp)
+        check(sftp.lstat(temp).size == bytes.size.toLong()) { "图片上传不完整" }
+        sftp.rename(temp, path)
+    }
     fun useBundled(bytes: ByteArray) { bridgePath = "$home/.herdr-pocket/${bridgeName(bytes)}" }
     private fun bridgeName(bytes: ByteArray) = "bridge-" + MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } + ".py"
     fun isConnected() = session?.isConnected == true
