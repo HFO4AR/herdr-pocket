@@ -56,7 +56,7 @@ await page.evaluate(({menus,screens})=>{
  window.fxMenus=menus;window.fxScreens=screens;
  remote=async(op,args={})=>{fx.calls.push({op,args});await new Promise(r=>setTimeout(r,30));
   if(op==='status')return{agents:[fx.agent]};
-  if(op==='history')return{record:fx.agent.history_ref.record,messages:fx.messages,children:[],before:0,has_more:false};
+  if(op==='history')return{record:fx.agent.history_ref.record,messages:structuredClone(fx.messages),children:[],before:0,has_more:false};
   if(op==='read')return{text:screens[fx.screen],...(fx.agent.agent_status==='blocked'||fx.menuAlways?{menu:menus[fx.screen]}:{})};
   if(op==='answer'){if(fx.answerError)throw Error(fx.answerError);return{sent:true,receipt:args.id,result:{answered:true}};}
   if(op==='prompt'||op==='key')return{sent:true};
@@ -192,10 +192,10 @@ assert.deepEqual(items,[{answer:'写文档',question:'今天先做哪件？',que
 assert.equal(await page.evaluate(()=>S.chat.agent.agent_status),'working');
 // Once the reply is in the transcript the question shows as answered and the reply as the next turn.
 await page.evaluate(()=>{fx.messages.push({id:'99999:0',kind:'user',text:fx.calls.filter(c=>c.op==='prompt').at(-1).args.text,title:'',call_id:'',timestamp:new Date().toISOString()});});
-// A poll already in flight makes a refresh a no-op (slow CI): ask again until the transcript has it, like the poll would.
-await page.waitForFunction(()=>{const has=S.messages.some(m=>m.id==='99999:0');if(!has&&!S.polling)fetchHistory(false,true);return has;},null,{polling:300,timeout:20000});
-// TODO(coordinator): a merged poll can leave this answered async question row unpainted until the next repaint; tracked separately.
-await page.evaluate(()=>paintTimeline());
+// A plain poll merges it (one asked for while another read runs is queued, not dropped) and repaints:
+// the waiting question row turns answered with no forced repaint.
+await page.evaluate(()=>fetchHistory());
+await page.waitForFunction(()=>S.messages.some(m=>m.id==='99999:0'),null,{polling:300,timeout:20000});
 await page.locator('.qa-log .qa-log-state.done').getByText('已回答',{exact:true}).waitFor();
 assert.equal(await page.locator('.qa-log.waiting').count(),0);
 await page.locator('.notice-row.answer').filter({hasText:'写文档'}).first().waitFor();

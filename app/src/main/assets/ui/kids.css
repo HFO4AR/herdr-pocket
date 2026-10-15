@@ -1,0 +1,48 @@
+/* Sub-agents (kids.js): the chip under a list row, its inline list, and the chat sheet section.
+ * Colours come from the app.css tokens only. */
+
+/* Strip under a row: lines up with the row's text column (14 px padding + 40 px avatar + 12 px gap). */
+.kids-strip{background:var(--surface);padding:0 10px 4px 62px;margin-top:-12px;position:relative;z-index:1}
+.wide-list .swipe:has(.is-selected)+.kids-strip{background:var(--soft)}
+.agent-row.tone-alert+.kids-strip,.swipe:has(.tone-alert)+.kids-strip{background:var(--alert-row)}
+.list-card .kids-strip+.swipe,.list-card .kids-strip+.card-button{border-top:1px solid var(--line)}
+/* The button is a 44 px target; the pill is drawn inside it. */
+.kids-chip{position:relative;isolation:isolate;display:inline-flex;align-items:center;gap:6px;min-height:44px;max-width:100%;padding:0 10px 0 8px;
+ font-size:var(--fs-xs);font-weight:600;color:var(--muted);background:none;border-radius:999px}
+.kids-chip:before{content:'';position:absolute;inset:9px 0;border-radius:999px;background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line);z-index:-1;transition:background .15s var(--ease)}
+.kids-chip:active{transform:none}
+.kids-chip:active:before{background:var(--press)}
+.kids-chip svg{width:15px;height:15px;color:var(--faint)}
+.kids-chip svg:last-child{width:14px;height:14px;transition:transform .2s var(--ease)}
+.kids-strip.open .kids-chip svg:last-child{transform:rotate(180deg)}
+.kids-chip-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.kids-strip.busy .kids-chip{color:var(--warn)}
+.kids-strip.busy .kids-chip:before{background:var(--warn-soft);box-shadow:inset 0 0 0 1px var(--warn-line)}
+.kids-strip.busy .kids-chip svg{color:var(--warn)}
+.kids-pulse{width:7px;height:7px;border-radius:50%;background:var(--work);flex-shrink:0;animation:breathe 1.6s ease-in-out infinite}
+.kids-strip.busy .kids-chip>svg:first-child{display:none}
+
+/* The inline list: one 44 px row per sub-agent, running ones first. */
+.kids-list{display:flex;flex-direction:column;margin:2px 0 2px -6px;padding-left:6px;border-left:2px solid var(--line)}
+.kid-row{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:4px 6px 4px 8px;text-align:left;border-radius:var(--radius-control)}
+.kid-row:active{background:var(--press);transform:none}
+.kid-row:disabled{opacity:1}
+.kid-row>svg{width:16px;height:16px;color:var(--faint)}
+.kid-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--line-strong)}
+.kid-dot.on{background:var(--work);box-shadow:0 0 0 3px var(--warn-soft);animation:breathe 1.6s ease-in-out infinite}
+.kid-text{display:flex;flex-direction:column;min-width:0}
+.kid-title{font-size:var(--fs-md);color:var(--ink-2);line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kid-row.running .kid-title{color:var(--ink);font-weight:500}
+.kid-sub{font-size:var(--fs-xs);color:var(--faint);line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kid-row.running .kid-sub{color:var(--warn)}
+.kids-more{font-size:var(--fs-xs);color:var(--faint);padding:4px 8px 2px;line-height:1.5}
+
+/* Chat sheet (切换 Agent): heading with a running badge, rows as menu items. */
+.kids-sheet-head{display:flex;align-items:center;gap:8px}
+.kids-sheet-head .badge{letter-spacing:0}
+.menu-item.kid-row{min-height:52px;padding:6px 10px}
+.menu-item.kid-row .kid-title{font-size:var(--fs-base);color:var(--ink)}
+.menu-item.kid-row .kid-dot{margin:0 4px 0 6px}
+
+/* The header's 切换 Agent count turns amber while sub-agents run. */
+.icon-count.kids-on{background:var(--warn-soft);color:var(--warn);box-shadow:0 0 0 1.5px var(--warn) inset}

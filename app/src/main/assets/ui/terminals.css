@@ -1,0 +1,105 @@
+/* Terminals (terminals.js), the chat 「终端」 tab and the confirm screen. Colours: app.css tokens.
+ * The screen itself is dark in both themes (--terminal): a dark card on the warm page in light
+ * theme, a deeper well in dark theme. Text sizes follow --term-fs (A−/A+ in 终端选项). */
+:root{
+ --term-font:'JetBrains Mono','Cascadia Mono','SF Mono',Menlo,'Roboto Mono','DejaVu Sans Mono','Droid Sans Mono','Noto Sans Mono','Noto Sans Mono CJK SC','Noto Sans CJK SC',monospace;
+ --term-fs:13px}
+
+/* ── Full terminal view ── */
+.terminal-shell{background:var(--bg)}
+.term-head .chat-id{min-width:0}
+.term-sub{display:flex!important;align-items:center;gap:6px;min-width:0}
+.term-sub>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.term-state{flex-shrink:0;display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 7px;border-radius:9px;font-size:var(--fs-2xs);font-weight:650;letter-spacing:.2px;background:var(--sunken);color:var(--muted)}
+.term-state:before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+.term-state.ok{background:var(--success-soft);color:var(--success)}
+.term-state.warn{background:var(--warn-soft);color:var(--warn)}
+.term-state.demo{background:var(--soft);color:var(--accent)}
+.term-head .avatar .status-dot:not(.ok):not(.work){display:none}
+
+.term-stage{flex:1;min-height:0;display:flex;padding:8px 8px 0;background:var(--bg)}
+.term-surface{position:relative;flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--terminal);color:var(--terminal-ink);border-radius:var(--radius-card) var(--radius-card) var(--radius-control) var(--radius-control);box-shadow:0 0 0 1px var(--terminal-line),var(--shadow)}
+.term-surface.is-off>.pty-host,.term-surface.is-off>.pane-screen{opacity:.5;transition:opacity .2s var(--ease)}
+.pty-host{flex:1;min-height:0;overflow:hidden;padding:10px 2px 6px 12px;background:var(--terminal);touch-action:pan-x pinch-zoom}
+.pty-host .xterm{height:100%}
+.pty-host .xterm .xterm-viewport{background:var(--terminal)!important}
+.pane-screen{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;margin:0;padding:12px 14px 20px;color:var(--terminal-ink);font:var(--term-fs)/1.55 var(--term-font);white-space:pre-wrap;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text;scrollbar-width:thin;scrollbar-color:var(--term-scrollbar) transparent;outline:none}
+.pane-screen::selection,.agent-terminal::selection,.confirm-screen::selection{background:var(--term-selection)}
+/* Jump to the latest line: the chat's round arrow; a coral dot when output arrived below. */
+.term-jump{right:12px;bottom:12px;z-index:2}
+.term-jump[hidden]{display:none}
+.term-jump.has-new:after{content:'';position:absolute;top:4px;right:4px;width:9px;height:9px;border-radius:50%;background:var(--accent-raw);box-shadow:0 0 0 2px var(--raised)}
+
+/* Dock: status, key bar and line input; it sits right above the soft keyboard (adjustResize). */
+.term-dock{padding:8px 0 calc(8px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px}
+.term-dock>*{width:100%}
+.terminal-status{display:none;align-items:center;gap:8px;margin:0 auto;padding:4px 4px 4px 10px;width:calc(100% - 24px)!important;max-width:756px!important;border-radius:var(--radius-control);background:var(--warn-soft);color:var(--warn);font-size:var(--fs-xs);line-height:1.45;overflow-wrap:anywhere;min-height:36px}
+.terminal-status.show{display:flex}
+.terminal-status.off{background:var(--sunken);color:var(--ink-2)}
+.terminal-status svg{width:16px;height:16px}
+.terminal-status .link-btn{flex-shrink:0;font-weight:600}
+.terminal-keys{display:flex;gap:10px;overflow-x:auto;overscroll-behavior-x:contain;padding:0 12px;scrollbar-width:none;scroll-padding:0 12px}
+.terminal-keys::-webkit-scrollbar{display:none}
+.key-group{display:flex;gap:6px;flex-shrink:0}
+.key{flex-shrink:0;min-width:44px;min-height:44px;padding:0 12px;border-radius:var(--radius-control);background:var(--sunken);color:var(--ink);box-shadow:inset 0 -1px 0 var(--line-strong);font:500 var(--fs-sm)/1 var(--term-font);display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}
+.key:active{background:var(--line-strong);transform:translateY(1px) scale(.97)}
+.key svg{width:20px;height:20px}
+.key.arrow-key,.key.char-key{padding:0;font-size:var(--fs-base)}
+.key-arrows{gap:0;border-radius:var(--radius-control);background:var(--sunken);box-shadow:inset 0 -1px 0 var(--line-strong)}
+.key-arrows .key{background:none;box-shadow:none;border-radius:0;min-width:46px}
+.key-arrows .key:first-child{border-radius:var(--radius-control) 0 0 var(--radius-control)}
+.key-arrows .key:last-child{border-radius:0 var(--radius-control) var(--radius-control) 0}
+.key-arrows .key:active{background:var(--line-strong)}
+.key.enter-key{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1px var(--soft-line);font-weight:600}
+.key.ctrl-key.on{background:var(--accent);color:var(--on-accent);box-shadow:none}
+.key.kbd-key{color:var(--ink-2)}
+.term-compose{margin:0 auto!important;width:calc(100% - 24px)!important;max-width:756px!important;padding:3px 3px 3px 3px;gap:4px;border-radius:var(--radius-card);align-items:flex-end}
+.term-compose textarea{font:var(--fs-md)/1.45 var(--term-font);padding:10px 0;min-height:42px;max-height:96px}
+.term-compose textarea::placeholder{font-family:inherit}
+.term-enter{position:relative;flex-shrink:0;min-width:44px;height:44px;padding:0 10px 0 8px;gap:3px;border-radius:var(--radius-control);display:flex;align-items:center;justify-content:center;font-size:var(--fs-xs);font-weight:600;white-space:nowrap;color:var(--faint);cursor:pointer;transition:background-color .15s var(--ease),color .15s var(--ease)}
+.term-enter input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
+.term-enter svg{width:17px;height:17px;stroke-width:2.1}
+.term-enter:not(:has(input:checked)) span{text-decoration:line-through;text-decoration-thickness:1.5px}
+.term-enter:has(input:checked){color:var(--accent);background:var(--soft)}
+.term-enter:has(input:focus-visible){outline:2px solid var(--focus);outline-offset:1px}
+.term-run{min-height:44px;padding:0 18px;border-radius:12px;flex-shrink:0}
+:root:has(.terminal-shell) #toast{bottom:calc(var(--term-dock-h,150px) + 10px)}
+
+/* Keyboard open (adjustResize) and landscape: give the screen the room. */
+@media(max-height:560px){
+ .term-head{min-height:48px;padding-top:2px;padding-bottom:2px}
+ .term-head .avatar{display:none}
+ .term-stage{padding:6px 6px 0}
+ .term-dock{padding-top:6px;padding-bottom:calc(6px + env(safe-area-inset-bottom));gap:6px}
+ .term-compose textarea{max-height:60px}
+}
+@media(min-width:600px) and (max-height:560px){
+ .term-dock{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,42%);align-items:center;column-gap:0}
+ .term-dock>.terminal-status{grid-column:1/-1}
+ .term-dock>.terminal-keys{padding-right:4px}
+ .term-compose{margin:0 12px 0 4px!important;width:auto!important}
+}
+@media(min-width:760px){.term-stage{padding:12px 16px 0}}
+
+/* ── Read-only screens: chat 「终端」 tab ── */
+.chat-body:has(>.timeline>.term-card){display:flex;flex-direction:column}
+.timeline:has(>.term-card){flex:1;min-height:0;width:100%;margin:0 auto;display:flex;flex-direction:column}
+.term-card{position:relative;flex:1;min-height:240px;display:flex;flex-direction:column;overflow:hidden;background:var(--terminal);color:var(--terminal-ink);border-radius:var(--radius-card);box-shadow:0 0 0 1px var(--terminal-line),var(--shadow)}
+.term-card-head{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 4px 0 14px;border-bottom:1px solid var(--term-rule);font-size:var(--fs-xs);color:var(--terminal-muted)}
+.term-led{width:7px;height:7px;border-radius:50%;background:var(--terminal-muted);flex-shrink:0}
+.term-led.on{background:var(--term-live);box-shadow:0 0 0 3px var(--term-rule)}
+.term-card-title{color:var(--terminal-ink);font-weight:600;font-size:var(--fs-sm)}
+.term-card-note{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.term-card-refresh{color:var(--term-accent);min-height:44px;padding:0 10px;gap:4px;display:inline-flex;align-items:center;flex-shrink:0}
+.term-card-refresh svg{width:16px;height:16px}
+.term-card-refresh:active{background:var(--term-rule)}
+.term-card .agent-terminal{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;border-radius:0;background:none;padding:12px 14px 20px;font:calc(var(--term-fs) - 1px)/1.55 var(--term-font);scrollbar-width:thin;scrollbar-color:var(--term-scrollbar) transparent;outline:none;-webkit-user-select:text;user-select:text}
+.agent-terminal{font-family:var(--term-font)}
+.term-card .term-jump{right:10px;bottom:10px}
+
+/* ── Confirm panel screen (presentation only) ── */
+.confirm-screen{font:calc(var(--term-fs) - 1.5px)/1.55 var(--term-font);padding:9px 12px;border-radius:var(--radius-control);box-shadow:inset 0 0 0 1px var(--terminal-line);max-height:148px;scrollbar-width:thin;scrollbar-color:var(--term-scrollbar) transparent;-webkit-user-select:text;user-select:text}
+@media(max-height:560px){.confirm-screen{max-height:64px}}
+
+/* Touch selection sheet */
+.term-select{font:calc(var(--term-fs) - .5px)/1.55 var(--term-font);margin:0;max-height:58vh}

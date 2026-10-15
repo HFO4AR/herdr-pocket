@@ -20,7 +20,9 @@ window.nativeEvent=e=>netEvent(e);
 window.openFromNotification=pane=>{S.pendingPane=pane;if(!S.device)return;const a=S.agents.find(x=>x.pane_id===pane);if(a){openPending();return;}setTab('live');};
 function openPending(){const pane=S.pendingPane;if(!pane||!S.device)return;S.pendingPane=null;const a=S.agents.find(x=>x.pane_id===pane);if(!a){toast('那个 Agent 已经不在这个会话里了');return;}if(typeof T!=='undefined')leaveTerminal();closeSheet();openAgent(a);}
 // The background watcher only notifies about changes after what the UI already showed.
-function syncWatch(){if(S.demo||!S.device||!S.session)return;const states={};S.agents.forEach(a=>{states[a.pane_id+'/'+a.identity]=a.agent_status||'';});rpc('watchState',{session:S.session,states}).catch(()=>{});}
+// "kids" counts as working there too; `kids` names each agent's record so the watcher can check
+// its sub-agents (read-only glance) before saying 做完了.
+function syncWatch(){if(S.demo||!S.device||!S.session)return;const states={},kids={};S.agents.forEach(a=>{const k=a.pane_id+'/'+a.identity;states[k]=agentState(a);const it=kidsWatchItem(a);if(it)kids[k]=it;});rpc('watchState',{session:S.session,states,kids}).catch(()=>{});}
 // Reassignable on purpose: offline tests wrap it to observe requests.
 let remote=(op,args={})=>S.demo?demoRequest(op,args):rpc('remote',{op,...args});
 
@@ -54,9 +56,10 @@ function confirmAction(title,text,label,action,danger){const box=sheet(title);bo
 function menuItem(box,label,fn,name,detail){const b=btn('','menu-item',()=>{closeSheet();fn();},name);const t=el('span','grow');t.append(el('span','menu-label',label));if(detail)t.append(el('small','',detail));b.append(t);box.append(b);return b;}
 
 // ─── Formatting ─────────────────────────────────────────────────────────────
-const STATUS={working:['执行中','work'],blocked:['等你确认','alert'],idle:['空闲','ok'],done:['已完成','ok']};
-function stateLabel(a){return (STATUS[a?.agent_status]||['状态未知','muted'])[0];}
-function stateTone(a){return (STATUS[a?.agent_status]||['','muted'])[1];}
+// "kids" (kids.js): Herdr says idle/done but the agent's sub-agents still run — a working state.
+const STATUS={working:['执行中','work'],blocked:['等你确认','alert'],kids:['子 Agent 运行中','work'],idle:['空闲','ok'],done:['已完成','ok']};
+function stateLabel(a){const s=agentState(a);return s==='kids'?kidsLabel(a):(STATUS[s]||['状态未知','muted'])[0];}
+function stateTone(a){return (STATUS[agentState(a)]||['','muted'])[1];}
 function providerName(p){return p==='claude'?'Claude':p==='codex'?'Codex':'Agent';}
 // Prefer names that tell agents apart: Herdr's agent title, a meaningful terminal
 // title (not the generic "<dir>: ch" / "<dir>: claude"), then the first prompt.
@@ -92,13 +95,13 @@ function lastActivity(a){const at=statusSince(a)||0,g=typeof glanceAt==='functio
 function viewingKey(){return S.chat?.agent&&!S.chat.stale?agentKey(S.chat.agent):'';}
 function noteStatus(list){
  const viewing=viewingKey(),now=Date.now();
- for(const a of list){const k=agentKey(a),s=a.agent_status||'',prev=S.since.get(k);
+ for(const a of list){const k=agentKey(a),s=agentState(a),prev=S.since.get(k);
   if(!prev){S.since.set(k,{status:s,at:null});if(s==='done'&&k!==viewing)S.unread.add(k);continue;}
   if(prev.status===s)continue;
   S.since.set(k,{status:s,at:now,prevAt:prev.at,prev:prev.status});
   if(s==='working'||s==='blocked'||(prev.status==='done'&&s==='idle'))S.unread.delete(k);
   if(k===viewing||!S.active)continue;
-  if(prev.status==='working'&&(s==='idle'||s==='done')){S.unread.add(k);toast('「'+titleOf(a)+'」做完了');}
+  if((prev.status==='working'||prev.status==='kids')&&(s==='idle'||s==='done')){S.unread.add(k);toast('「'+titleOf(a)+'」做完了');}
   else if(s==='blocked')toast('「'+titleOf(a)+'」在等你确认');}}
 setInterval(()=>{if(!S.active)return;document.querySelectorAll('[data-since]').forEach(n=>{const ms=Date.now()-Number(n.dataset.since);n.textContent=(n.dataset.prefix||'')+sinceText(n.dataset.fmt,ms);});},1000);
 
@@ -146,20 +149,21 @@ async function loadAccount(){const epoch=S.epoch;try{const a=await remote('accou
 // is doing right now (state + how long), with a dot when it finished unseen.
 // Rows open on tap; swipe left (or long press) for 关闭.
 function agentRow(a){
- const k=agentKey(a),unread=S.unread.has(k),tone=stateTone(a),st=a.agent_status;
+ const k=agentKey(a),unread=S.unread.has(k),tone=stateTone(a),st=agentState(a);
  const n=btn('','card-button agent-row tone-'+tone+(unread?' unread':''),()=>openAgent(a));
  const text=el('div','grow');text.append(el('div','card-title',titleOf(a)));
  // The avatar already says Claude / Codex; the meta line is where it runs, then a one-line
  // preview (glance.js): the current step, the question waiting for you, or the last reply.
  const meta=el('div','card-meta');meta.dataset.glance=k;const project=projectOf(a);meta.append(el('span','project',project||providerName(a.agent)));
  if(closeIsCh(a))meta.append(el('span','tag remote-tag','远端'));
+ modeRowTags(meta,a);
  const ref=a.history_ref;if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(el('span','sep warn','历史未关联'));queueBadge(meta,a);
  const preview=glancePreview(a);if(preview){meta.append(preview);n.classList.add('has-glance');}
  text.append(meta);
  const side=el('div','row-side');const at=statusSince(a);
  // The group header, the avatar dot and the tint already say 执行中 / 等你确认: the side keeps
  // just how long, so the preview gets the width.
- if(st==='blocked'||st==='working'){const t=at?since(at,'ago'):el('span','',rowTimeText(a));t.classList.add('row-time','state-time','t-'+tone);side.append(t);t.title=stateLabel(a);}
+ if(st==='blocked'||st==='working'||st==='kids'){const t=at?since(at,'ago'):el('span','',rowTimeText(a));t.classList.add('row-time','state-time','t-'+tone);side.append(t);t.title=stateLabel(a);}
  else{side.append(el('span','row-time',rowTimeText(a)));
   if(unread){const d=el('span','unread-dot');d.title='做完了，还没看';side.append(d,el('span','sr-only','有新进展'));}
   else if(st==='done')side.append(el('span','row-state','已完成'));}
@@ -204,8 +208,9 @@ function livePage(main){
    if(q||S.liveProject)empty(list,'没有匹配的 Agent','换个关键词，或者看看全部会话。',btn('清除筛选','secondary',()=>{S.search='';S.liveProject='';render();}));
    else empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动，这里会自动出现。',S.device&&S.session?createButton():undefined);
    return;}
-  const groups=[['等你确认',a=>a.agent_status==='blocked','alert'],['执行中',a=>a.agent_status==='working','work'],['空闲',a=>!['blocked','working'].includes(a.agent_status),'']];
-  for(const [label,test,tone] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;const h=el('div','section-label group-label'+(tone?' g-'+tone:''));h.append(el('span','',label),el('span','group-count',String(items.length)));list.append(h);const g=el('div','card list-card');items.forEach(a=>g.append(agentRow(a)));list.append(g);}
+  // 子 Agent 运行中 (kids.js) sits with 执行中: the agent is not done while its sub-agents work.
+  const groups=[['等你确认',a=>agentState(a)==='blocked','alert'],['执行中',a=>['working','kids'].includes(agentState(a)),'work'],['空闲',a=>!['blocked','working','kids'].includes(agentState(a)),'']];
+  for(const [label,test,tone] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;const h=el('div','section-label group-label'+(tone?' g-'+tone:''));h.append(el('span','',label),el('span','group-count',String(items.length)));list.append(h);const g=el('div','card list-card');items.forEach(a=>{g.append(agentRow(a));const kids=kidsStrip(a);if(kids)g.append(kids);});list.append(g);}
   closeHint(list);}
  draw();
  pullRefresh(main,loadLive);}
@@ -251,42 +256,84 @@ function historyIssueText(ref){const reason=ref?.reason;switch(ref?.status){case
 function openRecord(r,push=false){
  if(push&&S.chat)S.chatStack.push({...S.chat,mode:S.chatMode,savedMessages:S.messages,savedChildren:S.children,savedBefore:S.before,savedMore:S.more,savedScroll:document.getElementById('chat-scroll')?.scrollTop||0,savedStick:S.stick});else S.chatStack=[];
  resetChat({record:r,agent:null,title:r.title,provider:r.provider});S.epoch++;renderChat();fetchHistory(false,true);}
-async function fetchHistory(older=false,initial=false){
- if(!S.chat?.record||(S.polling&&S.fetchEpoch===S.epoch))return;S.polling=true;const epoch=S.epoch;S.fetchEpoch=epoch;const record=S.chat.record;
+// History reads never overlap (S.polling). A read asked for while another runs is not lost: an
+// earlier page waits its turn and then goes first, a refresh or poll runs right after (polls
+// coalesce). HQ.state is the earlier-page state shown at the top of the list (timeline.js olderSync).
+const HQ={epoch:-1,state:'',error:'',older:null,again:0,againEpoch:-1};
+function histBusy(){return S.polling&&S.fetchEpoch===S.epoch;}
+function olderPending(){return !!HQ.older&&HQ.older.epoch===S.epoch;}
+function fetchHistory(older=false,initial=false){
+ if(!S.chat?.record)return Promise.resolve();
+ if(older)return historyOlder();
+ if(histBusy()||!initial&&olderPending()){HQ.again=HQ.againEpoch===S.epoch?Math.max(HQ.again,initial?2:1):initial?2:1;HQ.againEpoch=S.epoch;return Promise.resolve();}
+ return historyRead(false,initial);}
+function olderSet(epoch,state,error=''){if(epoch!==S.epoch)return;HQ.epoch=epoch;HQ.state=state;HQ.error=error;olderSync();}
+function olderReady(){const c=S.chat;return !!(c?.record&&S.more&&S.messages.length&&!c.cached&&!c.waiting&&!c.historyLoading&&S.chatMode!=='terminal');}
+// Reading near the top pulls in the previous page by itself (not after an error: that waits for 重试).
+function olderNear(n){return !!n&&!S.stick&&n.scrollTop<Math.max(320,n.clientHeight*.6)&&olderReady()&&!olderPending()&&!(HQ.epoch===S.epoch&&HQ.state==='error');}
+function historyOlder(){
+ const epoch=S.epoch;if(olderPending())return HQ.older.p;if(!olderReady())return Promise.resolve();
+ const job={epoch};HQ.older=job;olderSet(epoch,'loading');
+ job.p=(async()=>{
+  try{while(histBusy()&&epoch===S.epoch)await new Promise(r=>setTimeout(r,40));
+   if(epoch===S.epoch&&olderReady())await historyRead(true,false);}
+  finally{if(HQ.older===job)HQ.older=null;if(HQ.epoch===epoch&&HQ.state==='loading')olderSet(epoch,'');
+   if(HQ.again&&HQ.againEpoch===S.epoch&&!histBusy()){const init=HQ.again===2;HQ.again=0;fetchHistory(false,init);}}})();
+ return job.p;}
+// Keep what the reader looks at in place while rows are added above it: the first rows in view
+// that survive the render are the anchor (a turn that grew an earlier start is rebuilt, so a
+// later one is used); without one, the height added above is subtracted.
+function keepPlace(n,render){
+ const vt=n.getBoundingClientRect().top,marks=[];const list=n.querySelector('.timeline');
+ // Rows inside turns, not the turns: a turn's own top padding changes once a turn lands above it.
+ if(list)for(const c of list.querySelectorAll(':scope>.turn>*,:scope>.message,:scope>.tool-row,:scope>.slash-card')){const r=c.getBoundingClientRect();if(r.bottom>vt+1){marks.push([c,r.top]);if(marks.length>=8)break;}}
+ const top=n.scrollTop,h=n.scrollHeight;render();
+ const m=marks.find(([c])=>c.isConnected);
+ if(m)n.scrollTop+=m[0].getBoundingClientRect().top-m[1];else n.scrollTop=top+n.scrollHeight-h;}
+async function historyRead(older,initial){
+ S.polling=true;const epoch=S.epoch;S.fetchEpoch=epoch;const record=S.chat.record;
+ try{
  // A cached copy is painted first; before SSH is up the read waits for the connection.
- if(initial){const wait=await cacheFill(record,epoch);if(epoch!==S.epoch||wait){if(S.fetchEpoch===epoch)S.polling=false;if(wait&&epoch===S.epoch)paintTimeline();return;}S.chat.historyLoading=true;paintTimeline();}
+ if(initial){const wait=await cacheFill(record,epoch);if(epoch!==S.epoch||wait){if(wait&&epoch===S.epoch)paintTimeline();return;}S.chat.historyLoading=true;paintTimeline();}
  const args={record_id:record.id};if(record.remote)args.remote=record.remote;if(older)args.before=S.before;
- try{const r=await remote('history',args);if(epoch!==S.epoch)return;const hadError=!!S.chat.historyError;S.chat.historyError=null;S.chat.historyLoading=false;S.chat.cached=0;S.chat.waiting=false;const prior=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
+ try{const r=await remote('history',args);if(epoch!==S.epoch)return;kidsFromHistory(record,r);const hadError=!!S.chat.historyError;S.chat.historyError=null;S.chat.historyLoading=false;S.chat.cached=0;S.chat.waiting=false;const prior=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
   const known=new Set(S.messages.map(x=>x.id));
   if(older)S.messages=r.messages.filter(m=>!known.has(m.id)).concat(S.messages);
-  else if(initial)S.messages=r.messages;
+  else if(initial)S.messages=r.messages.slice();
   else{const map=new Map(S.messages.map(x=>[x.id,x]));r.messages.forEach(m=>map.set(m.id,m));S.messages=[...map.values()].sort((a,b)=>Number(a.id.split(':')[0])-Number(b.id.split(':')[0])||Number(a.id.split(':')[1])-Number(b.id.split(':')[1]));}
   S.children=r.children||[];if(initial||older){S.before=r.before;S.more=r.has_more;}
   S.historyNote=r.bounded?'本页到了读取窗口边界，可以继续加载更早记录。':'';
   const settled=settleOutbox();
   const now=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
+  if(older||initial&&HQ.epoch===epoch&&HQ.state==='error')olderSet(epoch,'');
   if(prior!==now||initial||older||hadError||settled){
    const n=document.getElementById('chat-scroll');
-   if(older&&n){const h=n.scrollHeight,top=n.scrollTop;renderTimeline();n.scrollTop=top+n.scrollHeight-h;}
+   if(older&&n){keepPlace(n,()=>renderTimeline({quiet:true}));updateJump();
+    // Still near the top (a short page): keep reading upwards.
+    requestAnimationFrame(()=>{if(epoch===S.epoch&&olderNear(n))fetchHistory(true);});}
    else{if(initial)S.stick=true;else if(!S.stick)S.unseen+=S.messages.filter(m=>!known.has(m.id)&&(m.kind==='user'||m.kind==='assistant')).length;paintTimeline();}}
   updateChatMeta();qaRefresh();cacheChat();}
- catch(e){if(epoch===S.epoch){S.paused=true;S.chat.historyLoading=false;S.chat.historyError='历史读取失败：'+e.message;paintTimeline();}}
- finally{if(S.fetchEpoch===epoch)S.polling=false;}}
+ catch(e){if(epoch!==S.epoch)return;
+  // An earlier page that did not load says so in place, with 重试; the chat itself keeps polling.
+  if(older){olderSet(epoch,'error',e.message);return;}
+  S.paused=true;S.chat.historyLoading=false;S.chat.historyError='历史读取失败：'+e.message;paintTimeline();}}
+ finally{if(S.fetchEpoch===epoch)S.polling=false;
+  if(HQ.again&&HQ.againEpoch===S.epoch&&!histBusy()&&(older||!olderPending())){const init=HQ.again===2;HQ.again=0;setTimeout(()=>fetchHistory(false,init),0);}}}
 // Re-render the timeline but keep the reader where they are: follow the bottom
 // only when they were already there, otherwise hold position and count news.
-function paintTimeline(){const n=document.getElementById('chat-scroll');const top=n?n.scrollTop:0;renderTimeline();if(!n)return;n.scrollTop=S.stick?n.scrollHeight:top;updateJump();}
+function paintTimeline(){const n=document.getElementById('chat-scroll');const top=n?n.scrollTop:0;const flip=n?tlFlipStart(n):null;renderTimeline();if(!n)return;n.scrollTop=S.stick?n.scrollHeight:top;if(flip)tlFlipEnd(n,flip);updateJump();}
 function updateJump(){const j=document.getElementById('jump');if(!j)return;j.classList.toggle('hidden',S.stick);j.classList.toggle('has-count',S.unseen>0);const t=j.querySelector('.jump-text');if(t)t.textContent=S.unseen?S.unseen+' 条新消息':'';}
 function showJump(v){S.stick=!v;updateJump();}
-function chatSubtitle(){const c=S.chat;if(!c)return '';if(c.stale)return followSubtitle(c);if(c.agent){const parts=[stateLabel(c.agent),providerName(c.agent.agent)];const p=projectOf(c.agent);if(p)parts.splice(1,0,p);if(c.manual)parts.push('手动关联');return parts.join(' · ');}return (c.record?.parent?'子 Agent · ':'')+providerName(c.provider)+' · 历史只读';}
+function chatSubtitle(){const c=S.chat;if(!c)return '';if(c.stale)return followSubtitle(c);if(c.agent){const parts=[stateLabel(c.agent),providerName(c.agent.agent)];const p=projectOf(c.agent);if(p)parts.splice(1,0,p);if(c.manual)parts.push('手动关联');return parts.join(' · ');}return (c.record?.parent?'子 Agent · '+(c.kidRunning?'运行中 · ':''):'')+providerName(c.provider)+' · 历史只读';}
 // Subtitle: "执行中 2:05 · 项目" — state first so it survives truncation; the
 // avatar already says Claude/Codex.
 function updateChatMeta(){
  const n=document.getElementById('chat-meta'),c=S.chat;
  if(n&&c){n.replaceChildren();const a=c.agent&&!c.stale?c.agent:null;
   if(!a)n.append(chatSubtitle());
-  else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=a.agent_status==='working'||a.agent_status==='blocked'?statusSince(a)||(a.agent_status==='working'&&c.sentAt)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}}
+  else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=['working','blocked'].includes(agentState(a))?statusSince(a)||(a.agent_status==='working'&&c.sentAt)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}}
  const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(c?.agent&&!c.stale?stateTone(c.agent):'muted');
- const b=document.getElementById('child-count');if(b){b.textContent=String(S.children.length);b.classList.toggle('hidden',!S.children.length);}}
+ const b=document.getElementById('child-count');if(b){b.textContent=String(S.children.length);b.classList.toggle('hidden',!S.children.length);}kidsPaintHead();}
 function renderChat(){
  const root=shell();root.classList.add('chat-shell');const head=el('header','chat-head');head.id='chat-head';head.append(ib('back','返回列表',pocketBack));
  const av=avatar(S.chat.provider);const dot=el('span','status-dot');dot.id='chat-dot';av.append(dot);head.append(av);
@@ -294,11 +341,10 @@ function renderChat(){
  const sw=ib('branch','切换 Agent',agentSwitcher);sw.classList.add('with-count');const count=el('span','icon-count hidden');count.id='child-count';count.setAttribute('aria-hidden','true');sw.append(count);
  const more=ib('more','更多操作',chatMenu);sw.classList.add('head-act');more.classList.add('head-act');head.append(sw,more);root.append(head);
  const tabs=el('div','chat-tabs');tabs.setAttribute('role','group');tabs.setAttribute('aria-label','视图');[['conversation','对话'],['commands','命令'],['terminal','终端']].forEach(([mode,title])=>{const b=btn(title,S.chatMode===mode?'active':'',()=>{if(S.chatMode===mode)return;S.chatMode=mode;S.stick=true;S.unseen=0;S.epoch++;renderChat();if(mode==='terminal')fetchTerminal();else if(S.chat.record&&!S.messages.length)fetchHistory(false,true);});b.setAttribute('aria-pressed',String(S.chatMode===mode));tabs.append(b);});head.append(tabs);
- const wrap=el('div','chat-body-wrap');const body=el('main','chat-body');body.id='chat-scroll';let lastTop=0;
+ const wrap=el('div','chat-body-wrap');const body=el('main','chat-body');body.id='chat-scroll';
  body.onscroll=()=>{const bottom=body.scrollHeight-body.scrollTop-body.clientHeight<80;if(bottom!==S.stick||(bottom&&S.unseen)){S.stick=bottom;if(bottom)S.unseen=0;updateJump();}
-  // Reading upwards near the top pulls in the previous page (position is kept).
-  const up=body.scrollTop<lastTop;lastTop=body.scrollTop;
-  if(up&&body.scrollTop<160&&S.more&&!S.polling&&S.chatMode!=='terminal'&&S.chat?.record&&S.messages.length)fetchHistory(true);};
+  // Reading near the top pulls in the previous page (position is kept, see keepPlace).
+  if(olderNear(body))fetchHistory(true);};
  // Keyboard opening or the live strip growing shrinks the view: stay pinned to the latest.
  if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>{if(S.stick)body.scrollTop=body.scrollHeight;}).observe(body);
  wrap.append(body);
@@ -322,7 +368,8 @@ function renderComposer(){
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
  // Busy agent: the button says it will queue, so sending never looks like it failed.
  send.classList.toggle('later',later);send.querySelector('.send-label').textContent=later?'排队':'';send.title=offline?'连上后才能发送':later?'先排队，它停下就发':'发送';
- compose.classList.toggle('offline',offline);imgTray(compose,key);fileTray(compose,key);send.disabled=offline||!input.value.trim()&&!attCount(key);}
+ compose.classList.toggle('offline',offline);imgTray(compose,key);fileTray(compose,key);send.disabled=offline||!input.value.trim()&&!attCount(key);
+ modeBar(footer,a);}
 function buildComposer(key){
  const compose=el('div','composer');compose.dataset.key=key;const input=el('textarea');input.rows=1;input.setAttribute('aria-label','消息输入框');input.setAttribute('enterkeyhint','enter');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-expanded','false');input.value=S.drafts.get(key)||'';
  const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');send.append(el('span','send-label'));
@@ -355,9 +402,9 @@ async function sendMessage(input){
  // A panel left open by the last slash command would swallow this message (or Enter would pick in it).
  if(slashPanelCard(key)){if(S.slashChecking)return;S.slashChecking=true;let held;try{held=await slashHold(a,key);}finally{S.slashChecking=false;}if(held||slashPanelCard(key))return;return sendMessage(input);}
  // Busy, or something already waiting: it goes into the send queue (queue.js), in order.
- if(queueWants(a,key)){queueCompose(input,key,a,text,pics,docs);return;}
- const epoch=S.epoch;const button=document.querySelector('.send');button.disabled=true;
- const item={key,text,images:pics.map(p=>({url:p.thumb})),files:docs.map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sending'};
+ if(queueWants(a,key)){sendPulse(document.querySelector('#composer .send'));queueCompose(input,key,a,text,pics,docs);return;}
+ const epoch=S.epoch;const button=document.querySelector('.send');sendPulse(button);button.disabled=true;
+ const item={key,text,images:pics.map(p=>({url:p.thumb})),files:docs.map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sending',row:'s'+(++sendSeq)};
  // Slash commands get a 「命令输出」 card (slash.js) instead of a pending bubble: most never reach the transcript.
  const card=!S.demo&&!pics.length&&!docs.length&&slashIs(text,a)?slashCard(key,text):null;
  if(!S.demo){if(!card)S.outbox.push(item);S.stick=true;paintTimeline();}
@@ -375,10 +422,13 @@ async function sendMessage(input){
   S.stick=true;paintTimeline();if(card)slashCapture(card);if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);}
  catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
  finally{button.disabled=!input.value.trim()&&!attCount(key);}}
+// The send button answers the press at once (the haptic comes from native.js); the bubble follows.
+let sendSeq=0;
+function sendPulse(b){if(!b)return;b.classList.remove('fired');void b.offsetWidth;b.classList.add('fired');setTimeout(()=>b.classList.remove('fired'),400);}
 function scrollBottom(){const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
 // A pending bubble disappears once the transcript shows the same user text.
 function settleOutbox(){if(!S.outbox.length)return false;const count=S.outbox.length;
- const users=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>{const x=imgSplit(m);return {sig:x.text+'\u0000'+(x.specs.length?1:0),at:toDate(m.timestamp)?.getTime()||0};});
+ const users=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>{const x=imgSplit(m);return {id:m.id,sig:x.text+'\u0000'+(x.specs.length?1:0),at:toDate(m.timestamp)?.getTime()||0};});
  const sig=o=>o.text.trim()+'\u0000'+(o.images?.length?1:0);
  // A send whose outcome was unknown, and whose text then shows up in the transcript (written after it
  // was sent, allowing for clock skew), did arrive. Anything still queued with the same words waits
@@ -387,12 +437,13 @@ function settleOutbox(){if(!S.outbox.length)return false;const count=S.outbox.le
   o.state='sent';toast('刚才那条其实送到了');
   const q=Q.get(o.key),dup=q?.items.find(it=>it.state==='queued'&&it.text.trim()===o.text.trim());
   if(dup){dup.reason='和刚送到的那条一样，确认还要再发吗';queuePause(q,'排队里有一条和刚送到的消息一样，先停下。不需要就删掉，要发再点继续',true);}}
- S.outbox=S.outbox.filter(o=>!(o.state==='sent'&&users.some(u=>u.sig===sig(o)))&&Date.now()-o.at<180000);return S.outbox.length!==count;}
+ // The transcript copy takes the bubble's place without an entrance of its own (timeline.js tlArrivals).
+ S.outbox=S.outbox.filter(o=>{const u=o.state==='sent'&&users.find(u=>u.sig===sig(o));if(u){TL_HANDOFF.add(u.id);return false;}return Date.now()-o.at<180000;});return S.outbox.length!==count;}
 // A finish only counts when Herdr itself reported working → stopped just now;
 // the optimistic "working" set after sending must not flash "做完了".
 function onAgentStatus(was,now){
  const rec=S.chat?.agent?S.since.get(agentKey(S.chat.agent)):null;
- if(was==='working'&&(now==='idle'||now==='done')&&rec?.prev==='working'&&rec.status===now&&Date.now()-rec.at<15000){
+ if(was==='working'&&(now==='idle'||now==='done')&&rec?.prev==='working'&&rec.status===now&&Date.now()-rec.at<15000&&!kidsRunning(S.chat.agent)){
   S.chat.doneAt=Date.now();S.chat.took=rec.prevAt?rec.at-rec.prevAt:S.chat.sentAt?rec.at-S.chat.sentAt:0;
   const h=document.getElementById('chat-head');if(h){h.classList.remove('flash');void h.offsetWidth;h.classList.add('flash');}
   const doneAt=S.chat.doneAt;setTimeout(()=>{if(S.chat?.doneAt===doneAt)renderComposer();},8100);}
@@ -410,7 +461,7 @@ async function fetchTerminal(quiet=false){
  if(!S.chat?.agent){if(!quiet)toast('这条历史没有在线终端');return;}const epoch=S.epoch;
  // Polls skip while a read for this chat is still out: on a slow link they would pile up behind each other.
  if(quiet&&S.reading===epoch)return;S.reading=epoch;
- try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;applyReadStatus(r.agent_status);qaScreen(r);
+ try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;applyReadStatus(r.agent_status);qaScreen(r);modeScreen(r);
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
   const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;const c=document.getElementById('confirm-screen');if(c){c.textContent=tail(r.text,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
   if(!S.chat.record&&S.chatMode==='conversation')paintTimeline();}
@@ -425,26 +476,23 @@ function agentSwitcher(){
  if(S.chat?.record?.parent)menuItem(box,'返回父会话',async()=>{try{const r=await remote('catalog',{thread:S.chat.record.parent,...(S.chat.record.remote?{remote:S.chat.record.remote}:{})});if(r.records.length)openRecord(r.records[0],true);else toast('没找到父会话记录');}catch(e){error(e);}},'back');
  box.append(el('div','section-label','在线 Agent'));
  if(!S.agents.length)box.append(el('p','fine','还没读到在线 Agent，回到列表刷新一下。'));
- const current=S.chat?.agent?agentKey(S.chat.agent):'';const order={blocked:0,working:1};
- sortAgents(S.agents).sort((x,y)=>(order[x.agent_status]??2)-(order[y.agent_status]??2)).forEach(a=>{const k=agentKey(a),here=k===current;
+ const current=S.chat?.agent?agentKey(S.chat.agent):'';const order={blocked:0,working:1,kids:1};
+ sortAgents(S.agents).sort((x,y)=>(order[agentState(x)]??2)-(order[agentState(y)]??2)).forEach(a=>{const k=agentKey(a),here=k===current;
   const b=btn('','menu-item agent-pick'+(here?' current':''),()=>{closeSheet();if(!here)openAgent(a);});if(here)b.setAttribute('aria-current','true');
   b.append(avatar(a.agent,stateTone(a)));const t=el('span','grow');t.append(el('span','menu-label',titleOf(a)),el('small','',(here?'当前 · ':'')+providerName(a.agent)+(projectOf(a)?' · '+projectOf(a):'')));b.append(t);
-  if(S.unread.has(k))b.append(el('span','unread-dot'));b.append(el('span','badge '+stateTone(a),stateLabel(a)));box.append(b);});
- box.append(el('div','section-label','这段对话的子 Agent'+(S.children.length?' · '+S.children.length:'')));
- if(!S.children.length){box.append(el('p','fine','这段对话里还没有子 Agent。'));return;}
- const child=r=>{const b=btn('','menu-item',()=>{closeSheet();openRecord(r,true);},'branch');b.append(el('span','grow menu-label',(r.role||r.title)+' · '+r.thread.slice(0,8)));return b;};
- // Long runs of sub-agents show the latest five; the rest are one tap away.
- const kids=el('div');const fill=list=>kids.replaceChildren(...list.map(child));box.append(kids);
- if(S.children.length>6){fill(S.children.slice(-5));const all=btn('显示全部 '+S.children.length+' 个','link-btn',()=>{all.remove();fill(S.children);});box.append(all);}else fill(S.children);}
+  if(S.unread.has(k))b.append(el('span','unread-dot'));b.append(el('span','badge '+stateTone(a),agentState(a)==='kids'?'子 Agent · '+kidsRunning(a):stateLabel(a)));box.append(b);});
+ // This conversation's sub-agents, running first, live while the sheet is open (kids.js).
+ kidsSection(box);}
 function chatMenu(){
  const box=sheet('对话操作');
  menuItem(box,'在对话里搜索',findOpen,'search','消息、过程和命令输出');
  menuItem(box,'刷新对话',()=>{S.paused=false;fetchHistory(false,true);},'refresh');
  menuItem(box,S.paused?'恢复自动更新':'暂停自动更新',()=>{S.paused=!S.paused;toast(S.paused?'自动更新已暂停':'自动更新已恢复');},S.paused?'refresh':'pause');
  menuItem(box,'选择其他历史记录',pickHistory,'history');
- if(S.chat.agent){menuItem(box,'终端按键',keyMenu,'terminal','↑ ↓ Enter Esc Ctrl+C');menuItem(box,'查看终端',()=>{S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal();},'terminal');}
+ if(S.chat.agent){menuItem(box,'终端按键',keyMenu,'terminal','↑ ↓ Enter Esc Ctrl+C'+(modeAgent(S.chat.agent)?' Shift+Tab':''));menuItem(box,'查看终端',()=>{S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal();},'terminal');}
  closeChatMenu(box);}
-function keyMenu(){const box=sheet('终端按键');box.append(el('p','fine','先看一眼终端：Enter 可能会批准当前操作。'));[['↑ 上','up'],['↓ 下','down'],['Enter 确认','enter'],['Esc 返回','esc'],['Ctrl+C 中断','ctrl+c']].forEach(([t,key])=>{const b=btn(t,'menu-item',()=>{closeSheet();sendKey(key,t);});box.append(b);});}
+function keyMenu(){const box=sheet('终端按键');box.append(el('p','fine','先看一眼终端：Enter 可能会批准当前操作。'));[['↑ 上','up'],['↓ 下','down'],['Enter 确认','enter'],['Esc 返回','esc'],['Ctrl+C 中断','ctrl+c']].forEach(([t,key])=>{const b=btn(t,'menu-item',()=>{closeSheet();sendKey(key,t);});box.append(b);});
+ if(modeAgent(S.chat?.agent)){const b=btn('Shift+Tab 切换模式','menu-item',()=>{closeSheet();modeCycle();});const why=modeBlockedWhy(S.chat.agent);b.disabled=!!why;if(why)b.title=why;box.append(b);}}
 async function pickHistory(){
  const targetAgent=S.chat?.agent;const box=sheet('选择历史记录');box.append(el('p','fine','选中后先只读打开，不会把消息发给其他 Agent。'));const list=el('div','pick-list');let requestNumber=0;
  async function search(query=''){const token=++requestNumber;list.replaceChildren(el('div','loading','读取中…'));

@@ -120,8 +120,8 @@ class GlanceTests(unittest.TestCase):
         self.write("claude", rel, filler + [claude("user", "最新任务"), claude("assistant", [{"type": "text", "text": "完成"}])])
         reads = []
         real = bridge.glance_tail
-        def spy(path, provider, window):
-            reads.append(window); return real(path, provider, window)
+        def spy(path, provider, window, modes=None):
+            reads.append(window); return real(path, provider, window, modes)
         with patch.object(bridge, "glance_tail", side_effect=spy):
             out = self.ask(self.claude_item(rel))["default/a"]
         self.assertEqual(out["reply"]["text"], "完成")

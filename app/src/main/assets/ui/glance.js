@@ -10,20 +10,21 @@ function glanceDevice(){const d=cacheDevice()||(S.demo?'demo':'');if(d!==GL.dev)
 function glanceOf(a){glanceDevice();return GL.map.get(agentKey(a))||null;}
 function glanceAt(a){const g=glanceOf(a);const d=toDate(g?.at)||(g?.modified?toDate(g.modified):null);return d?+d:0;}
 // What to ask the bridge for: local matched transcripts only (record id + native thread).
+// Every item also asks for the agent's sub-agents (kids.js; ch panes are asked separately there).
 function glanceItem(a){
- if(S.demo)return {key:agentKey(a)};
+ if(S.demo)return kidsGlance(a,{key:agentKey(a)});
  const ref=a.history_ref,rec=ref?.record;if(!ref||ref.status!=='matched'||ref.remote||rec?.remote)return null;
  const record_id=ref.record_id||rec?.id,thread=ref.thread||rec?.thread;if(!record_id||!thread||!['claude','codex'].includes(a.agent))return null;
  const g=GL.map.get(agentKey(a));const item={key:agentKey(a),provider:a.agent,thread,record_id,cwd:rec?.cwd||a.foreground_cwd||a.cwd||''};
- if(g?.stamp)item.stamp=g.stamp;return item;}
+ if(g?.stamp)item.stamp=g.stamp;return kidsGlance(a,item);}
 // all=false (status poll): only agents that are busy, changed state or have nothing yet.
 async function glanceRefresh(all=false){
- const dev=glanceDevice();if(GL.busy||GL.unsupported||!dev||!(S.device||S.demo)||!S.agents.length||!S.session)return;
- const items=S.agents.filter(a=>{if(all)return true;const g=GL.map.get(agentKey(a));return !g||g.status!==(a.agent_status||'')||['working','blocked'].includes(a.agent_status);}).map(glanceItem).filter(Boolean).slice(0,40);
+ const dev=glanceDevice();if(!S.demo&&dev&&S.device&&S.session)setTimeout(kidsRemoteRefresh,0);if(GL.busy||GL.unsupported||!dev||!(S.device||S.demo)||!S.agents.length||!S.session)return;
+ const items=S.agents.filter(a=>{if(all)return true;const g=GL.map.get(agentKey(a));return !g||g.status!==(a.agent_status||'')||['working','blocked'].includes(a.agent_status)||kidsWanted(a);}).map(glanceItem).filter(Boolean).slice(0,40);
  if(!items.length)return;GL.busy=true;GL.at=Date.now();const session=S.session,status=new Map(S.agents.map(a=>[agentKey(a),a.agent_status||'']));
  try{const r=await remote('glance',{items});if(session!==S.session||dev!==GL.dev)return;let changed=false;
   for(const [k,v] of Object.entries(r?.previews||{})){
-   if(!v||typeof v!=='object')continue;const old=GL.map.get(k);
+   if(!v||typeof v!=='object')continue;kidsTake(k,v.kids);if(v.kids_only)continue;const old=GL.map.get(k);
    if(v.same){if(old)old.status=status.get(k)||'';continue;}
    // Nothing to show (yet): remember that too, so an idle agent is not asked every poll.
    if(v.missing){if(old&&!old.missing)changed=true;GL.map.set(k,{missing:true,status:status.get(k)||''});continue;}

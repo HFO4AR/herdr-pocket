@@ -19,6 +19,10 @@ VERSION = "0.6.0"
 LIMIT = 65536
 
 
+# Keys the phone may press in an agent pane. "shift+tab" is Herdr's name for Back-Tab (ESC [ Z).
+AGENT_KEYS = ("up", "down", "left", "right", "enter", "esc", "ctrl+c", "shift+tab")
+
+
 class BridgeError(Exception):
     pass
 
@@ -207,8 +211,15 @@ def mutate(request, prefix, agent, state_dir):
                                       + (prompt_files(files, request, prefix, agent) if files is not None else []))
             args = ["agent", "prompt", agent["pane_id"], text]
         elif op == "key":
-            if key not in ("up", "down", "left", "right", "enter", "esc", "ctrl+c"):
+            if key not in AGENT_KEYS:
                 raise BridgeError("Unsupported key")
+            if key == "shift+tab":
+                # Shift+Tab switches the agent's own mode. On a permission dialog Claude takes it as
+                # "yes, and don't ask again", so it is only sent while no question or approval waits.
+                if agent.get("agent") not in ("claude", "codex"):
+                    raise BridgeError("没发出去：只有 Claude 和 Codex 能用 Shift+Tab 切换模式")
+                if agent.get("agent_status") not in ("idle", "done", "working"):
+                    raise BridgeError("没发出去：Agent 正等你确认，这时按 Shift+Tab 可能直接批准；先处理完再切换")
             args = ["agent", "send-keys", agent["pane_id"], key]
         elif op == "exitAgent":
             # The command is chosen here from the agent kind; the phone sends none.
@@ -629,7 +640,7 @@ def remote_history_page(request, catalog=None):
     if not isinstance(follow,bool): raise BridgeError("Invalid follow_active")
     selected=dict(request)
     if follow and "before" not in request and current: selected["record_id"]=current["id"]
-    result=history_page(selected,catalog)
+    result=attach_kids(history_page(selected,catalog),catalog,selected)
     result["active_status"]=active
     if current: result["active_record"]=public_record(current)
     result["active_changed"]=selected["record_id"]!=request["record_id"]
@@ -767,6 +778,7 @@ def remote_dispatch(request):
         try: return remote_transcript_image(request)
         except BridgeError as exc: return {"image_error": str(exc)[:200]}
     if op == "catalog": return {"records": [public_record(x) for x in scoped_records(request.get("provider", "claude"), request["workspace"], 100)]}
+    if op == "kids": return remote_kids_main(request.get("items"))
     if op == "fileView": return view_file(request.get("path"), request.get("cwd"), view_roots(request.get("record_id"), request.get("provider", "claude"), request.get("workspace")))
     return {"error": "unknown remote op"}
 
@@ -851,10 +863,14 @@ def remote_catalog(route, context):
     return [wrap_remote_record(x, route, context) for x in data.get("records", [])]
 
 
-def route_for_context(context):
+def route_for_context(context, memo=None):
     if not isinstance(context,dict): raise BridgeError("Invalid remote history context")
-    prefix = select_session(context)
-    found = agents(prefix)
+    # memo: one Herdr session check and agent list for many panes of one request.
+    if memo is None: memo = {}
+    name = json.dumps(context.get("session"))
+    if name not in memo:
+        prefix = select_session(context); memo[name] = (prefix, agents(prefix))
+    prefix, found = memo[name]
     agent = next((a for a in found if a.get("pane_id")==context.get("target") and a["identity"]==context.get("identity")),None)
     if not agent: raise BridgeError("远端窗格已改变，请刷新会话列表")
     info = call(prefix+["pane","process-info","--pane",agent["pane_id"]]).get("process_info",{})
@@ -896,6 +912,8 @@ def remote_history_request(request):
     result["record"]=wrap_remote_record(result["record"],route,context)
     if result.get("active_record"): result["active_record"]=wrap_remote_record(result["active_record"],route,context)
     result["children"]=[wrap_remote_record(x,route,context) for x in result["children"]]
+    if isinstance(result.get("kids"),dict) and isinstance(result["kids"].get("items"),list):
+        result["kids"]["items"]=[wrap_remote_record(x,route,context) if x.get("id") else x for x in result["kids"]["items"] if isinstance(x,dict)]
     return result
 
 def text_content(value):
@@ -1262,8 +1280,9 @@ def glance_edits(item, files):
         files.add(str(args.get("file_path") or args.get("notebook_path")))
 
 
-def glance_tail(path, provider, window):
-    """Normalized messages from the last `window` bytes, complete lines only."""
+def glance_tail(path, provider, window, modes=None):
+    """Normalized messages from the last `window` bytes, complete lines only. With `modes`, the
+    newest mode settings the transcript recorded in that window are collected into it."""
     size = path.stat().st_size
     with path.open("rb") as stream:
         start = max(0, size - window)
@@ -1274,7 +1293,9 @@ def glance_tail(path, provider, window):
     for line in data.splitlines():
         try:
             row = json.loads(line)
-            if isinstance(row, dict): items.extend(normalize_record(row, provider, 0))
+            if isinstance(row, dict):
+                items.extend(normalize_record(row, provider, 0))
+                if modes is not None: transcript_modes(row, provider, modes)
         except (ValueError, TypeError, AttributeError): continue
     return items, start == 0
 
@@ -1341,24 +1362,568 @@ def glance_path(item):
 def glance(request):
     items = request.get("items")
     if not isinstance(items, list) or len(items) > GLANCE_ITEMS: raise BridgeError("Invalid glance items")
-    out = {}
+    out, far = {}, []
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("key"), str) or len(item["key"]) > 200: continue
         key = item["key"]
+        # A ch pane's transcript is on the other computer: only its sub-agents are read there.
+        if isinstance(item.get("remote"), dict):
+            if item.get("kids"): far.append(item)
+            continue
         try:
             path = glance_path(item)
             if not path: out[key] = {"missing": True}; continue
             stat = path.stat(); stamp = "%d:%d" % (stat.st_mtime_ns, stat.st_size)
-            if item.get("stamp") == stamp: out[key] = {"same": True, "stamp": stamp}; continue
-            for window in GLANCE_WINDOWS:
-                messages, whole = glance_tail(path, item["provider"], window)
-                summary = glance_summary(messages)
-                if summary.get("reply") or whole: break
-            summary.update(stamp=stamp, modified=stat.st_mtime)
-            out[key] = summary
+            # The background watcher asks about sub-agents only ("preview": false).
+            if item.get("preview") is False: out[key] = {"kids_only": True}
+            elif item.get("stamp") == stamp: out[key] = {"same": True, "stamp": stamp}
+            else:
+                for window in GLANCE_WINDOWS:
+                    modes = {}
+                    messages, whole = glance_tail(path, item["provider"], window, modes)
+                    summary = glance_summary(messages)
+                    if summary.get("reply") or whole: break
+                if item["provider"] == "codex":
+                    goal = codex_goal(item["thread"])
+                    if goal: modes["goal"] = goal
+                if modes: summary["modes"] = dict(modes, source="transcript")
+                summary.update(stamp=stamp, modified=stat.st_mtime)
+                out[key] = summary
+            # Sub-agents change without the parent transcript changing, so they come every time.
+            if item.get("kids"): out[key]["kids"] = kids_report(path, item["provider"], item["thread"])
         except OSError:
             out[key] = {"missing": True}
+    try:
+        if far: out.update({k: dict(v, kids_only=True) for k, v in remote_kids(far).items()})
+    finally: kids_save()
     return {"previews": out}
+
+
+# ─── Sub-agents ("kids"): who is still running under a parent ───────────────
+# Herdr reports the parent pane only: a Claude that launched background agents, or a Codex
+# waiting on spawned ones, reads "idle"/"done" while its sub-agents still work. This answers,
+# read-only and from files alone, which sub-agents a transcript has and which still run.
+#   Claude: an Agent/Task tool_use opens a sub-agent; a plain tool_result closes it, an
+#     "Async agent launched" result keeps it open until a <task-notification> naming its
+#     task-id / tool-use-id arrives (queued or delivered). SendMessage to its id reopens it.
+#     Each sub-agent writes <session>/subagents/agent-<id>.jsonl (+ .meta.json with toolUseId).
+#   Codex: spawn_agent / followup_task open a task name; an agent_message from that task with
+#     "Message Type: FINAL_ANSWER" closes it. Each sub-agent is a forked rollout whose
+#     session_meta names the parent thread; task_started / task_complete mark its turns.
+# The child's own tail decides first (finished turn = not running); a child written in the last
+# KIDS_ACTIVE seconds runs; otherwise the parent's open/closed record decides, bounded in time so
+# a crashed run never shows as running forever. Parents are scanned incrementally (byte offset
+# kept in a small state file), children by stat + a short tail, so a poll costs milliseconds.
+KIDS_ACTIVE = 90
+KIDS_QUIET = 1800          # child stopped mid-turn and the parent said nothing: believe it this long
+KIDS_OPEN = 6 * 3600       # parent still waits for it (e.g. a long command in the child)
+KIDS_STARTING = 600        # launched, no transcript yet
+KIDS_LIST = 12
+KIDS_TAIL = 65_536
+KIDS_SCAN = 32_000_000     # parent bytes read per call; a longer backlog continues next call
+KIDS_EVENTS = 400
+KIDS_PARENTS = 64
+KIDS_HEADS = 4000
+KIDS_DAYS = 10
+# Cheap byte filters: only lines that can matter are JSON-parsed (Claude writes compact JSON).
+CLAUDE_KID_MARKS = re.compile(rb'"name":\s*"(?:Agent|Task|SendMessage)"|<task-notification>')
+CODEX_KID_MARKS = re.compile(rb"spawn_agent|followup_task|FINAL_ANSWER")
+CLAUDE_TURN_MARK = re.compile(rb'"type":\s*"(?:user|assistant)"')
+NOTE_RE = re.compile(r"<task-notification>\s*<task-id>([\w.-]{1,80})</task-id>\s*(?:<tool-use-id>([\w.-]{1,120})</tool-use-id>)?")
+TOOL_RESULT_ID_RE = re.compile(rb'"tool_use_id":\s*"([\w.-]{1,120})"')
+CODE_SPAWN_RE = re.compile(r"tools\.(spawn_agent|followup_task)\(\s*\{[^}]{0,600}?\b(?:task_name|target)\"?\s*:\s*\"([^\"]{1,200})\"")
+_kids_state = None
+
+
+def kids_state_path():
+    return Path.home() / ".local/state/herdr-pocket/kids-v1.json"
+
+
+def kids_state():
+    global _kids_state
+    if _kids_state is None:
+        try: value = json.loads(kids_state_path().read_text())
+        except (OSError, ValueError): value = None
+        if not isinstance(value, dict): value = {}
+        for part in ("parents", "heads", "meta"):
+            if not isinstance(value.get(part), dict): value[part] = {}
+        _kids_state = dict(value, dirty=False)
+    return _kids_state
+
+
+def kids_save():
+    state = _kids_state
+    if not state or not state.get("dirty"): return
+    parents = state["parents"]
+    for key in sorted(parents, key=lambda k: parents[k].get("used", 0))[:max(0, len(parents) - KIDS_PARENTS)]: del parents[key]
+    for part, limit in (("heads", KIDS_HEADS), ("meta", 600)):
+        extra = len(state[part]) - limit
+        for key in list(state[part])[:max(0, extra)]: del state[part][key]
+    path = kids_state_path()
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temp = path.with_name("." + os.urandom(6).hex() + ".part")
+        with open(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as out:
+            json.dump({k: state[k] for k in ("parents", "heads", "meta")}, out)
+        os.replace(temp, path)
+        state["dirty"] = False
+    except OSError:
+        try: temp.unlink()
+        except (OSError, UnboundLocalError): pass
+
+
+def iso_epoch(value):
+    if not isinstance(value, str) or not value: return 0.0
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError: return 0.0
+
+
+def kid_event(events, key, state, at, **extra):
+    old = events.pop(key, None) or {}
+    events[key] = dict(old, s=state, at=at, **{k: v for k, v in extra.items() if v})
+    if len(events) > KIDS_EVENTS:
+        for k in [k for k in events if events[k]["s"] == "closed"][:len(events) - KIDS_EVENTS] or list(events)[:len(events) - KIDS_EVENTS]:
+            del events[k]
+
+
+def claude_kid_row(row, events):
+    at = iso_epoch(row.get("timestamp"))
+    kind = row.get("type")
+    note = None
+    if kind == "queue-operation" and row.get("operation") == "enqueue": note = row.get("content")
+    elif kind == "attachment" and isinstance(row.get("attachment"), dict) and row["attachment"].get("type") == "queued_command": note = row["attachment"].get("prompt")
+    elif kind == "user":
+        content = (row.get("message") or {}).get("content")
+        if isinstance(content, str) and content.lstrip().startswith("<task-notification>"): note = content
+        elif isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict): continue
+                if block.get("type") == "text" and str(block.get("text", "")).lstrip().startswith("<task-notification>"): note = block["text"]
+                if block.get("type") != "tool_result" or block.get("tool_use_id") not in events: continue
+                use = block["tool_use_id"]
+                if events[use].get("kind") == "message": continue
+                meta = row.get("toolUseResult") if isinstance(row.get("toolUseResult"), dict) else {}
+                text = text_content(block.get("content", "")) if not isinstance(block.get("content"), str) else block["content"]
+                launched = meta.get("isAsync") is True or meta.get("status") == "async_launched" or text.startswith("Async agent launched")
+                agent = meta.get("agentId") or (re.search(r"agentId: ([\w-]{1,80})", text) or [None, None])[1]
+                if launched and not block.get("is_error"): kid_event(events, use, "open", events[use]["at"], agent=agent)
+                else: kid_event(events, use, "closed", at, agent=agent)
+    elif kind == "assistant":
+        content = (row.get("message") or {}).get("content")
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict) or block.get("type") != "tool_use": continue
+            args = block.get("input") if isinstance(block.get("input"), dict) else {}
+            if block.get("name") in ("Agent", "Task") and block.get("id"):
+                kid_event(events, block["id"], "open", at, d=str(args.get("description") or "")[:100], role=str(args.get("subagent_type") or "")[:60])
+            elif block.get("name") == "SendMessage" and isinstance(args.get("to"), str):
+                for key, value in events.items():
+                    if value.get("agent") == args["to"]:
+                        kid_event(events, key, "open", at); break
+    if isinstance(note, str):
+        found = NOTE_RE.search(note)
+        if found:
+            task, use = found.group(1), found.group(2)
+            key = use if use in events else next((k for k, v in events.items() if v.get("agent") == task), None)
+            if key: kid_event(events, key, "closed", at)
+
+
+def codex_kid_row(row, events):
+    if row.get("type") != "response_item": return
+    value = row.get("payload") or {}
+    at = iso_epoch(row.get("timestamp"))
+    kind = value.get("type")
+    if kind in ("function_call", "custom_tool_call"):
+        name, raw = value.get("name"), value.get("arguments", value.get("input", ""))
+        calls = []
+        if name in ("spawn_agent", "followup_task"):
+            try: args = json.loads(raw) if isinstance(raw, str) else raw
+            except ValueError: args = {}
+            if isinstance(args, dict): calls.append(args.get("task_name") or args.get("target"))
+        elif isinstance(raw, str):
+            calls.extend(m.group(2) for m in CODE_SPAWN_RE.finditer(raw))
+        for task in calls:
+            if isinstance(task, str) and task.strip("/"): kid_event(events, task.rstrip("/").rsplit("/", 1)[-1], "open", at)
+    elif kind == "agent_message":
+        author = str(value.get("author") or "").rstrip("/").rsplit("/", 1)[-1]
+        if author in events and "Message Type: FINAL_ANSWER" in text_content(value.get("content", [])):
+            kid_event(events, author, "closed", at)
+
+
+def kid_parent_events(path, provider):
+    """Open/closed sub-agent records from the parent transcript, read incrementally."""
+    state = kids_state(); info = path.stat()
+    key = hashlib.sha256((provider + ":" + str(path)).encode()).hexdigest()[:32]
+    entry = state["parents"].get(key)
+    if not isinstance(entry, dict) or entry.get("ino") != info.st_ino or entry.get("off", 0) > info.st_size or not isinstance(entry.get("ev"), dict):
+        entry = {"ino": info.st_ino, "off": 0, "ev": {}}
+    entry["used"] = time.time()
+    state["parents"][key] = entry; state["dirty"] = True
+    if entry["off"] >= info.st_size: return entry["ev"]
+    marks, handle_row = (CLAUDE_KID_MARKS, claude_kid_row) if provider == "claude" else (CODEX_KID_MARKS, codex_kid_row)
+    events = entry["ev"]
+    with path.open("rb") as stream:
+        stream.seek(entry["off"])
+        data = stream.read(min(KIDS_SCAN, info.st_size - entry["off"]))
+    end = data.rfind(b"\n") + 1
+    for line in data[:end].split(b"\n"):
+        if not line: continue
+        wanted = bool(marks.search(line))
+        if not wanted and provider == "claude" and events and b'"tool_use_id"' in line:
+            wanted = any(m.decode() in events for m in TOOL_RESULT_ID_RE.findall(line))
+        if not wanted: continue
+        try: row = json.loads(line)
+        except (ValueError, UnicodeError): continue
+        if isinstance(row, dict):
+            try: handle_row(row, events)
+            except (AttributeError, TypeError): continue
+    entry["off"] += end
+    return events
+
+
+def claude_kid_tail(path):
+    """"done" when the child's last turn ended, "busy" mid-turn, "" when unreadable."""
+    size = path.stat().st_size
+    with path.open("rb") as stream:
+        stream.seek(max(0, size - KIDS_TAIL)); data = stream.read(KIDS_TAIL)
+    for line in reversed(data.split(b"\n")):
+        if not CLAUDE_TURN_MARK.search(line): continue
+        try: row = json.loads(line)
+        except (ValueError, UnicodeError): continue
+        if not isinstance(row, dict) or row.get("type") not in ("user", "assistant") or row.get("isMeta"): continue
+        if row["type"] == "user": return "busy"
+        message = row.get("message") or {}
+        content = message.get("content") if isinstance(message.get("content"), list) else []
+        if any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content): return "busy"
+        return "done" if message.get("stop_reason") in ("end_turn", "stop_sequence", "max_tokens", "refusal") else "busy"
+    return ""
+
+
+def codex_kid_tail(path):
+    size = path.stat().st_size
+    with path.open("rb") as stream:
+        stream.seek(max(0, size - KIDS_TAIL * 4)); data = stream.read(KIDS_TAIL * 4)
+    for line in reversed(data.split(b"\n")):
+        if b"task_started" not in line and b"task_complete" not in line and b"turn_aborted" not in line: continue
+        try: row = json.loads(line)
+        except (ValueError, UnicodeError): continue
+        kind = (row.get("payload") or {}).get("type") if isinstance(row, dict) and row.get("type") == "event_msg" else None
+        if kind == "task_started": return "busy"
+        if kind in ("task_complete", "turn_aborted"): return "done"
+    return ""
+
+
+def kid_running(age, mtime, tail, parent):
+    if tail == "done": return False
+    if parent and parent.get("s") == "closed" and parent.get("at", 0) >= mtime - 5: return False
+    if age < KIDS_ACTIVE: return True
+    opened = bool(parent and parent.get("s") == "open")
+    if tail == "busy": return age < (KIDS_OPEN if opened else KIDS_QUIET)
+    return opened and age < KIDS_OPEN
+
+
+def kid_meta(provider, root, path, info):
+    """Catalog metadata for a child, cached once its title is final (titles do not change)."""
+    state = kids_state(); rel = str(path.relative_to(root))
+    saved = state["meta"].get(rel)
+    if isinstance(saved, dict) and saved.get("ino") == info.st_ino and isinstance(saved.get("m"), dict): meta = saved["m"]
+    else:
+        meta = record_meta(path, provider)
+        if not meta: return None
+        if meta["title"] not in (meta.get("role"), "") and not meta["title"].startswith("对话 · "):
+            state["meta"][rel] = {"ino": info.st_ino, "m": meta}; state["dirty"] = True
+    key = hashlib.sha256((provider + ":" + rel).encode()).hexdigest()
+    return dict(meta, id=key, modified=info.st_mtime, size=info.st_size)
+
+
+def claude_kid_link(child):
+    """The parent's tool_use id for a Claude sub-agent, from its .meta.json."""
+    side = child.with_name(child.stem + ".meta.json")
+    try:
+        if not side.is_symlink() and side.stat().st_size <= 65536:
+            return str(json.loads(side.read_text()).get("toolUseId") or "")
+    except (OSError, ValueError, AttributeError): pass
+    return ""
+
+
+def claude_kid_files(path):
+    folder = path.parent / path.stem / "subagents"
+    try: names = list(folder.glob("agent-*.jsonl"))
+    except OSError: return []
+    return [(child, claude_kid_link(child), child.stem.removeprefix("agent-")) for child in names if not child.is_symlink()]
+
+
+def kid_self(entry, now=None):
+    """Whether a sub-agent record itself still runs: its own tail, then its parent's record."""
+    path, provider = entry["_path"], entry["provider"]
+    info = path.stat(); now = now or time.time()
+    tail = claude_kid_tail(path) if provider == "claude" else codex_kid_tail(path)
+    parent = None
+    try:
+        if provider == "claude" and path.parent.name == "subagents":
+            home = path.parent.parent
+            source = home.parent / (home.name + ".jsonl")
+            if source.is_file() and not source.is_symlink():
+                events = kid_parent_events(source, provider); link = claude_kid_link(path); agent = path.stem.removeprefix("agent-")
+                parent = events.get(link) or next((v for v in events.values() if v.get("agent") == agent), None)
+        elif provider == "codex" and re.fullmatch(UUID_RE, str(entry.get("parent") or "")):
+            root = provider_root(provider)
+            found = [p for p in root.glob("*/*/*/rollout-*" + entry["parent"] + ".jsonl") if not p.is_symlink()] if root else []
+            if found: parent = kid_parent_events(found[0], provider).get(entry.get("role") or "")
+    except OSError: parent = None
+    return {"running": kid_running(now - info.st_mtime, info.st_mtime, tail, parent)}
+
+
+def codex_kid_files(path, thread, root):
+    """Rollouts forked from this thread: same day or later folders, newer file names only."""
+    state = kids_state(); out = []
+    try:
+        day = path.parent; start = time.mktime(time.strptime("/".join(day.parts[-3:]), "%Y/%m/%d"))
+    except (ValueError, OverflowError): return out
+    for n in range(KIDS_DAYS):
+        folder = root / time.strftime("%Y/%m/%d", time.localtime(start + n * 86400 + 3600))
+        if not folder.is_dir():
+            if start + n * 86400 > time.time(): break
+            continue
+        for child in folder.glob("rollout-*.jsonl"):
+            if child == path or (folder == day and child.name < path.name) or child.is_symlink(): continue
+            rel = str(child.relative_to(root)); parent = state["heads"].get(rel)
+            if parent is None:
+                parent = ""
+                try:
+                    with child.open("rb") as stream: head = json.loads(stream.readline(2_000_001))
+                    value = head.get("payload", {}) if head.get("type") == "session_meta" else {}
+                    source = value.get("source") if isinstance(value.get("source"), dict) else {}
+                    sub = source.get("subagent") if isinstance(source.get("subagent"), dict) else {}
+                    spawn = sub.get("thread_spawn") if isinstance(sub.get("thread_spawn"), dict) else {}
+                    if sub.get("other") not in ("guardian", "review"):
+                        parent = str(value.get("parent_thread_id") or spawn.get("parent_thread_id") or "")
+                except (OSError, ValueError, AttributeError): continue
+                state["heads"][rel] = parent; state["dirty"] = True
+            if parent == thread: out.append((child, "", ""))
+    return out
+
+
+def kids_report(path, provider, thread, now=None):
+    """{total, running, items[≤KIDS_LIST]: record + running/state}. Running first, then newest."""
+    root = provider_root(provider)
+    if not root or not path: return {"total": 0, "running": 0, "items": []}
+    now = now or time.time()
+    events = kid_parent_events(path, provider)
+    files = claude_kid_files(path) if provider == "claude" else codex_kid_files(path, thread, root)
+    rows, seen = [], set()
+    for child, link, agent in files:
+        try:
+            info = child.stat()
+            parent = events.get(link) or next((v for v in events.values() if agent and v.get("agent") == agent), None)
+            tail = claude_kid_tail(child) if provider == "claude" else codex_kid_tail(child)
+        except OSError: continue
+        if provider == "codex":
+            meta = kid_meta(provider, root, child, info)
+            if not meta: continue
+            parent = events.get(meta.get("role") or "")
+            if parent: seen.add(meta["role"])
+        else:
+            meta = None
+            if link: seen.add(link)
+            if parent and parent.get("agent"): seen.add(parent["agent"])
+        running = kid_running(now - info.st_mtime, info.st_mtime, tail, parent)
+        rows.append({"running": running, "at": info.st_mtime, "path": child, "info": info, "meta": meta})
+    starting = [dict(provider=provider, thread="", parent=thread, id="", cwd="", title=v.get("d") or "子 Agent", role=v.get("role") or "",
+                     modified=v["at"], running=True, state="starting")
+                for k, v in events.items() if v.get("s") == "open" and k not in seen and v.get("agent") not in seen and now - v.get("at", 0) < KIDS_STARTING]
+    rows.sort(key=lambda r: (not r["running"], -r["at"]))
+    items = list(starting)
+    for row in rows[:max(0, KIDS_LIST - len(items))]:
+        meta = row["meta"] or kid_meta(provider, root, row["path"], row["info"])
+        if meta: items.append(dict(public_record(meta), running=row["running"], state="running" if row["running"] else "done"))
+    running = sum(1 for r in rows if r["running"]) + len(starting)
+    # Same stamp = same answer: which sub-agents exist, which run, how the newest ones look.
+    stamp = hashlib.sha256(json.dumps([path.stat().st_size, [(r["path"].name, r["running"]) for r in rows], [x.get("title") for x in items]],
+                                      ensure_ascii=False).encode()).hexdigest()[:20]
+    return {"total": len(rows) + len(starting), "running": running, "items": items, "stamp": stamp}
+
+
+def kids_for_item(item):
+    """Glance / remote entry: the report for one record named by provider, thread and record id."""
+    path = glance_path(item)
+    if not path: return None
+    report = kids_report(path, item["provider"], item["thread"])
+    if item.get("kids_stamp") == report["stamp"] and not report["running"]: return {"same": True}
+    return report
+
+
+def attach_kids(result, catalog, request):
+    """History pages also carry the record's sub-agents, so an open chat stays current."""
+    if "before" in request: return result
+    entry = next((x for x in catalog if x["id"] == request.get("record_id")), None)
+    if not entry: return result
+    try:
+        result["kids"] = kids_report(entry["_path"], entry["provider"], entry["thread"])
+        if entry.get("parent"): result["kid"] = kid_self(entry)
+    except OSError: pass
+    finally: kids_save()
+    return result
+
+
+def remote_kids(items):
+    """ch panes: one read per remote account (all its panes together), accounts in parallel,
+    through the same verified remote helper as history."""
+    out, groups, routes, memo = {}, {}, {}, {}
+    for item in items:
+        context = item["remote"]; key = item["key"]
+        try:
+            ckey = json.dumps(context, sort_keys=True)
+            if ckey not in routes: routes[ckey] = route_for_context(context, memo)
+            route = routes[ckey]
+        except (BridgeError, KeyError, TypeError) as exc:
+            out[key] = {"kids_error": str(exc)[:200]}; continue
+        prefix = "remote:" + route["key"] + ":"; record = item.get("record_id")
+        if not isinstance(record, str) or not record.startswith(prefix) or not re.fullmatch(r"[a-f0-9]{64}", record[len(prefix):]):
+            out[key] = {"kids_error": "Invalid remote history record"}; continue
+        group = groups.setdefault(json.dumps(route["ssh"]), {"route": route, "items": [], "places": {}})
+        group["items"].append({"key": key, "provider": item.get("provider"), "thread": item.get("thread"), "record_id": record[len(prefix):],
+                               "kids_stamp": item.get("kids_stamp")})
+        group["places"][key] = (route, context)
+    def run(group):
+        try: return remote_read(group["route"], {"op": "kids", "items": group["items"]}, 12).get("kids", {})
+        except BridgeError as exc: return exc
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(groups)))) as pool:
+        answers = list(pool.map(run, groups.values()))
+    for group, data in zip(groups.values(), answers):
+        for x in group["items"]:
+            if isinstance(data, BridgeError): out[x["key"]] = {"kids_error": str(data)[:200]}; continue
+            report = data.get(x["key"]) if isinstance(data, dict) else None
+            if not isinstance(report, dict): out[x["key"]] = {"kids_error": "远端没有返回子 Agent"}; continue
+            route, context = group["places"][x["key"]]
+            if isinstance(report.get("items"), list):
+                report["items"] = [wrap_remote_record(r, route, context) if r.get("id") else r for r in report["items"] if isinstance(r, dict)]
+            out[x["key"]] = {"kids": report}
+    return out
+
+
+def remote_kids_main(items):
+    """Runs on the other computer."""
+    out = {}
+    for item in items[:GLANCE_ITEMS] if isinstance(items, list) else []:
+        if not isinstance(item, dict) or not isinstance(item.get("key"), str): continue
+        try: out[item["key"]] = kids_for_item(item) or {"missing": True}
+        except OSError: out[item["key"]] = {"missing": True}
+    kids_save()
+    return {"kids": out}
+
+
+# ─── Agent modes ────────────────────────────────────────────────────────────
+# What the agent's own footer says about its mode, read from the same screen read the chat
+# already makes. Only the footer under the input box counts (never conversation text), and a
+# screen without that footer (a menu, a full-screen dialog) reports nothing rather than a guess.
+#
+# Claude Code (2.1.x) prints one permission mode under its input box and cycles it with
+# Shift+Tab: manual → accept edits → plan → [bypass, when started with it] → [auto, when
+# available] → manual. A /goal is separate: "◎ /goal active (3m)" sits next to the mode.
+#   ⏸ manual mode on · ← for agents
+#   ⏵⏵ accept edits on (shift+tab to cycle)
+#   ⏸ plan mode on (shift+tab to cycle) · ◎ /goal active (3m)
+#   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent
+# Codex (0.16x) cycles only its collaboration mode with Shift+Tab (Default ↔ Plan); Default
+# shows nothing, Plan shows "Plan mode (shift+tab to cycle)" at the right of the status line.
+# Approval presets (/approvals) are not on screen and Shift+Tab does not change them; the
+# transcript's turn_context records them (glance). A Codex goal is separate as well:
+# "Pursuing goal (5m)", "Goal paused (/goal resume)", …
+CLAUDE_MODES = {"manual mode": "default", "accept edits": "acceptEdits", "plan mode": "plan", "auto mode": "auto",
+                "bypass permissions": "bypassPermissions", "don't ask": "dontAsk"}
+CLAUDE_MODE_RE = re.compile(r"(?:⏵⏵|⏸)\s*(manual mode|accept edits|plan mode|auto mode|bypass permissions|don't ask)(?: on)?")
+CLAUDE_GOAL_RE = re.compile(r"/goal active(?: \(([^)]{1,20})\))?")
+CODEX_PLAN_RE = re.compile(r"\b(Plan|Pair Programming|Execute) mode\b(?: \(shift ?\+ ?tab to cycle\))?")
+CODEX_GOALS = (("Pursuing goal", "active"), ("Goal paused", "paused"), ("Goal stalled", "blocked"),
+               ("Goal hit usage limits", "usage_limited"), ("Goal unmet", "unmet"), ("Goal achieved", "complete"))
+CODEX_GOAL_RE = re.compile(r"(Pursuing goal|Goal paused|Goal stalled|Goal hit usage limits|Goal unmet|Goal achieved)(?: \(([^)]{1,30})\))?")
+CODEX_FOOTER_RE = re.compile(r"for shortcuts|esc to interrupt|Context \d+% used|% context left|to cycle\)|tab to queue")
+RULE_RE = re.compile(r"^\s*[─━]{8,}")
+
+
+def screen_lines(text):
+    lines = [x.rstrip() for x in str(text or "").split("\n")]
+    while lines and not lines[-1].strip(): lines.pop()
+    return lines[-60:]
+
+
+def claude_footer(lines):
+    """Lines under Claude's input box (two rules around a ❯ line), or None when no box is on screen."""
+    rules = [i for i, x in enumerate(lines) if RULE_RE.match(x)]
+    for j in reversed(rules):
+        before = [i for i in rules if i < j]
+        if before and any(x.lstrip().startswith("❯") for x in lines[before[-1] + 1:j]):
+            return lines[j + 1:j + 7]
+    return None
+
+
+def codex_footer(lines):
+    """Lines under Codex's composer (the last › line), when they look like its footer."""
+    for i in range(len(lines) - 1, max(-1, len(lines) - 25), -1):
+        if lines[i].lstrip().startswith("›"):
+            foot = lines[i + 1:i + 13]
+            return foot if any(CODEX_FOOTER_RE.search(x) for x in foot) else None
+    return None
+
+
+def screen_modes(text, provider):
+    """{agent, permission|collaboration, goal, cycle} from the footer, or None when it is not on screen."""
+    lines = screen_lines(text)
+    if provider == "claude":
+        foot = claude_footer(lines)
+        if foot is None: return None
+        joined = "\n".join(foot)
+        found = CLAUDE_MODE_RE.search(joined)
+        permission = CLAUDE_MODES[found.group(1)] if found else ("default" if "? for shortcuts" in joined else None)
+        goal = CLAUDE_GOAL_RE.search(joined)
+        return {"agent": "claude", "permission": permission,
+                "goal": {"state": "active", "elapsed": goal.group(1) or ""} if goal else None,
+                "cycle": "shift+tab to cycle" in joined or bool(found)}
+    if provider == "codex":
+        foot = codex_footer(lines)
+        if foot is None: return None
+        joined = "\n".join(foot)
+        found = CODEX_PLAN_RE.search(joined)
+        # A truncated status line ("…") may have pushed the right-aligned mode label out of view.
+        collaboration = found.group(1).lower().replace(" ", "_") if found else (None if any(x.endswith("…") for x in foot) else "default")
+        goal = CODEX_GOAL_RE.search(joined)
+        return {"agent": "codex", "collaboration": collaboration,
+                "goal": {"state": dict(CODEX_GOALS)[goal.group(1)], "elapsed": (goal.group(2) or "") if goal.group(1) in ("Pursuing goal", "Goal unmet", "Goal achieved") else ""} if goal else None,
+                "cycle": True}
+    return None
+
+
+def transcript_modes(row, provider, modes):
+    """Mode settings a transcript row records (the newest row wins): Claude writes permissionMode
+    on user entries; Codex writes collaboration mode and approval settings in each turn_context."""
+    if provider == "claude":
+        mode = row.get("permissionMode")
+        if isinstance(mode, str) and mode in CLAUDE_MODES.values(): modes["permission"] = mode; modes["at"] = row.get("timestamp") or ""
+        return
+    if row.get("type") != "turn_context" or not isinstance(row.get("payload"), dict): return
+    p = row["payload"]
+    collab = p.get("collaboration_mode")
+    if isinstance(collab, dict) and isinstance(collab.get("mode"), str) and re.fullmatch(r"[a-z_]{1,24}", collab["mode"]):
+        modes["collaboration"] = collab["mode"]
+    if isinstance(p.get("approval_policy"), str) and len(p["approval_policy"]) <= 24: modes["approval"] = p["approval_policy"]
+    sandbox = p.get("sandbox_policy")
+    if isinstance(sandbox, dict) and isinstance(sandbox.get("type"), str) and len(sandbox["type"]) <= 32: modes["sandbox"] = sandbox["type"]
+    modes["at"] = row.get("timestamp") or ""
+
+
+def codex_goal(thread):
+    """A Codex thread's goal from its own goals database (read-only), or None."""
+    files = sorted((Path.home() / ".codex").glob("goals_*.sqlite"))
+    if not files or not isinstance(thread, str) or not re.fullmatch(UUID_RE, thread): return None
+    try:
+        with closing(sqlite3.connect("file:" + uri_quote(str(files[-1])) + "?mode=ro", uri=True, timeout=0.5)) as db:
+            row = db.execute("SELECT status, objective, updated_at_ms FROM thread_goals WHERE thread_id=?", (thread,)).fetchone()
+    except sqlite3.Error: return None
+    if not row: return None
+    return {"state": str(row[0])[:24], "objective": glance_line(str(row[1] or ""), 120), "updated": (row[2] or 0) / 1000}
 
 
 # ─── Following one pane ─────────────────────────────────────────────────────
@@ -2656,7 +3221,7 @@ def handle(request, state_dir=None):
     if op in ("catalog", "history"):
         if request.get("remote") is not None: return remote_history_request(request)
         catalog = transcript_catalog()
-        if op == "history": return history_page(request, catalog)
+        if op == "history": return attach_kids(history_page(request, catalog), catalog, request)
         offset = request.get("offset", 0)
         if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0: raise BridgeError("Invalid catalog offset")
         query = request.get("query", "")
@@ -2712,8 +3277,9 @@ def handle(request, state_dir=None):
         return custom_commands(agent)
     if op == "read":
         # `menu: true` (after a slash command) parses a picker even when Herdr does not call it blocked.
-        return with_menu(read_screen(prefix, agent, 160), agent,
-                         request.get("menu") is True)
+        screen = with_menu(read_screen(prefix, agent, 160), agent, request.get("menu") is True)
+        screen["modes"] = screen_modes(screen.get("text", ""), agent.get("agent"))
+        return screen
     return mutate(request, prefix, agent, state_dir or Path.home() / ".local/state/herdr-pocket")
 
 

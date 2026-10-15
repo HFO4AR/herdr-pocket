@@ -108,7 +108,7 @@ function splitTab(){return S.tab==='live'||S.tab==='history';}
 
  // The list stays on screen while a chat is open, so status changes repaint it too — unless
  // you are typing in its search box, have a row swiped open, or a sheet is up.
- function listSig(){return S.tab+'|'+S.session+'|'+S.agents.map(a=>a.pane_id+'/'+a.identity+'/'+a.agent_status+'/'+titleOf(a)+(S.unread.has(agentKey(a))?'/u':'')).join(',');}
+ function listSig(){return S.tab+'|'+S.session+'|'+S.agents.map(a=>a.pane_id+'/'+a.identity+'/'+agentState(a)+'/'+(kidsOf(a)?.total||0)+'/'+titleOf(a)+(S.unread.has(agentKey(a))?'/u':'')).join(',');}
  function listBusy(){const f=L.frame,a=document.activeElement;return overlay.childElementCount>0||(a&&f.list.contains(a)&&/^(INPUT|TEXTAREA)$/.test(a.tagName))||!!f.list.querySelector('.swipe.open,.swipe.dragging');}
  function refreshList(force){
   if(!L.wide||!L.frame||!S.chat||!splitTab()||L.frame.root.dataset.mode!=='split')return;
@@ -154,5 +154,5 @@ function splitTab(){return S.tab==='live'||S.tab==='history';}
  // Only a change between one and two panes repaints, so this runs right away (no debounce:
  // nothing should be able to grab a node that is about to be replaced).
  addEventListener('resize',()=>{const w=layoutWide();if(w===L.wide){anchorW=innerWidth;return;}L.wide=w;relayout();});
- LAYOUT.relayout=relayout;LAYOUT.mark=markSelected;
+ LAYOUT.relayout=relayout;LAYOUT.mark=markSelected;LAYOUT.refreshList=refreshList;
 })();

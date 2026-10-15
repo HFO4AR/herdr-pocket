@@ -126,12 +126,7 @@
 /* Terminal screen */
 .term-head .avatar{width:34px;height:34px;border-radius:10px}
 .term-head .avatar svg{width:18px;height:18px}
-.terminal-keys .key{min-width:44px;min-height:40px;padding:0 10px;font-size:13px;font-family:var(--mono);border-radius:9px}
-.terminal-keys .arrow-key{font-size:16px;padding:0 8px}
-.terminal-keys .ctrl-key.on{background:var(--soft);border-color:var(--accent-raw);color:var(--accent);font-weight:700}
-.terminal-keys .enter-key{font-weight:600}
-.terminal-keys{scrollbar-width:none}
-.terminal-keys::-webkit-scrollbar{display:none}
+/* Key bar, dock and screen: terminals.css */
 .term-size{display:flex;align-items:center;gap:8px;min-height:52px;padding:4px 10px;font-size:15px}
 .term-size .secondary{min-width:52px;font-family:var(--mono)}
 

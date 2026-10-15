@@ -138,10 +138,10 @@ console.log('PASS: a tapped path opens a sheet with copy actions and the edits m
 
 // 6. Cached chat: no "已到记录起点" before the first fresh read.
 await page.evaluate(()=>{S.chat.cached=Date.now();S.more=false;paintTimeline();});
-assert.equal(await page.getByRole('button',{name:'已到记录起点',exact:true}).count(),0);
+assert.equal(await page.getByText('已到记录起点',{exact:true}).count(),0);
 assert.equal(await page.getByRole('button',{name:'加载更早消息',exact:true}).count(),0);
 await page.evaluate(()=>{S.chat.cached=0;paintTimeline();});
-await page.getByRole('button',{name:'已到记录起点',exact:true}).waitFor();
+await page.getByText('已到记录起点',{exact:true}).waitFor();
 console.log('PASS: paging button waits for the fresh read');
 
 // 7. Composer states: connecting (write but not send), busy (排队), idle.

@@ -26,7 +26,7 @@ function queueTransient(msg){return /停在一个提问或授权框|还没准备
 // New messages queue up while the agent is busy, and behind anything already waiting (order is kept).
 function queueWants(a,key){return !!a&&(['working','blocked'].includes(a.agent_status)||queueItems(key).length>0);}
 function queueAdd(key,a,text,pics,opts={}){
- const q=queueOf(key,true);const item={qid:'q'+(++qSeq),text,pics,docs:opts.docs||[],at:Date.now(),state:'queued',reason:opts.reason||'',record:S.chat?.record?.id||null,pane:a.pane_id,identity:a.identity};
+ const q=queueOf(key,true);const qid='q'+(++qSeq);const item={qid,row:opts.row||qid,text,pics,docs:opts.docs||[],at:Date.now(),state:'queued',reason:opts.reason||'',record:S.chat?.record?.id||null,pane:a.pane_id,identity:a.identity};
  if(opts.front)q.items.unshift(item);else q.items.push(item);return item;}
 // The composer's text and pictures move into the queue; the draft is cleared.
 function queueCompose(input,key,a,text,pics,docs=[]){
@@ -40,7 +40,7 @@ function queueTakeDraft(input,key,text,pics,docs=[]){
 // A direct send refused before reaching the pane goes into the queue instead of only a toast.
 function queueRejected(key,a,item,text,pics,input,msg,docs=[]){
  S.outbox=S.outbox.filter(o=>o!==item);
- const qi=queueAdd(key,a,text,pics,{front:true,reason:msg,docs});qi.tries=1;queueTakeDraft(input,key,text,pics,docs);
+ const qi=queueAdd(key,a,text,pics,{front:true,reason:msg,docs,row:item.row});qi.tries=1;queueTakeDraft(input,key,text,pics,docs);
  const q=queueOf(key);if(queueTransient(msg))q.retryAt=Date.now()+5000;else queuePause(q,'上一条没发出去，队列先停下。处理好再点继续',true);
  toast('没发出去，放进队列了'+(queueTransient(msg)?'，它停下就再发':''));
  paintTimeline();renderComposer();setTimeout(()=>refreshStatus(),300);return true;}
@@ -166,7 +166,7 @@ async function queueRun(c,key,q,force){
   await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?it.text.trim():it.text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
   q.items=q.items.filter(x=>x!==it);q.tries=0;q.retryAt=0;
   const card=!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?slashCard(key,it.text):null;
-  if(card)card.state='sent';else S.outbox.push({key,text:it.text,images:it.pics.map(p=>({url:p.thumb})),files:(it.docs||[]).map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sent',qid:it.qid});
+  if(card)card.state='sent';else S.outbox.push({key,text:it.text,images:it.pics.map(p=>({url:p.thumb})),files:(it.docs||[]).map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sent',qid:it.qid,row:it.row});
   if(it.pics.length)rpc('dropImages',{ids:it.pics.map(p=>p.id)}).catch(()=>{});if(it.docs?.length)rpc('dropFiles',{ids:it.docs.map(f=>f.id)}).catch(()=>{});
   if(S.chat===c){c.sentAt=Date.now();c.doneAt=0;if(!card)c.agent={...c.agent,agent_status:'working'};renderComposer();updateChatMeta();}
   S.stick=true;paintTimeline();if(card)slashCapture(card);setTimeout(()=>{if(S.chat===c)fetchHistory();},900);}
@@ -193,23 +193,29 @@ function queueLabel(c,q,it,i){
  const st=c?.agent?.agent_status;return st==='blocked'?'排队中 · 处理完确认再发':st==='working'?'排队中 · 等它停下再发':'排队中 · 马上发';}
 function queueTimeline(list){
  const key=draftKey(),q=Q.get(key);if(!q?.items.length)return;const c=S.chat;
- const box=el('section','queue');box.setAttribute('aria-label','排队的消息');
- if(q.paused&&q.items[0].state==='queued'){const bar=el('div','queue-bar');bar.setAttribute('role','status');bar.append(icon('pause'));bar.append(el('span','grow',q.paused));
-  if(q.resumable&&!c?.exited)bar.append(btn('继续','queue-go',()=>queueGo(key,true)));box.append(bar);}
+ // The section and its rows are kept across repaints (timeline.js tlSendRow): a waiting message
+ // enters once, and its row is the same node that later shows it sent.
+ let box=TL_KEEP.queueBox;if(!box){box=el('section','queue');box.setAttribute('aria-label','排队的消息');TL_KEEP.queueBox=box;}
+ const kids=[];
+ if(q.paused&&q.items[0].state==='queued'){let bar=box.querySelector(':scope>.queue-bar');const sig=q.paused+'|'+(q.resumable&&!c?.exited?1:0);
+  if(!bar||bar.dataset.sig!==sig){bar=el('div','queue-bar');bar.dataset.sig=sig;bar.setAttribute('role','status');bar.append(icon('pause'));bar.append(el('span','grow',q.paused));
+   if(q.resumable&&!c?.exited)bar.append(btn('继续','queue-go',()=>queueGo(key,true)));}
+  kids.push(bar);}
+ const live=!!(c?.agent&&!c.stale&&!c.exited);
  q.items.forEach((it,i)=>{
-  const row=el('article','message user queued'+(it.state==='unknown'?' unknown':''));row.dataset.qid=it.qid;
-  const meta=el('div','message-label');if(it.state==='checking'||it.state==='sending'||it.state==='interrupting')meta.append(el('span','spinner mini'));meta.append(el('span','',queueLabel(c,q,it,i)));row.append(meta);
-  if(it.text.trim()){const b=el('div','bubble');b.append(userText(it.text));row.append(b);}
-  if(it.pics.length)row.append(imgStrip(it.pics.map(p=>({url:p.thumb}))));
-  if(it.docs?.length)row.append(fileList(it.docs.map(f=>({file:f.name,size:f.size}))));
-  if(it.reason&&it.state!=='sending')row.append(el('p','queue-reason',it.state==='unknown'?it.reason:'上次'+it.reason));
-  if(it.state==='queued'||it.state==='unknown'){const acts=el('div','queue-actions');
-   acts.append(btn('删掉','',()=>queueDrop(key,it.qid)));
-   const live=c?.agent&&!c.stale&&!c.exited;acts.append(btn(live?'修改':'复制','',()=>queueEdit(key,it.qid)));
-   // 立即发送: interrupts a busy agent first (see queueNow); an idle one just gets it now.
-   if(it.state==='queued'&&live&&!q.inflight){const b=btn('立即发送','now',()=>queueNow(key,it.qid));b.title=['idle','done'].includes(c.agent.agent_status)?'现在就发':'先中断它正在做的事，再发这条';acts.append(b);}
-   row.append(acts);}
-  box.append(row);});
+  const busy=it.state==='checking'||it.state==='sending'||it.state==='interrupting',idle=['idle','done'].includes(c?.agent?.agent_status);
+  const can=it.state==='queued'||it.state==='unknown',now=it.state==='queued'&&live&&!q.inflight;
+  kids.push(tlSendRow(it.row||it.qid,{cls:'queued'+(it.state==='unknown'?' unknown':busy?' busy':''),label:queueLabel(c,q,it,i),spin:busy,text:it.text,
+   images:it.pics.map(p=>({url:p.thumb})),files:(it.docs||[]).map(f=>({file:f.name,size:f.size})),at:it.at,
+   reason:it.reason&&it.state!=='sending'?(it.state==='unknown'?it.reason:'上次'+it.reason):'',
+   acts:can?{sig:[it.state,live?1:0,now?1:0,now&&idle?1:0].join('|'),build:()=>{const acts=el('div','queue-actions');
+    acts.append(btn('删掉','',()=>queueDrop(key,it.qid)));acts.append(btn(live?'修改':'复制','',()=>queueEdit(key,it.qid)));
+    // 立即发送: interrupts a busy agent first (see queueNow); an idle one just gets it now.
+    if(now){const b=btn('立即发送','now',()=>queueNow(key,it.qid));b.title=idle?'现在就发':'先中断它正在做的事，再发这条';acts.append(b);}
+    return acts;}}:null}));});
+ // Patch in place: rows that stay are never detached.
+ const want=new Set(kids);[...box.childNodes].forEach(n=>{if(!want.has(n))n.remove();});
+ kids.forEach((n,i)=>{const at=box.childNodes[i];if(at!==n)box.insertBefore(n,at||null);});
  list.append(box);}
 // "排队 2" in the agent list.
 function queueBadge(meta,a){const n=queueItems(agentKey(a)).length;if(!n)return;const b=el('span','sep queue-count','排队 '+n);b.title='回到对话后，它停下就依次发';meta.append(b);}

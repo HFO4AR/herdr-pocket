@@ -80,7 +80,10 @@ await page.locator('details.work summary').first().click();
 await page.getByText('我先看一下历史读取和子 Agent 关联现在是怎么做的。',{exact:true}).waitFor();
 await page.getByText('layout_check 完成',{exact:true}).waitFor();
 assert(await page.getByRole('button',{name:'展开全文 · 14 行',exact:true}).isVisible(),'long prompt is clamped');
-await page.getByRole('button',{name:'加载更早消息',exact:true}).click();
+// Opening the first work block scrolls near the top, which already pulls in the earlier page by
+// itself; tap 加载更早消息 if it is still there.
+const earlier=page.getByRole('button',{name:'加载更早消息',exact:true});
+if(await earlier.count())await earlier.click({timeout:3000}).catch(()=>{});
 await page.getByText('先把连接设备和密码保存做好。',{exact:true}).waitFor();
 await page.getByText('改好了：连接资料和密码会用本机密钥加密保存，卸载应用后一起清除。',{exact:true}).waitFor();
 assert.equal(await page.locator('.turn').count(),3);
@@ -103,7 +106,7 @@ await page.getByRole('textbox',{name:'消息输入框',exact:true}).fill('kept d
 await page.getByRole('button',{name:'发送消息',exact:true}).click();
 await page.getByText('演示模式：未发送，草稿已保留',{exact:true}).waitFor();
 await page.getByRole('button',{name:'切换 Agent',exact:true}).click();
-await page.getByRole('button',{name:'布局检查 · 子 Agent · demo-chi',exact:true}).click();
+await page.getByRole('button',{name:'布局检查 · 子 Agent，已结束，打开只读记录',exact:true}).click();
 await page.getByText('子 Agent：布局检查完成。',{exact:true}).waitFor();
 assert.equal(await page.getByRole('textbox',{name:'消息输入框',exact:true}).count(),0);
 await page.screenshot({path:path.join(folder,'child-browser.png')});

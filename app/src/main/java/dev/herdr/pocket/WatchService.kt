@@ -19,11 +19,18 @@ import org.json.JSONObject
  * Herdr state (read-only "status") to notify when an agent finishes or needs
  * confirmation. It never sends input. Stops on return to the app, on
  * disconnect, after repeated failures or after [MAX_RUNTIME_MS].
+ *
+ * Sub-agents: Herdr reports only the parent pane, which reads idle/done while its sub-agents
+ * still run. Before calling a stop "做完了" the watcher asks the bridge's read-only `glance`
+ * (sub-agents only) for that agent's record; while any runs the agent is held as "kids" (the
+ * app shows 子 Agent 运行中) and 做完了 comes once they have finished.
  */
 class WatchService : Service() {
     private lateinit var thread: HandlerThread
     private lateinit var handler: Handler
     private val last = HashMap<String, String>()
+    // Each agent's record as the app knows it (provider, thread, record_id, cwd or remote): what to ask about sub-agents.
+    private val kidItems = HashMap<String, JSONObject>()
     // When each agent was seen starting to work (only changes seen by this watcher; the seed is unknown).
     private val workingSince = HashMap<String, Long>()
     // Agent notifications currently posted by this run: key → line for the group summary.
@@ -52,6 +59,10 @@ class WatchService : Service() {
         session = intent?.getStringExtra(EXTRA_SESSION).orEmpty()
         deviceName = device.optString("name")
         intent?.getStringExtra(EXTRA_STATES)?.let { seed(it) }
+        kidItems.clear()
+        intent?.getStringExtra(EXTRA_KIDS)?.let { raw ->
+            try { val o = JSONObject(raw); o.keys().forEach { k -> o.optJSONObject(k)?.let { kidItems[k] = it } } } catch (_: Exception) {}
+        }
         val ongoing = ongoing(last.values.toList())
         lastOngoing = ongoingText
         if (Build.VERSION.SDK_INT >= 34) startForeground(ONGOING_ID, ongoing, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -70,7 +81,7 @@ class WatchService : Service() {
 
     /** Calm and informative: how many agents, what they are doing, on which computer. */
     private fun ongoing(states: List<String>): Notification {
-        val working = states.count { it == "working" }
+        val working = states.count { it == "working" || it == "kids" }
         val blocked = states.count { it == "blocked" }
         val text = listOfNotNull(
             if (blocked > 0) "$blocked 个等你确认" else null,
@@ -100,20 +111,29 @@ class WatchService : Service() {
             val agents = PocketCore.request(JSONObject().put("op", "status").put("session", session)).getJSONArray("agents")
             failures = 0
             val seen = HashMap<String, String>()
+            val listed = LinkedHashMap<String, JSONObject>()
             for (i in 0 until agents.length()) {
                 val a = agents.getJSONObject(i)
-                val key = a.optString("pane_id") + "/" + a.optString("identity")
-                val now = a.optString("agent_status")
+                listed[a.optString("pane_id") + "/" + a.optString("identity")] = a
+            }
+            // Agents that look finished after working (or after waiting on sub-agents): ask once, batched.
+            val kids = kidsRunning(listed.filter { (k, a) -> a.optString("agent_status") in STOPPED && last[k] in BUSY && kidItems.containsKey(k) }.keys)
+            for ((key, a) in listed) {
+                val status = a.optString("agent_status")
+                val running = if (key in kids) kids[key] else null
+                // Unknown (the check failed): an agent already held for sub-agents stays held.
+                val now = if (status in STOPPED && ((running ?: 0) > 0 || (key in kids && running == null && last[key] == "kids"))) "kids" else status
                 seen[key] = now
                 val was = last.put(key, now)
                 if (was == null || was == now) continue
-                if (now == "working") workingSince[key] = System.currentTimeMillis()
+                // A parent woken by its sub-agents keeps the start of the whole job.
+                if (now == "working") { if (was == "kids") workingSince.putIfAbsent(key, System.currentTimeMillis()) else workingSince[key] = System.currentTimeMillis() }
                 // Answered or handled on the computer: the "waiting" alert is stale now.
                 if (was == "blocked" && posted[key]?.urgent == true) cancel(key)
                 val title = displayTitle(a)
                 when {
                     now == "blocked" -> notify(key, title, blockedText(a), a.optString("pane_id"), true)
-                    was == "working" && (now == "idle" || now == "done") -> {
+                    (was == "working" || was == "kids") && (now == "idle" || now == "done") -> {
                         val took = workingSince.remove(key)?.let { " · 用时 " + duration(System.currentTimeMillis() - it) }.orEmpty()
                         notify(key, title, "做完了$took", a.optString("pane_id"), false)
                     }
@@ -132,6 +152,23 @@ class WatchService : Service() {
         handler.postDelayed(::poll, POLL_MS)
     }
     private var lastOngoing = ""
+
+    /** key → running sub-agents (null when unknown) via the read-only `glance` op; no preview is read. */
+    private fun kidsRunning(keys: Set<String>): Map<String, Int?> {
+        if (keys.isEmpty()) return emptyMap()
+        val out = HashMap<String, Int?>()
+        keys.forEach { out[it] = null }
+        try {
+            val items = org.json.JSONArray()
+            keys.forEach { k -> kidItems[k]?.let { items.put(JSONObject(it.toString()).put("key", k).put("kids", true).put("preview", false)) } }
+            val previews = PocketCore.request(JSONObject().put("op", "glance").put("items", items)).optJSONObject("previews") ?: return out
+            for (k in keys) {
+                val report = previews.optJSONObject(k)?.optJSONObject("kids") ?: continue
+                if (report.has("running")) out[k] = report.optInt("running")
+            }
+        } catch (_: Exception) {}
+        return out
+    }
 
     /** "在等你确认：<question>" when a read-only look at the screen finds one; otherwise generic. */
     private fun blockedText(a: JSONObject): String {
@@ -233,6 +270,9 @@ class WatchService : Service() {
         const val ACTION_STOP = "dev.herdr.pocket.STOP_WATCH"
         const val EXTRA_SESSION = "session"
         const val EXTRA_STATES = "states"
+        const val EXTRA_KIDS = "kids"
+        private val STOPPED = setOf("idle", "done")
+        private val BUSY = setOf("working", "kids")
         const val EXTRA_PANE = "pane"
         private const val CHANNEL_BACKGROUND = "background"
         private const val CHANNEL_ALERT = "alert"
@@ -264,8 +304,8 @@ class WatchService : Service() {
                 setShowBadge(false)
             })
         }
-        fun start(context: Context, session: String, states: String) {
-            val intent = Intent(context, WatchService::class.java).putExtra(EXTRA_SESSION, session).putExtra(EXTRA_STATES, states)
+        fun start(context: Context, session: String, states: String, kids: String = "{}") {
+            val intent = Intent(context, WatchService::class.java).putExtra(EXTRA_SESSION, session).putExtra(EXTRA_STATES, states).putExtra(EXTRA_KIDS, kids)
             context.startForegroundService(intent)
         }
         fun stop(context: Context) { context.stopService(Intent(context, WatchService::class.java)) }

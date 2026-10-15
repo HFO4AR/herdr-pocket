@@ -6,6 +6,7 @@
 /* Waiting: an outlined, not-yet-sent bubble. */
 .message.queued .message-label{align-items:center;gap:6px;color:var(--muted)}
 .message.queued .bubble{background:var(--surface);border:1px dashed var(--queued-line)}
+.message.queued.busy .bubble{border-color:var(--soft-line)}
 .message.queued .img-tile{opacity:.8}
 .message.queued.unknown .bubble{border:1px solid var(--warn-line);background:var(--warn-soft)}
 .message.queued.unknown .message-label{color:var(--warn);font-weight:600}
@@ -17,3 +18,5 @@
 .queue-actions button:active{color:var(--ink)}
 .queue-actions .now{color:var(--accent);font-weight:600}
 .card-meta .queue-count{color:var(--accent);font-weight:600;flex-shrink:0}
+/* After the conversation the queue opens like a new turn, the way its head will look once sent. */
+.timeline>.turn+.queue{border-top:1px solid var(--line);padding-top:18px;margin-top:6px}

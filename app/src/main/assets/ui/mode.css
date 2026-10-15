@@ -1,0 +1,50 @@
+/* Agent modes (mode.js): chips above the composer, 「切换模式」 (Shift+Tab), the details sheet and
+   compact list tags. Plan and auto-accept get their own hues, close to the agents' own footers. */
+:root{--mode-plan:#0f6e78;--mode-plan-soft:#e5f3f4;--mode-edit:#6b4fb3;--mode-edit-soft:#f0ecfa}
+:root[data-theme="dark"]{--mode-plan:#6cc9d2;--mode-plan-soft:#16292b;--mode-edit:#b9a3f0;--mode-edit-soft:#252036}
+
+.mode-bar{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+/* The chips are one button (opens the details); they never wrap, the last one ellipsizes. */
+.mode-info{flex:1 1 auto;min-width:0;display:flex;align-items:center;min-height:44px;padding:0 2px;border-radius:var(--radius-control);text-align:left}
+.mode-info:active{background:var(--press);transform:none}
+.mode-chips{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;padding:3px 1px}
+.mode-chip{flex:0 0 auto;max-width:100%;display:inline-flex;align-items:center;min-height:26px;padding:0 10px;border-radius:999px;
+ font-size:var(--fs-xs);font-weight:600;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+ background:var(--sunken);color:var(--ink-2);box-shadow:inset 0 0 0 1px var(--line)}
+.mode-chips .mode-chip:last-child{flex-shrink:1;min-width:0;display:block;line-height:26px}
+.mode-chip.m-plan{background:var(--mode-plan-soft);color:var(--mode-plan);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--mode-plan) 22%,transparent)}
+.mode-chip.m-edit{background:var(--mode-edit-soft);color:var(--mode-edit);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--mode-edit) 22%,transparent)}
+.mode-chip.m-auto{background:var(--warn-soft);color:var(--warn);box-shadow:inset 0 0 0 1px var(--warn-line)}
+.mode-chip.m-danger{background:var(--danger-soft);color:var(--danger);box-shadow:inset 0 0 0 1px var(--danger-line)}
+.mode-chip.m-goal{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1px var(--soft-line)}
+.mode-chip.m-done{background:var(--success-soft);color:var(--success);box-shadow:none}
+.mode-chip.m-quiet{background:none;box-shadow:none;color:var(--faint);font-weight:500;padding:0 4px}
+.mode-chips.mode-flip .mode-chip:first-child{animation:mode-flip .32s var(--ease-out)}
+@keyframes mode-flip{from{transform:translateY(5px);opacity:.2}to{transform:none;opacity:1}}
+.mode-switch{flex-shrink:0;min-height:44px;gap:5px;padding:0 14px 0 11px;border:0;border-radius:999px;background:var(--sunken);color:var(--ink);font-size:var(--fs-sm);font-weight:600}
+.mode-switch:active:not(:disabled){background:var(--line-strong)}
+.sheet .mode-switch{background:var(--sunken)}
+.mode-switch svg{width:18px;height:18px}
+.mode-switch:disabled{color:var(--faint);background:var(--sunken);opacity:.75}
+.mode-switch.busy{color:var(--muted)}
+.mode-switch.busy svg{animation:mode-busy 1s ease-in-out infinite}
+@keyframes mode-busy{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.mode-chips.mode-flip .mode-chip:first-child,.mode-switch.busy svg{animation:none}}
+
+/* Details sheet. */
+.mode-rows{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.mode-row{display:flex;align-items:flex-start;gap:12px;padding:10px 2px;border-bottom:1px solid var(--line)}
+.mode-row:last-child{border-bottom:0}
+.mode-row-label{flex:0 0 72px;font-size:var(--fs-sm);color:var(--muted);line-height:26px}
+.mode-row-value{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.mode-row-value .mode-chip{max-width:100%}
+.mode-row-value small{font-size:var(--fs-xs);color:var(--muted);line-height:1.5;overflow-wrap:anywhere}
+.mode-sheet .mode-cycle{margin-top:var(--sp-4)}
+
+
+/* 会话 list tags. */
+.card-meta .mode-tag.m-plan{background:var(--mode-plan-soft);color:var(--mode-plan)}
+.card-meta .mode-tag.m-goal{background:var(--soft);color:var(--accent)}
+
+/* Short landscape screens: keep the bar slim beside the keyboard. */
+@media (max-height:500px){.mode-bar{margin-bottom:2px}}

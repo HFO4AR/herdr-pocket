@@ -42,8 +42,8 @@ private const val ASK_PHOTOS = 44
 private const val PICK_KEY = 45
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/layout.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/onboard.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/app.js", "ui/layout.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/kids.css", "ui/mode.css", "ui/layout.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/onboard.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/mode.js", "ui/app.js", "ui/layout.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -60,6 +60,7 @@ class MainActivity : Activity() {
     // Latest Herdr session and agent states shown in the UI, handed to the watcher.
     @Volatile private var watchSession = ""
     @Volatile private var watchStates = "{}"
+    @Volatile private var watchKids = "{}"
     private var pausedAt = 0L
     private var watched = false
     // One picker at a time: the request waiting for it, how many pictures it may add, the camera target.
@@ -376,6 +377,7 @@ class MainActivity : Activity() {
                         "watchState" -> {
                             watchSession = req.optString("session")
                             watchStates = req.optJSONObject("states")?.toString() ?: "{}"
+                            watchKids = req.optJSONObject("kids")?.toString() ?: "{}"
                             success(id, JSONObject())
                         }
                         "setAlerts" -> {
@@ -595,7 +597,7 @@ class MainActivity : Activity() {
         // Hand over to the watcher while the app is not visible; it only reads state.
         // With notifications blocked the watcher could not tell anyone anything: do not hold a hidden service.
         if (core.connectedDevice != null && core.alertsEnabled && watchSession.isNotEmpty() && !isChangingConfigurations && notificationsAllowed()) {
-            try { WatchService.start(this, watchSession, watchStates); watched = true } catch (_: Exception) {}
+            try { WatchService.start(this, watchSession, watchStates, watchKids); watched = true } catch (_: Exception) {}
         }
         super.onPause()
     }

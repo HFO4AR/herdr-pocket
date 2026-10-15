@@ -46,6 +46,11 @@
 .send:active:not(:disabled){background:var(--primary-active);transform:scale(.92)}
 .send svg{width:18px;height:18px;stroke-width:2.2}
 .send:disabled{background:var(--sunken);color:var(--faint);opacity:1}
+/* Pressed send: a short bounce and the arrow lifting off, right away (before any reply). */
+.send.fired{animation:send-fired .32s var(--ease-out)}
+.send.fired svg{animation:send-arrow .32s var(--ease-out)}
+@keyframes send-fired{0%{transform:scale(.86)}55%{transform:scale(1.06)}100%{transform:none}}
+@keyframes send-arrow{0%{transform:translateY(6px);opacity:.15}100%{transform:none;opacity:1}}
 .send.later:not(:disabled){background:var(--muted)}
 .readonly{font-size:13px;color:var(--muted);text-align:center;padding:8px;line-height:1.6}
 .activity{display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:5px 5px 5px 12px;border-radius:var(--radius-control);background:var(--warn-soft);font-size:13px;min-height:46px}
