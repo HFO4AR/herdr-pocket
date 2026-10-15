@@ -268,20 +268,25 @@ class HistoryTests(unittest.TestCase):
 
     def test_remote_reader_stdin_executes_only_allowed_read_entry(self):
         import subprocess
-        record=self.write('codex','remote.jsonl',[codex('user','synthetic message')])
         route={'ssh':['fixture.invalid'],'workspace':'/fixture','key':'fixture'}
         captured=[]
         def run(args,**kwargs):
             captured.append((args,kwargs))
+            if '-O' in args: return subprocess.CompletedProcess(args,0,b'',b'')
+            if kwargs['input'].startswith(b'0\n'): return subprocess.CompletedProcess(args,0,b'{"helper_missing": true}\n',b'')
             # Compile the actual remote payload to catch source embedding errors.
-            compile(kwargs['input'],'remote-bridge','exec')
-            self.assertNotIn('environ',kwargs['input'].split('request = json.loads(')[-1])
-            return subprocess.CompletedProcess(args,0,'{"records":[],"home":"/fixture"}','')
+            size,rest=kwargs['input'].split(b'\n',1); program=rest[:int(size)]
+            compile(program,'remote-bridge','exec')
+            import inspect
+            self.assertTrue(program.endswith(b'\nremote_main()\n'))
+            self.assertNotIn('environ',inspect.getsource(bridge.remote_main)+inspect.getsource(bridge.remote_dispatch))
+            self.assertEqual(json.loads(rest[int(size):]),{'op':'catalog','workspace':'/fixture'})
+            return subprocess.CompletedProcess(args,0,b'{"records":[],"home":"/fixture"}',b'')
         with patch.object(bridge.subprocess,'run',side_effect=run):
             bridge.remote_read(route,{'op':'catalog','workspace':'/fixture'})
         self.assertIn('StrictHostKeyChecking=yes',captured[0][0])
-        self.assertIn('scoped_records(',captured[0][1]['input'])
-        with patch.object(bridge.subprocess,'run',return_value=subprocess.CompletedProcess([],1,'','private server error')):
+        self.assertIn(b'scoped_records(',captured[1][1]['input'])
+        with patch.object(bridge.subprocess,'run',return_value=subprocess.CompletedProcess([],1,b'',b'private server error')):
             with self.assertRaisesRegex(bridge.BridgeError,'连不上远端电脑'):bridge.remote_read(route,{'op':'catalog','workspace':'/fixture'})
 
     def test_active_native_runtime_session_beats_startup_resume(self):

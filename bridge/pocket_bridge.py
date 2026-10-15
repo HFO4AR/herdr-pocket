@@ -136,6 +136,25 @@ def panes(prefix):
     return found
 
 
+def relay_pane(agent, prefix):
+    """A ch pane: the agent runs on another computer behind a local relay, so the pane's foreground
+    process is the relay, not the agent. Herdr's agent commands refuse such a pane (agent_not_ready:
+    "no longer the pane foreground process") although it lists the agent; input has to go to the
+    pane itself. Decided before anything is written, from the process tree only."""
+    if agent.get("agent") not in ("claude", "codex"): return False
+    probe = probe_pane(agent, prefix, agent["agent"])
+    return bool(probe["ok"] and probe["route"] and not probe.get("native"))
+
+
+def relay_prompt(prefix, pane_id, text):
+    """Type a prompt into a relay pane. One line: `pane run` (text, then Enter). Several lines go in
+    as one bracketed paste, so the agent's input box keeps the line breaks, then Enter submits."""
+    if "\n" not in text and "\r" not in text: return call(prefix + ["pane", "run", pane_id, text])
+    call(prefix + ["pane", "send-text", pane_id, "\x1b[200~" + text.replace("\r\n", "\n") + "\x1b[201~"])
+    time.sleep(0.15)
+    return call(prefix + ["pane", "send-keys", pane_id, "enter"])
+
+
 def mutate(request, prefix, agent, state_dir):
     op = request["op"]
     req_id = request.get("id", "")
@@ -203,7 +222,15 @@ def mutate(request, prefix, agent, state_dir):
         db.execute("INSERT INTO receipts VALUES (?, ?, NULL)", (req_id, digest))
         db.commit()
         try:
-            value = answer_question(request, prefix, agent) if op == "answer" else call(prefix + args)
+            try: value = answer_question(request, prefix, agent) if op == "answer" else call(prefix + args)
+            except HerdrRejected as exc:
+                # Herdr refused before writing anything. A ch pane (see relay_pane) takes the same
+                # input at the pane level instead: still the one and only write for this receipt.
+                if not (exc.code == "agent_not_ready" and "foreground" in exc.detail and op in ("prompt", "key", "answer", "exitAgent")
+                        and relay_pane(agent, prefix)): raise
+                if op == "answer": value = answer_question(request, prefix, dict(agent, relay=True))
+                elif op == "key": value = call(prefix + ["pane", "send-keys", agent["pane_id"], key])
+                else: value = relay_prompt(prefix, agent["pane_id"], args[-1])
         except HerdrRejected as exc:
             if exc.code not in NOT_SENT: raise
             # Rejected before any input reached the pane: record why, and say it can be resent.
@@ -314,6 +341,7 @@ def probe_pane(agent, prefix, provider):
         found["remote"] = found["remote"] or bool(argv and Path(argv[0]).name in ("ssh", "mosh", "mosh-client"))
         found["route"] = found["route"] or ch_ssh_route(argv)
         native = bool(argv and Path(argv[0]).name in (provider, provider + ".exe"))
+        found["native"] = found.get("native", False) or native
         if native:
             found["ids"].update(explicit_session_ids(argv, provider))
             if snapshot:
@@ -589,31 +617,174 @@ def remote_history_page(request, catalog=None):
     result["active_changed"]=selected["record_id"]!=request["record_id"]
     return result
 
-def remote_read(route, request, limit=None):
-    # Code is sent through stdin, and the only remote entry points read the two
-    # authorized history roots. No installer, provider credentials or shell input.
-    source = Path(__file__).read_text().rsplit('\nif __name__ == "__main__":',1)[0]
-    code = source + "\nrequest = json.loads(" + repr(json.dumps(request)) + ")\n"
-    code += "op = request['op']\n"
-    code += "if op == 'resolve': result = {'routes': remote_resolve(request.get('items', []))}\n"
-    code += "elif op == 'history': result = remote_history_page(request)\n"
-    code += "elif op == 'image':\n    try: result = remote_transcript_image(request)\n    except BridgeError as exc: result = {'image_error': str(exc)[:200]}\n"
-    code += "elif op == 'catalog': result = {'records': [public_record(x) for x in scoped_records(request.get('provider','claude'), request['workspace'], 100)]}\n"
-    code += "else: result = {'error': 'unknown remote op'}\n"
-    code += "encoded = json.dumps(result, ensure_ascii=False)\nprint(encoded if len(encoded.encode()) <= 2_000_000 else '{\"error\":\"history response exceeds 2 MB\"}')\n"
-    args = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=8", *route["ssh"], "python3 -c 'import sys; exec(sys.stdin.read())'"]
-    limit = limit or (25 if request["op"] == "history" else 15)
-    remaining = limit if _remote_deadline is None else min(limit, _remote_deadline-time.monotonic())
+# ─── Remote reads over a ch route ────────────────────────────────────────────
+# A ch pane's history lives on the other computer. Measured on a 275 ms link, a fresh SSH
+# login costs ~4 s and shipping the ~100 KB adapter another ~1 s, while the remote work
+# itself takes ~10 ms. So reads (1) reuse one SSH connection through the bridge's OWN control
+# socket (never the user's) for up to REMOTE_PERSIST idle seconds (an open chat polls far more
+# often), and (2) run a content-addressed copy of the adapter kept in the remote user's
+# ~/.herdr-pocket/bridge/, checked against its SHA-256 before every run. When that copy is
+# missing or different, the adapter is shipped on stdin once and stored. Requests travel on
+# stdin, never in the command.
+REMOTE_PERSIST = 300
+REMOTE_HELPER_KEEP = 3
+REMOTE_HELPER_LIMIT = 4_000_000
+# The only remote command for reads. argv[1] is the adapter's hex SHA-256; stdin is "<n>\n",
+# then n adapter bytes (n=0: use the stored copy), then one JSON request line. It executes
+# nothing whose hash differs from argv[1].
+REMOTE_LOADER = (
+    'import sys,os,stat,json,hashlib\n'
+    'h=sys.argv[1];b=sys.stdin.buffer;n=int(b.readline());s=b.read(n) if n else b""\n'
+    'p=os.path.join(os.path.expanduser("~"),".herdr-pocket","bridge",h+".py")\n'
+    'if not n and len(h)==64 and not h.strip("0123456789abcdef"):\n'
+    ' try:\n'
+    '  with open(os.open(p,os.O_RDONLY|os.O_NOFOLLOW),"rb") as r:\n'
+    '   t=os.fstat(r.fileno())\n'
+    '   if stat.S_ISREG(t.st_mode) and t.st_uid==os.getuid() and not t.st_mode&0o022: s=r.read(%d)\n'
+    ' except OSError: pass\n'
+    'if hashlib.sha256(s).hexdigest()!=h:\n'
+    ' print(json.dumps({"helper_missing":True}));sys.exit()\n'
+    'exec(compile(s,p,"exec"),{"__name__":"herdr_pocket_remote","HELPER_INSTALL":(p,s) if n else None})\n'
+) % REMOTE_HELPER_LIMIT
+REMOTE_COMMAND = "python3 -I -c '" + REMOTE_LOADER + "'"
+_remote_program = None
+
+
+def remote_program():
+    """The adapter that runs on the other computer: this file's functions plus remote_main()."""
+    global _remote_program
+    if _remote_program is None:
+        source = Path(__file__).read_text().rsplit('\nif __name__ == "__main__":', 1)[0]
+        program = (source + "\nremote_main()\n").encode()
+        _remote_program = (program, hashlib.sha256(program).hexdigest())
+    return _remote_program
+
+
+def route_ssh_options(route):
+    """The route's own ssh options minus -S: a control socket is only ever the bridge's own."""
+    options, out = list(route["ssh"]), []
+    while options:
+        arg = options.pop(0)
+        if arg == "-S" and len(options) > 1: options.pop(0); continue
+        out.append(arg)
+    return out
+
+
+def ssh_control_dir():
+    """~/.herdr-pocket/ssh (0700, owned by us, no symlinks), or None to connect without reuse."""
+    base = Path.home() / ".herdr-pocket"; folder = base / "ssh"
+    try:
+        for path in (base, folder):
+            try: path.mkdir(mode=0o700)
+            except FileExistsError: pass
+            info = path.lstat()
+            if not stat_module.S_ISDIR(info.st_mode) or info.st_uid != os.getuid(): return None
+        if folder.lstat().st_mode & 0o077: os.chmod(folder, 0o700)
+    except OSError: return None
+    # A unix socket path is limited to ~104 bytes; ssh adds a 17-byte suffix while binding.
+    return folder if len(str(folder)) + 44 + 18 <= 104 else None
+
+
+def remote_ssh_args(route, reuse=True):
+    folder = ssh_control_dir() if reuse else None
+    control = ["-o", "ControlMaster=auto", "-o", "ControlPath=" + str(folder) + "/cm-%C", "-o", "ControlPersist=%d" % REMOTE_PERSIST] \
+        if folder else ["-o", "ControlMaster=no", "-o", "ControlPath=none"]
+    return ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ClearAllForwardings=yes",
+            "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", *control, *route_ssh_options(route)]
+
+
+def remote_ssh_reset(route):
+    """Ends our shared connection for this route (e.g. after a timeout) so the next read starts fresh."""
+    folder = ssh_control_dir()
+    if not folder: return
+    try: subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ControlPath=" + str(folder) + "/cm-%C", "-O", "exit", *route_ssh_options(route)],
+                        capture_output=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired): pass
+
+
+def remote_exec(route, payload, digest, deadline, reuse=True):
+    remaining = deadline - time.monotonic()
     if remaining <= 0: raise BridgeError("远端历史读取达到本次时限，请刷新重试")
-    try: result = subprocess.run(args, input=code, capture_output=True, text=True, timeout=remaining)
-    except subprocess.TimeoutExpired as exc: raise BridgeError("远端电脑响应超时") from exc
+    try: return subprocess.run([*remote_ssh_args(route, reuse), REMOTE_COMMAND + " " + digest], input=payload, capture_output=True, timeout=remaining)
+    except subprocess.TimeoutExpired as exc:
+        # A wedged shared connection must not stall the next read as well.
+        if reuse: remote_ssh_reset(route)
+        raise BridgeError("远端电脑响应超时") from exc
     except OSError as exc: raise BridgeError("无法启动 SSH 连接远端电脑") from exc
+
+
+def remote_read(route, request, limit=None):
+    # Reads only: the remote entry points read the two authorized history roots. No provider
+    # credentials, shell input or process environment; see SECURITY.md.
+    limit = limit or (25 if request["op"] == "history" else 15)
+    deadline = time.monotonic() + (limit if _remote_deadline is None else min(limit, _remote_deadline - time.monotonic()))
+    program, digest = remote_program()
+    line = json.dumps(request).encode() + b"\n"
+    reuse = True
+    result = remote_exec(route, b"0\n" + line, digest, deadline)
+    if result.returncode == 255 and deadline - time.monotonic() > 4:
+        # ssh itself failed (stale shared socket, session limit…). Reads are safe to repeat once
+        # over a fresh, unshared connection.
+        remote_ssh_reset(route); reuse = False
+        result = remote_exec(route, b"0\n" + line, digest, deadline, reuse)
+    if not result.returncode and result.stdout.startswith(b'{"helper_missing"'):
+        result = remote_exec(route, str(len(program)).encode() + b"\n" + program + line, digest, deadline, reuse)
     if result.returncode: raise BridgeError("连不上远端电脑：SSH 认证、网络或 Python 环境不可用")
-    if len(result.stdout.encode()) > 2_000_000: raise BridgeError("远端历史响应过大")
+    if len(result.stdout) > 2_000_000: raise BridgeError("远端历史响应过大")
     try: data = json.loads(result.stdout)
     except ValueError as exc: raise BridgeError("远端历史返回格式异常") from exc
-    if not isinstance(data,dict) or data.get("error"): raise BridgeError("远端历史读取失败或响应超过 2 MB")
+    if not isinstance(data, dict) or data.get("helper_missing"): raise BridgeError("远端历史返回格式异常")
+    if data.get("error"):
+        # The remote adapter's own message (e.g. "历史记录已不存在") is safer to show than a guess.
+        raise BridgeError(str(data["error"])[:200] if isinstance(data["error"], str) and "exceeds" not in data["error"] else "远端历史读取失败或响应超过 2 MB")
     return data
+
+
+def remote_dispatch(request):
+    """Runs on the other computer: the allowed read entry points only."""
+    op = request.get("op")
+    if op == "resolve": return {"routes": remote_resolve(request.get("items", []))}
+    if op == "history": return remote_history_page(request)
+    if op == "image":
+        try: return remote_transcript_image(request)
+        except BridgeError as exc: return {"image_error": str(exc)[:200]}
+    if op == "catalog": return {"records": [public_record(x) for x in scoped_records(request.get("provider", "claude"), request["workspace"], 100)]}
+    return {"error": "unknown remote op"}
+
+
+def remote_install_helper(path, data):
+    """Runs on the other computer: store the verified adapter as ~/.herdr-pocket/bridge/<sha256>.py
+    (folders 0700, file 0600, no symlinks, atomic) and keep only the newest few versions."""
+    folder = Path(path).parent
+    for part in (folder.parent, folder):
+        try: part.mkdir(mode=0o700)
+        except FileExistsError: pass
+        info = part.lstat()
+        if not stat_module.S_ISDIR(info.st_mode) or info.st_uid != os.getuid(): return
+    temp = folder / ("." + os.urandom(8).hex() + ".part")
+    try:
+        with open(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600), "wb") as out: out.write(data)
+        os.replace(temp, path)
+    finally:
+        try: temp.unlink()
+        except FileNotFoundError: pass
+    helpers = sorted((p for p in folder.iterdir() if re.fullmatch(r"[a-f0-9]{64}\.py", p.name) and p.is_file() and not p.is_symlink()),
+                     key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in helpers[REMOTE_HELPER_KEEP:]:
+        if old.name != Path(path).name: old.unlink()
+
+
+def remote_main():
+    """Runs on the other computer under REMOTE_LOADER: one JSON request on stdin, one JSON line out."""
+    os.umask(0o077)
+    install = globals().get("HELPER_INSTALL")
+    if install:
+        try: remote_install_helper(*install)
+        except OSError: pass
+    try: result = remote_dispatch(json.loads(sys.stdin.buffer.readline(LIMIT + 1)))
+    except (BridgeError, ValueError, KeyError, TypeError) as exc: result = {"error": str(exc)[:200]}
+    encoded = json.dumps(result, ensure_ascii=False)
+    print(encoded if len(encoded.encode()) <= 2_000_000 else '{"error":"history response exceeds 2 MB"}', flush=True)
 
 
 def prefetch_remote(pairs):
@@ -1234,7 +1405,7 @@ def answer_question(request, prefix, agent):
 
     def press(name):
         if len(steps) >= ANSWER_KEYS_LIMIT * 2: raise BridgeError("按键太多，已停下")
-        call(prefix + ["agent", "send-keys", target, name])
+        call(prefix + (["pane", "send-keys", target, name] if agent.get("relay") else ["agent", "send-keys", target, name]))
         steps.append(name)
 
     base = screen()
@@ -1551,7 +1722,7 @@ REMOTE_FILE_TIMEOUT = 25
 # Reads a length-prefixed program from stdin; the rest of stdin is the file's bytes.
 REMOTE_FILE_COMMAND = "python3 -c 'import sys;b=sys.stdin.buffer;exec(b.read(int(b.readline())))'"
 SAFE_SSH = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ControlMaster=no",
-            "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=8"]
+            "-o", "ControlPath=none", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=8"]
 
 
 def file_name_ok(name):
@@ -1667,7 +1838,7 @@ def remote_files(route, params, path=None):
     code = (source + "\nremote_files_main(" + repr(json.dumps(params)) + ")\n").encode()
     payload = str(len(code)).encode() + b"\n" + code + (path.read_bytes() if path else b"")
     try:
-        result = subprocess.run([*SAFE_SSH, *route["ssh"], REMOTE_FILE_COMMAND], input=payload, capture_output=True, timeout=REMOTE_FILE_TIMEOUT)
+        result = subprocess.run([*SAFE_SSH, *route_ssh_options(route), REMOTE_FILE_COMMAND], input=payload, capture_output=True, timeout=REMOTE_FILE_TIMEOUT)
     except subprocess.TimeoutExpired as exc: raise BridgeError("没发出去：文件传到远端电脑超时，网络慢或文件太大") from exc
     except OSError as exc: raise BridgeError("没发出去：无法启动 SSH 连接远端电脑") from exc
     if result.returncode: raise BridgeError("没发出去：连不上远端电脑（SSH 认证、网络或 Python 不可用）")

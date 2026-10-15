@@ -124,7 +124,7 @@ def main():
     expect('记住密码 · 登录成功后加密保存');tap('关闭')
     print('PASS: actual connection dialog exposes remember-password option',flush=True)
     tap('体验聊天演示')
-    expect('个 Agent 在线');screenshot('agents')
+    expect('个在线');screenshot('agents')
     tap('把移动端做成真正的聊天工具')
     expect('历史记录、子 Agent 和执行的命令都要能看到。')
     expect('工作过程');expect('测试都通过了')

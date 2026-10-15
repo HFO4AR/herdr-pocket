@@ -38,6 +38,7 @@ private const val UNATTENDED_PAUSE_MS = 60_000L
 private const val PICK_GALLERY = 41
 private const val PICK_CAMERA = 42
 private const val PICK_FILES = 43
+private const val ASK_PHOTOS = 44
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
 private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/onboard.css", "ui/native.css", "ui/lists.css")
@@ -515,15 +516,44 @@ class MainActivity : Activity() {
             file != null -> if (file.length() > 0) listOf(android.net.Uri.fromFile(file)) else emptyList()
             else -> data?.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data?.data)
         }.take(pickMax)
+        preparePictures(PickBatch(id, file), uris, ask = true)
+    }
+
+    /** Pictures of one pick: what is ready, what failed, and the camera file to remove at the end. */
+    private class PickBatch(val id: String, val file: File?) { val images = JSONArray(); var failed = 0; var reason = "" }
+    private var mediaRetry: Pair<PickBatch, List<android.net.Uri>>? = null
+    private val mediaPermission get() = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+
+    /**
+     * The photo picker grants access to what was picked, so normally no permission is needed. Some
+     * galleries (MIUI's among them) hand back a storage path or a provider that checks the photos
+     * permission; only then is the standard photos permission asked for, and those pictures retried.
+     */
+    private fun preparePictures(batch: PickBatch, uris: List<android.net.Uri>, ask: Boolean) {
         executor.execute {
-            val images = JSONArray(); var failed = 0; var reason = ""
+            val denied = mutableListOf<android.net.Uri>()
             for (uri in uris) {
-                try { images.put(ImagePrep.describe(ImagePrep.prepare(contentResolver, uri))) }
-                catch (e: Throwable) { failed++; reason = if (e is OutOfMemoryError) "图片太大了" else e.message ?: "" }
+                try { batch.images.put(ImagePrep.describe(ImagePrep.prepare(contentResolver, uri))) }
+                catch (e: SecurityException) { denied += uri }
+                catch (e: java.io.FileNotFoundException) { if (e.message.orEmpty().let { "EACCES" in it || "ermission" in it }) denied += uri else { batch.failed++; batch.reason = e.message ?: "" } }
+                catch (e: Throwable) { batch.failed++; batch.reason = if (e is OutOfMemoryError) "图片太大了" else e.message ?: "" }
             }
-            file?.delete()
-            success(id, JSONObject().put("images", images).put("failed", failed).put("reason", reason))
+            if (denied.isNotEmpty() && ask && checkSelfPermission(mediaPermission) != PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread { mediaRetry = batch to denied; requestPermissions(arrayOf(mediaPermission), ASK_PHOTOS) }
+                return@execute
+            }
+            if (denied.isNotEmpty()) { batch.failed += denied.size; batch.reason = "相册没给读取权限：在系统设置里允许 Herdr Pocket 访问照片，或换用系统的照片选择器" }
+            batch.file?.delete()
+            success(batch.id, JSONObject().put("images", batch.images).put("failed", batch.failed).put("reason", batch.reason))
         }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != ASK_PHOTOS) return
+        val (batch, uris) = mediaRetry ?: return
+        mediaRetry = null
+        preparePictures(batch, uris, ask = false)
     }
 
     @Deprecated("Legacy back dispatch")

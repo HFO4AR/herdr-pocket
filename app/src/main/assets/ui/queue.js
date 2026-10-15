@@ -66,6 +66,39 @@ function queueGo(key,now){
  q.paused='';q.tries=0;q.retryAt=0;q.ackAt=Date.now();const rec=S.chat?.record?.id||null;q.items.forEach(x=>{if(x.state==='queued')x.record=rec;});
  paintTimeline();queuePump(now);}
 
+// 「立即发送」: this message goes first. A working (or waiting) agent is interrupted with Esc, then
+// the pane must report the same agent stopped before the message is sent, through the normal
+// checked send (fresh request id, receipts, unknown outcomes never retried). The queue is held for
+// the whole time, so nothing else can slip in or go out twice.
+async function queueNow(key,qid){
+ const c=S.chat,q=Q.get(key);if(!c?.agent||!q||q.inflight)return;
+ const it=q.items.find(x=>x.qid===qid);if(!it||it.state!=='queued')return;
+ if(c.stale||c.exited){toast('窗格还没确认好，先别发');return;}
+ if(S.demo){toast('演示：不会真的中断和发送');return;}
+ q.items=[it,...q.items.filter(x=>x!==it)];q.paused='';q.tries=0;q.retryAt=0;q.ackAt=Date.now();it.record=c.record?.id||null;it.reason='';
+ q.inflight=true;it.state='interrupting';paintTimeline();
+ const busy=()=>!['idle','done'].includes(S.chat?.agent?.agent_status);
+ let handed=false;
+ try{
+  if(busy()){
+   try{await remote('key',{session:S.session,target:c.agent.pane_id,identity:c.agent.identity,key:'esc',id:uuid()});}
+   catch(e){const msg=e.message||String(e);it.reason=queueNotSent(msg)?msg:'中断没确认：'+msg;queuePause(q,'没能中断它，消息先没发。看一眼再点继续',true);return;}
+   // Wait for Herdr to report the same agent stopped (polled, not guessed).
+   const until=Date.now()+20000;
+   while(Date.now()<until){
+    await new Promise(r=>setTimeout(r,1000));if(S.chat!==c)break;
+    try{const r=await remote('status',{session:S.session});const cur=r.agents.find(a=>a.pane_id===c.agent.pane_id);
+     if(!cur||cur.identity!==c.agent.identity){c.stale=true;break;}
+     S.agents=S.agents.map(a=>a.pane_id===cur.pane_id?{...a,agent_status:cur.agent_status}:a);
+     if(cur.agent_status!==c.agent.agent_status){const was=c.agent.agent_status;c.agent={...c.agent,agent_status:cur.agent_status};noteStatus([c.agent]);onAgentStatus(was,cur.agent_status);}
+     if(['idle','done'].includes(cur.agent_status))break;}
+    catch(_){}}
+   if(S.chat!==c||c.stale||busy()){it.reason=c.stale?'窗格里的 Agent 变了，没发':'中断后它还没停下，消息没发。可以再点一次立即发送';return;}
+  }
+  it.state='queued';q.inflight=false;c.sentAt=0;handed=true;
+  await queueRun(c,key,q,true);
+ }
+ finally{if(it.state==='interrupting')it.state='queued';if(!handed)q.inflight=false;queueTidy(key);paintTimeline();renderComposer();}}
 // Why the head of the queue cannot go now ('' = it can). Pauses that need a person are set here.
 function queueBlock(c,key,q,force){
  const head=q.items[0];if(!head)return 'empty';
@@ -88,27 +121,40 @@ function queueBlock(c,key,q,force){
  const mine=S.outbox.filter(o=>o.key===key);
  const last=Math.max(c.sentAt||0,...mine.map(o=>o.at)),rec=S.since.get(key),seen=mine.some(o=>o.state==='sent');
  const ran=rec&&rec.at>last&&rec.prev==='working'&&['idle','done'].includes(rec.status);
- if(last||seen){if(!ran&&(seen||Date.now()-last<QUEUE_SETTLE))return 'wait';}
+ // Never wait on the transcript forever: pictures, slash commands or an interrupt can keep the text
+ // from matching. Herdr reporting the agent stopped well after the send is enough.
+ if(last&&!ran&&Date.now()-last<QUEUE_SETTLE)return 'wait';
  return '';}
 function queuePump(force){
  const c=S.chat;if(!c?.agent||S.demo||!S.active||!S.device)return;if(typeof T!=='undefined'&&T.view)return;
  const key=draftKey(),q=Q.get(key);if(!q||q.inflight||!q.items.length)return;
- const was=q.paused,why=queueBlock(c,key,q,force);if(q.paused!==was)paintTimeline();
+ const was=q.paused,prev=q.why,why=queueBlock(c,key,q,force);q.why=why;if(q.paused!==was||prev!==why)paintTimeline();
  if(why){if(force&&why!=='paused')toast(why==='hold'?'窗格还在确认，稍后再发':why==='busy'?'它还没停下，停下后自动发':'稍等一下再发');return;}
- queueRun(c,key,q);}
-// Read-only re-check of the pane (follow.js) right before sending.
-async function queueVerify(c){
- if(!FOLLOW.supported){const cur=S.agents.find(x=>x.pane_id===c.agent.pane_id);return !!cur&&cur.identity===c.agent.identity&&['idle','done'].includes(cur.agent_status);}
- if(FOLLOW.busy)return false;FOLLOW.busy=true;FOLLOW.last=Date.now();
+ queueRun(c,key,q,force);}
+// Read-only re-check of the pane right before sending. The latest status poll must show the same
+// agent, stopped; the conversation itself is confirmed by a follow check (follow.js). A follow check
+// that confirmed it moments ago is reused: on a remote (ch) pane each one takes seconds, and racing
+// the follow poll for it used to keep a message queued indefinitely.
+function queueStatusOk(c){const cur=S.agents.find(x=>x.pane_id===c.agent.pane_id);return S.chat===c&&!!cur&&cur.identity===c.agent.identity&&['idle','done'].includes(cur.agent_status)&&!c.stale&&!c.exited&&!c.following&&!c.unsure&&!c.followPending;}
+async function queueVerify(c,force){
+ if(!FOLLOW.supported)return queueStatusOk(c);
+ for(let i=0;FOLLOW.busy&&i<120;i++)await new Promise(r=>setTimeout(r,250));
+ if(S.chat!==c)return false;
+ if(FOLLOW.okAt&&Date.now()-FOLLOW.okAt<(followRemote(c)?30000:12000))return queueStatusOk(c);
+ if(FOLLOW.busy)return !!force&&queueStatusOk(c);
+ FOLLOW.busy=true;FOLLOW.last=Date.now();
  try{const r=await remote('agents',{session:S.session,target:c.agent.pane_id,identity:c.agent.identity});if(S.chat!==c)return false;
-  if(!r||!r.follow){FOLLOW.supported=false;return false;}
+  if(!r||!r.follow){FOLLOW.supported=false;return queueStatusOk(c);}
   const before=c.record?.id;followApply(c,r);const a=r.agents?.[0];
-  return S.chat===c&&!!a&&a.identity===c.agent.identity&&!c.stale&&!c.following&&!c.unsure&&!c.exited&&!c.followPending&&c.record?.id===before&&(!a.agent_status||['idle','done'].includes(a.agent_status));}
- catch(_){return false;}
+  const ok=S.chat===c&&!!a&&a.identity===c.agent.identity&&!c.stale&&!c.following&&!c.unsure&&!c.exited&&!c.followPending&&c.record?.id===before&&(!a.agent_status||['idle','done'].includes(a.agent_status));
+  if(ok)FOLLOW.okAt=Date.now();return ok;}
+ // A slow or failed check: "现在发" (the person is looking at this chat) settles for the status check.
+ catch(_){return !!force&&queueStatusOk(c);}
  finally{FOLLOW.busy=false;}}
-async function queueRun(c,key,q){
+async function queueRun(c,key,q,force){
  const it=q.items[0];q.inflight=true;it.state='checking';it.stage='';paintTimeline();
- let ok=false;try{ok=await queueVerify(c);}finally{if(!ok){it.state='queued';q.inflight=false;q.retryAt=Date.now()+3000;paintTimeline();}}
+ let ok=false;try{ok=await queueVerify(c,force);}finally{if(!ok){it.state='queued';q.inflight=false;q.retryAt=Date.now()+3000;q.checkFails=(q.checkFails||0)+1;paintTimeline();if(force)toast('没能确认窗格状态，先没发。等它停下再试');}}
+ q.checkFails=0;
  if(!ok)return;
  const a=c.agent;
  if(S.chat!==c||!S.active||draftKey()!==key||it.identity!==a.identity){it.state='queued';q.inflight=false;paintTimeline();return;}
@@ -134,12 +180,16 @@ async function queueRun(c,key,q){
 
 // ─── Views ──────────────────────────────────────────────────────────────────
 function queueLabel(c,q,it,i){
+ if(it.state==='interrupting')return '正在中断当前工作…';
  if(it.state==='checking')return '排队中 · 正在确认窗格…';
  if(it.state==='sending')return it.stage||'发送中…';
  if(it.state==='unknown')return '结果未知 · 不会自动重发';
  if(c?.exited)return '不会再发';
  if(i>0)return '排队中 · 第 '+(i+1)+' 条';
  if(q.paused)return '排队中 · 已暂停';
+ if(q.checkFails>=2)return '排队中 · 窗格确认有点慢，可以点「立即发送」';
+ if(q.why==='wait')return '排队中 · 等上一条被接收';
+ if(q.why==='hold')return '排队中 · 正在确认窗格';
  const st=c?.agent?.agent_status;return st==='blocked'?'排队中 · 处理完确认再发':st==='working'?'排队中 · 等它停下再发':'排队中 · 马上发';}
 function queueTimeline(list){
  const key=draftKey(),q=Q.get(key);if(!q?.items.length)return;const c=S.chat;
@@ -148,7 +198,7 @@ function queueTimeline(list){
   if(q.resumable&&!c?.exited)bar.append(btn('继续','queue-go',()=>queueGo(key,true)));box.append(bar);}
  q.items.forEach((it,i)=>{
   const row=el('article','message user queued'+(it.state==='unknown'?' unknown':''));row.dataset.qid=it.qid;
-  const meta=el('div','message-label');if(it.state==='checking'||it.state==='sending')meta.append(el('span','spinner mini'));meta.append(el('span','',queueLabel(c,q,it,i)));row.append(meta);
+  const meta=el('div','message-label');if(it.state==='checking'||it.state==='sending'||it.state==='interrupting')meta.append(el('span','spinner mini'));meta.append(el('span','',queueLabel(c,q,it,i)));row.append(meta);
   if(it.text.trim()){const b=el('div','bubble');b.append(userText(it.text));row.append(b);}
   if(it.pics.length)row.append(imgStrip(it.pics.map(p=>({url:p.thumb}))));
   if(it.docs?.length)row.append(fileList(it.docs.map(f=>({file:f.name,size:f.size}))));
@@ -156,7 +206,8 @@ function queueTimeline(list){
   if(it.state==='queued'||it.state==='unknown'){const acts=el('div','queue-actions');
    acts.append(btn('删掉','',()=>queueDrop(key,it.qid)));
    const live=c?.agent&&!c.stale&&!c.exited;acts.append(btn(live?'修改':'复制','',()=>queueEdit(key,it.qid)));
-   if(i===0&&it.state==='queued'&&live&&['idle','done'].includes(c.agent.agent_status)&&!q.inflight)acts.append(btn('现在发','now',()=>queueGo(key,true)));
+   // 立即发送: interrupts a busy agent first (see queueNow); an idle one just gets it now.
+   if(it.state==='queued'&&live&&!q.inflight){const b=btn('立即发送','now',()=>queueNow(key,it.qid));b.title=['idle','done'].includes(c.agent.agent_status)?'现在就发':'先中断它正在做的事，再发这条';acts.append(b);}
    row.append(acts);}
   box.append(row);});
  list.append(box);}

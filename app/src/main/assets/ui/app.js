@@ -332,8 +332,13 @@ function renderLiveState(live,a){
  if(st==='blocked'){if(qaLive(live,a))return;const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow','等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
   const pre=el('pre','confirm-screen',S.terminalText?tail(S.terminalText,12):'正在读取终端画面…');pre.id='confirm-screen';panel.append(pre);
   const keys=el('div','confirm-keys');[['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);live.append(panel);requestAnimationFrame(()=>{pre.scrollTop=pre.scrollHeight;});}
- else if(st==='working'){const strip=el('div','activity');strip.append(el('span','pulse'));const t=el('div','grow');const label=el('strong','','执行中');const at=statusSince(a)||S.chat.sentAt;if(at)label.append(' ',since(at));t.append(label);const line=el('span','activity-line',S.activity||'正在读取终端…');line.id='activity-line';t.append(line);strip.append(t,btn('中断','secondary small',()=>confirmAction('中断 Agent？','向 '+titleOf(a)+' 发送 Ctrl+C，会打断它正在执行的操作。','发送 Ctrl+C',()=>sendKey('ctrl+c','Ctrl+C'),true)));live.append(strip);}
+ else if(st==='working'){const strip=el('div','activity');strip.append(el('span','pulse'));const t=el('div','grow');const label=el('strong','','执行中');const at=statusSince(a)||S.chat.sentAt;if(at)label.append(' ',since(at));t.append(label);const line=el('span','activity-line',S.activity||'正在读取终端…');line.id='activity-line';t.append(line);strip.append(t,interruptButton(a));live.append(strip);}
  else if(S.chat.doneAt&&Date.now()-S.chat.doneAt<8000){const strip=el('div','activity done');strip.setAttribute('role','status');strip.append(icon('check'));const t=el('strong','grow','做完了'+(S.chat.took>=5000?' · 用时 '+dur(S.chat.took):''));strip.append(t);if(!S.stick)strip.append(btn('看结果','link-btn',()=>{S.stick=true;S.unseen=0;scrollBottom();updateJump();}));live.append(strip);}}
+// 中断 sends Esc: both Claude Code and Codex stop the current turn on Esc and never quit on it,
+// while a second Ctrl+C on an idle Claude would exit it. Ctrl+C stays in 终端按键.
+function interruptButton(a){
+ const b=btn('中断','secondary small',()=>confirmAction('中断 Agent？','让 '+titleOf(a)+' 停下手上的事（发送 Esc，不会退出）。排队的消息会在它停下后接着发。','中断',async()=>{S.chat.interruptAt=Date.now();renderComposer();await sendKey('esc','Esc');setTimeout(()=>{if(S.chat)renderComposer();},4000);},true));
+ b.disabled=!!S.chat?.interruptAt&&Date.now()-S.chat.interruptAt<4000;if(b.disabled)b.textContent='正在中断…';return b;}
 async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'已发送 '+label);setTimeout(()=>{refreshStatus();fetchTerminal(true);},700);}catch(e){toast('按键未确认：'+e.message+'。不会自动重发。');}}
 async function sendMessage(input){
  const text=input.value;const a=S.chat?.agent;const key=draftKey();const pics=imgAttached(key).slice(),docs=fileAttached(key).slice();if((!text.trim()&&!pics.length&&!docs.length)||!a)return;
@@ -505,11 +510,14 @@ window.pocketBack=pocketBack;
 addEventListener('resize',()=>{const c=document.getElementById('confirm-screen');if(c)c.scrollTop=c.scrollHeight;});
 window.setForeground=v=>{S.active=v;if(v){netForeground();refreshStatus();if(S.chat?.record&&!S.paused)fetchHistory();}};
 // Busy agents refresh faster; nothing polls in the background or in demo mode.
+// A ch pane's history is read over SSH on the other computer (~1 s a read), so it is polled
+// half as often: every 5 s while the agent works, every 10 s when idle. Reads never overlap.
+function historyDue(busy,n){return S.chat?.record?.remote?n%(busy?2:4)===0:busy||n%3===0;}
 let tick=0;
 setInterval(()=>{
  if(!S.active||S.demo||!S.device)return;tick++;
  const busy=S.chat?.agent&&!S.chat.stale&&['working','blocked'].includes(S.chat.agent.agent_status);
- if(S.chat){if(!S.paused&&!S.polling&&S.chatMode!=='terminal'&&(busy||tick%3===0))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);refreshStatus();}
+ if(S.chat){if(!S.paused&&!S.polling&&S.chatMode!=='terminal'&&historyDue(busy,tick))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);refreshStatus();}
  else if(S.tab==='live'&&tick%3===0)refreshStatus();
 },2500);
 

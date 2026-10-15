@@ -31,7 +31,7 @@ async function followRun(){
   if(S.chat!==c)return;
   // An older bridge ignores `target` and resolves every pane: far too heavy to poll.
   if(!r||!r.follow){FOLLOW.supported=false;if(c.following){c.following=false;renderChat();}return;}
-  followApply(c,r);}
+  followApply(c,r);if(!c.following&&!c.unsure&&!c.followPending)FOLLOW.okAt=Date.now();}
  catch(_){/* transient: the next tick retries; sending stays held while confirming */}
  finally{FOLLOW.busy=false;}}
 

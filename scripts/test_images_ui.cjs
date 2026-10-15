@@ -130,7 +130,7 @@ assert.equal(await queued.locator('.img-tile').count(),2,'pictures stay with the
 assert.equal(await page.getByRole('textbox',{name:'消息输入框',exact:true}).inputValue(),'');
 // Unknown outcome of the prompt itself: shown, never resent.
 await page.evaluate(()=>{fx.promptError='等了 35 秒还没有回应；请求已经发出，结果未知。';});
-await queued.getByRole('button',{name:'现在发',exact:true}).click();
+await queued.getByRole('button',{name:'立即发送',exact:true}).click();
 await queued.getByText('结果未知 · 不会自动重发',{exact:true}).waitFor();
 let prompts=await page.evaluate(()=>fx.calls.filter(c=>c.op==='prompt').map(c=>c.args));
 assert.equal(prompts.length,1);
