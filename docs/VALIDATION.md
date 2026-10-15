@@ -1,3 +1,23 @@
+# v0.4.0 terminal and missing-history fixes (2026-10-15)
+
+- Added a persistent SSH PTY view with bundled xterm.js, resizing, UTF-8 byte streaming, direct keyboard and explicit line submission. Returning to the list preserves the shell; disconnect/explicit close ends it. No reconnect or input replay.
+- Added ordinary Herdr panes across all workspaces with recent output snapshots, explicit target checks, text/run/key input and durable request receipts. The app does not close shared panes.
+- Fixed the actual login password dialog: remember-password checkbox is present there, and successful authentication saves the secret encrypted. Failed authentication does not replace the stored password. Version and save state are visible under My Connection.
+- Fixed history discovery beyond Herdr's optional session ID: exact native resume IDs, transcript paths/FDs, authorized ch-cli SSH route discovery; clear candidates when no unique binding exists. Fixed large internal tails, cross-window pagination and duplicate rollouts for the same thread. Read errors now remain visible with a retry action.
+- PASS: 40 Python bridge regressions. Browser checks cover remote history without a Herdr ID, remote picker context, the actual connection dialog's remember request, terminal views, stale-target/draft isolation, narrow/landscape layouts and reduced motion. Local Android debug and instrumentation builds pass.
+- Read-only current-workstation check: 10 live panes; 5 reliably auto-associated (1 Herdr ID, 2 explicit native resume IDs, 2 unique remote route threads). The other 5 expose readable candidates, not a claim that the first candidate belongs to the active pane. No real Agent or ordinary live terminal received test input.
+- Remote reads use existing SSH routing with strict host-key verification and only the authorized Codex/Claude history roots. No provider login files, remote installers or remote cache writes. The phone's SSH account view remains about the directly connected SSH user.
+- NOT VERIFIED: Physical handset, the user's Sakura Frp path, or input delivery to a real Herdr pane. Do not equate fixture SSH checks with those paths.
+
+Validated source: `d3d69ea`. [Successful full CI](https://github.com/HFO4AR/herdr-pocket/actions/runs/38701840215) and [signed preview-17](https://github.com/HFO4AR/herdr-pocket/releases/tag/preview-17).
+
+- PASS: Android lint/debug/release builds; emulator connected to isolated OpenSSH fixture with a pinned host key, installed the exact bundled bridge over SFTP, read synthetic history over SSH, and verified PTY UTF-8/cwd/resize/Ctrl+C/stale-target/duplicate-input behavior.
+- PASS: Real Android Keystore persistence, process restart, connection dialog remember checkbox, chat/history/tools/child navigation, rotation, SSH and Herdr terminal pages and demo input isolation. Native terminal screenshots inspected.
+- PASS: Downloaded published APK is `0.4.0-dev.17` / code 117; SHA-256 `170cf7ec5fd36befaee6cdd43cb54ab1cae81f19d97f17507f80833096a88107` matches the release checksum and `apksigner` validates the persistent release certificate.
+- During verification, UI automation initially observed a not-yet-ready Android accessibility tree; observations now retry against a fresh dump, never replaying input. A terminal CSS class collision was corrected after inspecting browser screenshots.
+
+---
+
 # v0.3.0 chat and Host-style validation (2026-10-15)
 
 Validated source: `9edfe3c`. [CI and automatic release](https://github.com/HFO4AR/herdr-pocket/actions/runs/38696764336).

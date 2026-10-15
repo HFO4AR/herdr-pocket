@@ -10,6 +10,8 @@ Not affiliated with Herdr or other similarly named mobile apps.
 
 <img src="docs/screenshots/agent.png" width="260" alt="Offline demo chat timeline" /> <img src="docs/screenshots/commands.png" width="260" alt="Offline demo command and output card" />
 
+<img src="docs/screenshots/ssh-terminal.png" width="260" alt="Offline SSH terminal demo" /> <img src="docs/screenshots/herdr-terminal.png" width="260" alt="Offline Herdr ordinary pane demo" />
+
 Screenshots use offline fixtures, never real conversations or credentials.
 
 视觉采用 Host App 默认亮色 / coral 设计规则：暖白底、珊瑚橙选中态、黑色主按钮，10 / 14 / 20 px 圆角与相同字体顺序。移动端保留至少 44 px 主要触控目标和聊天布局；当前不包含 Host 的深色主题选择器。
@@ -29,7 +31,7 @@ Screenshots use offline fixtures, never real conversations or credentials.
 - **历史浏览**：读取当前 SSH 用户 `~/.codex/sessions` 和 `~/.claude/projects` 下的 JSONL，搜索项目/标题/会话 ID，分页加载更早消息。即使 Agent 已退出，也可以只读浏览保留下来的文件。
 - **命令与结果**：工具调用和结果按 call ID 关联，独立「命令」视图及可展开卡片，显示具体命令、输出和记录中已有的退出状态。
 - **子 Agent**：根据实际父子元数据列出并进入独立子会话，支持返回父会话；不会把对子记录的操作发给父终端。
-- **在线会话**：通过 Herdr CLI 发送消息和经确认的按键。Herdr 提供明确会话 ID 时自动关联历史；缺少 ID 时可选择历史只读查看，或人工确认记录与当前窗格对应后在本次连接内关联；也保留实时「终端」视图。
+- **在线会话**：通过 Herdr CLI 发送消息和经确认的按键。通过可核实的 Herdr / 原生进程 / ch-cli 路由信息自动关联历史；缺少唯一标识时可选择候选只读查看，或人工确认对应关系后在本次连接内关联；也保留实时「终端」视图。
 - **我的连接**：SSH 用户、设备地址、端口、主机名和连接状态。不会读取服务商 auth/config 登录资料、邮箱或套餐。
 - **适配与动效**：小屏/横屏/宽屏布局，底部输入区随键盘调整，页面与弹层过渡、消息入场、按压反馈；尊重系统减少动画设置。
 
