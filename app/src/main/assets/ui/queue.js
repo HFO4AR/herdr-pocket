@@ -73,6 +73,8 @@ function queueBlock(c,key,q,force){
  if(head.state!=='queued')return 'busy';
  if(c.exited){queuePause(q,providerName(c.agent.agent)+' 已退出，排队的消息不会再发',false);return 'paused';}
  if(c.stale||c.following||c.unsure)return 'hold';
+ // The last slash command left a panel or picker open (slash.js): wait until it is closed.
+ if(slashPanelOpen(key))return 'hold';
  const switched=c.switched&&c.switched.at>Math.max(head.at,q.ackAt);
  if(switched||(head.record&&c.record&&head.record!==c.record.id)){queuePause(q,'窗格里换了一段对话，排队的先不发。看一眼再点继续',true);return 'paused';}
  if(c.switched&&Date.now()-c.switched.at<FOLLOW_SETTLE)return 'hold';
@@ -115,12 +117,13 @@ async function queueRun(c,key,q){
   const images=it.pics.length?await imgUpload(it.pics,stage=>{it.stage=stage;paintTimeline();}):null;
   const files=it.docs?.length?await fileUpload(it.docs,a,stage=>{it.stage=stage;paintTimeline();}):null;it.stage='';
   // A fresh request id for every attempt; the bridge refuses a reused one.
-  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:it.text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
+  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?it.text.trim():it.text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
   q.items=q.items.filter(x=>x!==it);q.tries=0;q.retryAt=0;
-  S.outbox.push({key,text:it.text,images:it.pics.map(p=>({url:p.thumb})),files:(it.docs||[]).map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sent',qid:it.qid});
+  const card=!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?slashCard(key,it.text):null;
+  if(card)card.state='sent';else S.outbox.push({key,text:it.text,images:it.pics.map(p=>({url:p.thumb})),files:(it.docs||[]).map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sent',qid:it.qid});
   if(it.pics.length)rpc('dropImages',{ids:it.pics.map(p=>p.id)}).catch(()=>{});if(it.docs?.length)rpc('dropFiles',{ids:it.docs.map(f=>f.id)}).catch(()=>{});
-  if(S.chat===c){c.sentAt=Date.now();c.doneAt=0;c.agent={...c.agent,agent_status:'working'};renderComposer();updateChatMeta();}
-  S.stick=true;paintTimeline();setTimeout(()=>{if(S.chat===c)fetchHistory();},900);}
+  if(S.chat===c){c.sentAt=Date.now();c.doneAt=0;if(!card)c.agent={...c.agent,agent_status:'working'};renderComposer();updateChatMeta();}
+  S.stick=true;paintTimeline();if(card)slashCapture(card);setTimeout(()=>{if(S.chat===c)fetchHistory();},900);}
  catch(e){const msg=e.message||String(e);it.stage='';
   if(queueNotSent(msg)){it.state='queued';it.reason=msg;it.tries=(it.tries||0)+1;q.tries++;
    if(queueTransient(msg)&&q.tries<3)q.retryAt=Date.now()+6000;

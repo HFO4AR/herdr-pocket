@@ -166,7 +166,7 @@ function agentRow(a){
  else{const last=lastActivity(a);side.append(el('span','row-time',last?(at?ago(Date.now()-at)+'前':relative(last/1000)).replace('刚刚前','刚刚'):''));
   if(unread){const d=el('span','unread-dot');d.title='做完了，还没看';side.append(d,el('span','sr-only','有新进展'));}
   else if(st==='done')side.append(el('span','row-state','已完成'));}
- n.append(avatar(a.agent,tone),text,side);return n;}
+ n.append(avatar(a.agent,tone),text,side);closeHold(n,()=>agentActions(a));return n;}
 // Within a group: unseen results first, then whatever changed most recently.
 function sortAgents(items){return items.map((a,i)=>({a,i,u:S.unread.has(agentKey(a))?1:0,t:lastActivity(a)})).sort((x,y)=>y.u-x.u||y.t-x.t||x.i-y.i).map(x=>x.a);}
 function livePage(main){
@@ -181,7 +181,8 @@ function livePage(main){
  function draw(){list.replaceChildren();const q=S.search.toLowerCase();const matches=S.agents.filter(a=>(titleOf(a)+' '+a.agent+' '+projectOf(a)).toLowerCase().includes(q));
   if(!matches.length){empty(list,'暂时没有会话',S.search?'没有匹配的 Agent。':'点「新建」开一个 Codex 或 Claude，或者在电脑的 Herdr 里启动。',S.search?undefined:createButton());return;}
   const groups=[['等你确认',a=>a.agent_status==='blocked'],['执行中',a=>a.agent_status==='working'],['空闲',a=>!['blocked','working'].includes(a.agent_status)]];
-  for(const [label,test] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;list.append(el('div','section-label',label+' · '+items.length));const g=el('div','card list-card');items.forEach(a=>g.append(agentRow(a)));list.append(g);}}
+  for(const [label,test] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;list.append(el('div','section-label',label+' · '+items.length));const g=el('div','card list-card');items.forEach(a=>g.append(agentRow(a)));list.append(g);}
+  closeHint(list);}
  draw();
  if(S.liveLoading)main.append(el('p','fine center','正在刷新…'));}
 function chooseSession(){const box=sheet('切换 Herdr 会话');S.sessions.forEach(name=>menuItem(box,name,()=>{S.session=name;loadLive();},name===S.session?'check':'folder'));}
@@ -284,16 +285,18 @@ function renderComposer(){
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
  renderLiveState(live,a);
  const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status;
- input.placeholder=st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':'说点什么，继续这段对话…';
+ input.placeholder=st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':'说点什么，继续这段对话…（/ 看命令）';
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
  send.classList.toggle('later',st==='working'||st==='blocked');imgTray(compose,key);fileTray(compose,key);send.disabled=!input.value.trim()&&!attCount(key);}
 function buildComposer(key){
- const compose=el('div','composer');compose.dataset.key=key;const input=el('textarea');input.rows=1;input.setAttribute('aria-label','消息输入框');input.setAttribute('enterkeyhint','enter');input.value=S.drafts.get(key)||'';
+ const compose=el('div','composer');compose.dataset.key=key;const input=el('textarea');input.rows=1;input.setAttribute('aria-label','消息输入框');input.setAttribute('enterkeyhint','enter');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-expanded','false');input.value=S.drafts.get(key)||'';
  const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');
  const grow=()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,innerHeight<560?96:140)+'px';};compose.grow=grow;
  // Enter is a newline on phones; Ctrl/⌘+Enter sends with a hardware keyboard.
- input.onkeydown=e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMessage(input);}};
- input.oninput=()=>{if(input.value)S.drafts.set(key,input.value);else S.drafts.delete(key);send.disabled=!input.value.trim()&&!attCount(key);grow();};
+ // While the slash list is open, arrows/Enter/Tab/Esc drive it (slash.js).
+ input.onkeydown=e=>{if(slashKeydown(e,compose,input))return;if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMessage(input);}};
+ input.oninput=()=>{if(input.value)S.drafts.set(key,input.value);else S.drafts.delete(key);send.disabled=!input.value.trim()&&!attCount(key);grow();slashSuggest(compose,input);};
+ input.onblur=()=>setTimeout(()=>{if(document.activeElement!==input)slashClose(compose);},150);input.onfocus=()=>slashSuggest(compose,input);
  const attach=ib('plus','添加附件',imgMenu);attach.classList.add('attach');
  compose.append(attach,input,send);requestAnimationFrame(grow);return compose;}
 function renderLiveState(live,a){
@@ -307,23 +310,29 @@ async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await r
 async function sendMessage(input){
  const text=input.value;const a=S.chat?.agent;const key=draftKey();const pics=imgAttached(key).slice(),docs=fileAttached(key).slice();if((!text.trim()&&!pics.length&&!docs.length)||!a)return;
  if(followHoldsSend())return;
+ slashClose(input.closest('.composer'));
+ // A panel left open by the last slash command would swallow this message (or Enter would pick in it).
+ if(slashPanelCard(key)){if(S.slashChecking)return;S.slashChecking=true;let held;try{held=await slashHold(a,key);}finally{S.slashChecking=false;}if(held||slashPanelCard(key))return;return sendMessage(input);}
  // Busy, or something already waiting: it goes into the send queue (queue.js), in order.
  if(queueWants(a,key)){queueCompose(input,key,a,text,pics,docs);return;}
  const epoch=S.epoch;const button=document.querySelector('.send');button.disabled=true;
  const item={key,text,images:pics.map(p=>({url:p.thumb})),files:docs.map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sending'};
- if(!S.demo){S.outbox.push(item);S.stick=true;paintTimeline();}
+ // Slash commands get a 「命令输出」 card (slash.js) instead of a pending bubble: most never reach the transcript.
+ const card=!S.demo&&!pics.length&&!docs.length&&slashIs(text,a)?slashCard(key,text):null;
+ if(!S.demo){if(!card)S.outbox.push(item);S.stick=true;paintTimeline();}
  try{
   // Pictures go up first; only then is the one prompt sent (never resent automatically).
   const images=pics.length?await imgUpload(pics,stage=>{item.stage=stage;paintTimeline();}):null;
   const files=docs.length?await fileUpload(docs,a,stage=>{item.stage=stage;paintTimeline();}):null;item.stage='';
-  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
+  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:card?text.trim():text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
   if(S.demo){toast('演示模式：未发送，草稿已保留');return;}
-  item.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
+  item.state='sent';if(card)card.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
   if(pics.length){imgSet(key,imgAttached(key).filter(p=>!pics.includes(p)));rpc('dropImages',{ids:pics.map(p=>p.id)}).catch(()=>{});}
   if(docs.length){fileSet(key,fileAttached(key).filter(f=>!docs.includes(f)));rpc('dropFiles',{ids:docs.map(f=>f.id)}).catch(()=>{});}
-  if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
-  S.stick=true;paintTimeline();if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);}
- catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
+  // A slash command may not start a turn at all (/status), so no optimistic "working": Herdr's own state decides.
+  if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;if(!card)S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
+  S.stick=true;paintTimeline();if(card)slashCapture(card);if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);}
+ catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
  finally{button.disabled=!input.value.trim()&&!attCount(key);}}
 function scrollBottom(){const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
 // A pending bubble disappears once the transcript shows the same user text.
@@ -376,7 +385,8 @@ function chatMenu(){
  menuItem(box,'刷新对话',()=>{S.paused=false;fetchHistory(false,true);},'refresh');
  menuItem(box,S.paused?'恢复自动更新':'暂停自动更新',()=>{S.paused=!S.paused;toast(S.paused?'自动更新已暂停':'自动更新已恢复');},S.paused?'refresh':'pause');
  menuItem(box,'选择其他历史记录',pickHistory,'history');
- if(S.chat.agent){menuItem(box,'终端按键',keyMenu,'terminal','↑ ↓ Enter Esc Ctrl+C');menuItem(box,'查看终端',()=>{S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal();},'terminal');}}
+ if(S.chat.agent){menuItem(box,'终端按键',keyMenu,'terminal','↑ ↓ Enter Esc Ctrl+C');menuItem(box,'查看终端',()=>{S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal();},'terminal');}
+ closeChatMenu(box);}
 function keyMenu(){const box=sheet('终端按键');box.append(el('p','fine','先看一眼终端：Enter 可能会批准当前操作。'));[['↑ 上','up'],['↓ 下','down'],['Enter 确认','enter'],['Esc 返回','esc'],['Ctrl+C 中断','ctrl+c']].forEach(([t,key])=>{const b=btn(t,'menu-item',()=>{closeSheet();sendKey(key,t);});box.append(b);});}
 async function pickHistory(){
  const targetAgent=S.chat?.agent;const box=sheet('选择历史记录');box.append(el('p','fine','选中后先只读打开，不会把消息发给其他 Agent。'));const list=el('div','pick-list');let requestNumber=0;
@@ -399,15 +409,16 @@ let searchTimer;
 function historyPage(main){
  pageHead(main,'','历史',S.device&&S.total?S.total+' 条记录':'',ib('refresh','刷新历史',()=>loadCatalog(S.catalogQuery||'')));if(!requireDevice(main))return;
  main.append(searchBox('搜索项目、标题或会话 ID',q=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>loadCatalog(q),400);},S.catalogQuery||''));
- const filters=el('div','tabs');[['all','全部'],['codex','Codex'],['claude','Claude'],['child','子 Agent']].forEach(([id,t])=>filters.append(btn(t,'pill'+(S.filter===id?' active':''),()=>{S.filter=id;renderHistoryList();filters.querySelectorAll('button').forEach(n=>n.classList.toggle('active',n.textContent===t));})));main.append(filters);
+ const filters=el('div','tabs');closeLoadHidden();[['all','全部'],['codex','Codex'],['claude','Claude'],['child','子 Agent'],...closeHiddenFilter()].forEach(([id,t])=>filters.append(btn(t,'pill'+(S.filter===id?' active':''),()=>{S.filter=id;renderHistoryList();filters.querySelectorAll('button').forEach(n=>n.classList.toggle('active',n.textContent===t));})));main.append(filters);
  const list=el('div');list.id='history-list';main.append(list);renderHistoryList();}
 function renderHistoryList(){
  const list=document.getElementById('history-list');if(!list)return;list.replaceChildren();
- const records=S.records.filter(r=>S.filter==='all'||(S.filter==='child'?r.parent:r.provider===S.filter));
+ const records=closeVisible(S.records.filter(r=>S.filter==='all'||S.filter==='hidden'||(S.filter==='child'?r.parent:r.provider===S.filter)));
  if(!records.length){if(S.catalogLoading)skeleton(list,5);else empty(list,'没有匹配的记录','只显示当前 SSH 用户的 Codex / Claude 本地历史。');return;}
  let day='',group=null;
  for(const r of records){const d=dayLabel(r.modified);if(d!==day||!group){day=d;list.append(el('div','section-label',d||'更早'));group=el('div','card list-card');list.append(group);}
-  const b=btn('','card-button history-row',()=>openRecord(r));const text=el('div','grow');text.append(el('div','card-title',r.title));const meta=el('div','card-meta');meta.append(el('span','',providerName(r.provider)),el('span','sep',clock(r.modified)));const project=(r.cwd||'').split('/').filter(Boolean).pop();if(project)meta.append(el('span','sep',project));if(r.parent)meta.append(el('span','badge muted','子 Agent'));text.append(meta);b.append(avatar(r.provider),text,icon('chevron'));group.append(b);}
+  const b=btn('','card-button history-row',()=>openRecord(r));const text=el('div','grow');text.append(el('div','card-title',r.title));const meta=el('div','card-meta');meta.append(el('span','',providerName(r.provider)),el('span','sep',clock(r.modified)));const project=(r.cwd||'').split('/').filter(Boolean).pop();if(project)meta.append(el('span','sep',project));if(r.parent)meta.append(el('span','badge muted','子 Agent'));text.append(meta);b.append(avatar(r.provider),text,icon('chevron'));closeHold(b,()=>historyActions(r));group.append(b);}
+ closeHiddenNote(list);
  if(S.next!==null&&S.next!==undefined)list.append(btn('加载更多历史','secondary wide',()=>loadCatalog(S.catalogQuery||'',true)));}
 async function loadCatalog(query='',more=false){
  if(!S.device)return;const epoch=++S.epoch;S.catalogLoading=true;if(!more&&!S.records.length)renderHistoryList();

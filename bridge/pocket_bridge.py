@@ -156,6 +156,14 @@ def mutate(request, prefix, agent, state_dir):
             if key not in ("up", "down", "left", "right", "enter", "esc", "ctrl+c"):
                 raise BridgeError("Unsupported key")
             args = ["agent", "send-keys", agent["pane_id"], key]
+        elif op == "exitAgent":
+            # The command is chosen here from the agent kind; the phone sends none.
+            if set(request) - CLOSE_KEYS: raise BridgeError("没发出去：请求里有不认识的字段")
+            command = EXIT_COMMANDS.get(agent.get("agent"))
+            if not command: raise BridgeError("没发出去：不认识这个 Agent，没法让它自己退出")
+            if agent.get("agent_status") not in ("idle", "done"):
+                raise BridgeError("没发出去：Agent 还在干活或在等确认，先中断它再结束")
+            args = ["agent", "prompt", agent["pane_id"], command]
         elif op == "answer":
             if agent.get("agent_status") != "blocked":
                 raise BridgeError("Agent is not waiting on a menu; refresh and inspect it first")
@@ -186,6 +194,7 @@ def mutate(request, prefix, agent, state_dir):
             db.commit()
             raise BridgeError(NOT_SENT[exc.code]) from exc
         result = {"sent": True, "receipt": req_id, "result": value}
+        if op == "exitAgent": result["command"] = args[-1]
         if op == "prompt" and (request.get("images") is not None or request.get("files") is not None): result["text"] = text
         db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
         db.commit()
@@ -812,6 +821,22 @@ def readable_output(value):
     return str(value)
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+
+
+def slash_record_text(content):
+    """Claude slash commands in a transcript: `<command-name>/x</command-name>…` and the
+    `<local-command-stdout>` that follows. Returned as-is (minus terminal colour codes) so the
+    phone can show them as a command card; the caveat and other local rows stay hidden."""
+    if not isinstance(content, str): return ""
+    text = content.strip()
+    if text.startswith(("<command-name>", "<command-message>")) and "<command-name>" in text:
+        return ANSI_RE.sub("", text)
+    if text.startswith(("<local-command-stdout>", "<local-command-stderr>")):
+        return ANSI_RE.sub("", text)
+    return ""
+
+
 def normalize_record(row, provider, offset):
     timestamp = row.get("timestamp", ""); result = []
     def add(kind, text, title="", call_id="", phase=""):
@@ -861,10 +886,17 @@ def normalize_record(row, provider, offset):
             output = readable_output(output)
             add("result", output, "执行结果", value.get("call_id", ""))
     else:
+        if row.get("type") == "system" and row.get("subtype") == "local_command" and not row.get("isMeta"):
+            # Newer Claude Code logs slash commands and their printed result as system rows.
+            text = slash_record_text(row.get("content"))
+            if text: add("user", text)
+            return result
         if row.get("type") not in ("user", "assistant") or row.get("isMeta"): return []
         value = row.get("message", {}); content = value.get("content", "")
         if isinstance(content, str):
-            if not content.startswith(("<local-command", "<command-name", "<system-reminder")): add(row["type"], content)
+            command = slash_record_text(content)
+            if command: add("user", command)
+            elif not content.startswith(("<local-command", "<command-name", "<command-message", "<system-reminder")): add(row["type"], content)
         elif isinstance(content, list):
             pictures = [i for i, b in enumerate(content) if embedded_image(b)]
             for block in content:
@@ -1124,13 +1156,13 @@ def parse_menu(text, provider=""):
             "fingerprint": hashlib.sha256(json.dumps(stable, ensure_ascii=False).encode()).hexdigest()[:20]}
 
 
-def with_menu(screen, agent):
+def with_menu(screen, agent, always=False):
     """Attach the parsed menu to a read while the agent waits on one.
 
     The read also carries Herdr's state from the same request, so the phone sees
     "blocked" as soon as it reads the screen instead of waiting for a status poll."""
     screen["agent_status"] = agent.get("agent_status")
-    if agent.get("agent_status") == "blocked":
+    if always or agent.get("agent_status") == "blocked":
         screen["menu"] = parse_menu(screen.get("text", ""), agent.get("agent", ""))
     return screen
 
@@ -1788,7 +1820,7 @@ def create_dir(raw, known):
     raise BridgeError("没创建：只能用家目录下的目录，或已经有窗格在用的目录")
 
 
-def receipt_open(state_dir, req_id, digest):
+def receipt_open(state_dir, req_id, digest, unknown="上次新建的结果未知：先刷新列表看看，别直接重试"):
     """Same receipts as other mutations: written before anything happens, never executed twice."""
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     db = sqlite3.connect(state_dir / "receipts.sqlite", timeout=5)
@@ -1798,7 +1830,7 @@ def receipt_open(state_dir, req_id, digest):
     if previous:
         db.rollback(); db.close()
         if previous[0] != digest: raise BridgeError("Request id reused with different content")
-        if previous[1] is None: raise BridgeError("上次新建的结果未知：先刷新列表看看，别直接重试")
+        if previous[1] is None: raise BridgeError(unknown)
         return None, json.loads(previous[1])
     db.execute("INSERT INTO receipts VALUES (?, ?, NULL)", (req_id, digest))
     db.commit()
@@ -1914,6 +1946,187 @@ def create_agent(request, prefix, state_dir):
         db.close()
 
 
+# ─── Slash commands ─────────────────────────────────────────────────────────
+# The phone ships the built-in command lists; this adds what the user installed: Claude custom
+# commands and skills (user + project, from the pane's working directory upwards) and Codex custom
+# prompts. Names only — file contents are never read or returned.
+COMMAND_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+COMMANDS_MAX = 200
+
+
+def project_dirs(cwd):
+    """The pane's directory and its parents, stopping above the home directory or after 8 levels."""
+    try: path = Path(cwd).resolve() if isinstance(cwd, str) and cwd.startswith("/") else None
+    except (OSError, RuntimeError): path = None
+    if path is None: return []
+    home, found = Path.home().resolve(), []
+    while len(found) < 8:
+        if path == home or path == path.parent: break
+        found.append(path)
+        path = path.parent
+    return found
+
+
+def command_files(folder, prefix=""):
+    """`*.md` under a commands folder; one level of sub-folders becomes `dir:name`, like Claude."""
+    names = []
+    try: entries = sorted(folder.iterdir(), key=lambda p: p.name)
+    except OSError: return names
+    for entry in entries[:400]:
+        try:
+            if entry.is_file() and entry.suffix == ".md" and COMMAND_NAME.fullmatch(entry.stem):
+                names.append(prefix + entry.stem)
+            elif entry.is_dir() and not prefix and COMMAND_NAME.fullmatch(entry.name):
+                names.extend(command_files(entry, entry.name + ":"))
+        except OSError: continue
+    return names
+
+
+def skill_names(folder):
+    names = []
+    try: entries = sorted(folder.iterdir(), key=lambda p: p.name)
+    except OSError: return names
+    for entry in entries[:400]:
+        try:
+            if entry.is_dir() and COMMAND_NAME.fullmatch(entry.name) and (entry / "SKILL.md").is_file(): names.append(entry.name)
+        except OSError: continue
+    return names
+
+
+def custom_commands(agent):
+    provider = agent.get("agent")
+    home, seen, found = Path.home(), set(), []
+    def add(name, kind, scope):
+        if name in seen or len(found) >= COMMANDS_MAX: return
+        seen.add(name); found.append({"name": name, "kind": kind, "scope": scope})
+    if provider == "claude":
+        for directory in project_dirs(agent.get("foreground_cwd") or agent.get("cwd")):
+            for name in command_files(directory / ".claude/commands"): add(name, "command", "project")
+            for name in skill_names(directory / ".claude/skills"): add(name, "skill", "project")
+        for name in command_files(home / ".claude/commands"): add(name, "command", "user")
+        for name in skill_names(home / ".claude/skills"): add(name, "skill", "user")
+    elif provider == "codex":
+        codex_home = Path(os.environ.get("CODEX_HOME") or home / ".codex")
+        for name in command_files(codex_home / "prompts", ""):
+            if ":" not in name: add("prompts:" + name, "prompt", "user")
+    return {"provider": provider or "", "commands": found}
+
+
+# ─── Closing sessions ─────────────────────────────────────────────────────────
+# Ending an agent or closing its pane from the phone. Both end running processes, so the
+# phone names the exact pane and the identity it showed the person; the bridge re-checks
+# that against the live pane, writes a receipt before acting and never runs anything twice.
+#  · exitAgent (in mutate): the agent quits its own way; the bridge picks the command
+#    (Claude Code `/exit`, Codex `/quit`), only while the agent is idle. The pane stays a shell.
+#  · closePane: `herdr pane close <pane>`, nothing else. The pane's processes end with it.
+# For a ch-cli attach the pane only holds the SSH attach: closing it detaches and the remote
+# tmux session keeps running (it can be resumed with `ch resume`); exiting the agent ends it.
+EXIT_COMMANDS = {"claude": "/exit", "codex": "/quit"}
+CLOSE_KEYS = {"v", "op", "session", "id", "target", "identity"}
+PANE_ID = re.compile(r"w[A-Za-z0-9]+:p[A-Za-z0-9]+")
+HIDDEN_ID = re.compile(r"[a-f0-9]{64}|remote:[a-f0-9]{24}:[a-f0-9]{64}")
+HIDDEN_MAX = 2000
+
+
+def close_target(request, prefix):
+    """The live pane and its agent (or None), only if it is still what the phone showed."""
+    target, expected = request.get("target"), request.get("identity")
+    if not isinstance(target, str) or not PANE_ID.fullmatch(target):
+        raise BridgeError("没关：窗格编号不对")
+    if not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected):
+        raise BridgeError("没关：缺少窗格身份")
+    agent = next((a for a in agents(prefix) if a.get("pane_id") == target), None)
+    try: live = call(prefix + ["pane", "get", target])
+    except HerdrRejected as exc:
+        if exc.code == "pane_not_found": raise BridgeError("没关：这个窗格已经不在了，刷新一下") from exc
+        raise
+    pane = live.get("pane", live)
+    if pane.get("pane_id") != target: raise BridgeError("没关：这个窗格已经不在了，刷新一下")
+    if agent:
+        if agent["identity"] != expected: raise BridgeError("没关：这个窗格里的 Agent 变了，刷新列表再看")
+    elif pane.get("agent") or not pane.get("terminal_id") or identity(pane) != expected:
+        raise BridgeError("没关：这个窗格变了，刷新列表再看")
+    return pane, agent
+
+
+def close_info(request, prefix):
+    """Read-only facts for the confirmation sheet: where the pane is and what closing it means."""
+    pane, agent = close_target(request, prefix)
+    wid, tid = pane.get("workspace_id"), pane.get("tab_id")
+    workspace = next((w for w in call(prefix + ["workspace", "list"]).get("workspaces", []) if w.get("workspace_id") == wid), {})
+    tab = next((t for t in call(prefix + ["tab", "list", "--workspace", wid]).get("tabs", []) if t.get("tab_id") == tid), {}) if wid else {}
+    route = probe_pane(agent, prefix, agent["agent"])["route"] if agent else None
+    provider = (agent or {}).get("agent")
+    return {"pane_id": pane["pane_id"], "agent": provider, "agent_status": (agent or {}).get("agent_status"),
+            "focused": bool(pane.get("focused")), "workspace_label": str(workspace.get("label") or ""),
+            "tab_label": str(tab.get("label") or ""), "tab_panes": tab.get("pane_count"),
+            "workspace_panes": workspace.get("pane_count"), "exit_command": EXIT_COMMANDS.get(provider),
+            "ch": bool(route), "ch_session": Path(route["workspace"]).name if route else None}
+
+
+def close_pane(request, prefix, state_dir):
+    extra = set(request) - CLOSE_KEYS
+    if extra: raise BridgeError("没关：请求里有不认识的字段")
+    req_id = request.get("id", "")
+    if not isinstance(req_id, str) or not re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", req_id):
+        raise BridgeError("Mutation requires a UUID request id")
+    digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    db, previous = receipt_open(state_dir, req_id, digest, "上次关闭的结果未知：先刷新列表看看，别直接重试")
+    if previous is not None: return previous
+    try:
+        try:
+            pane, agent = close_target(request, prefix)
+        except BridgeError as exc:
+            # Checked before anything was closed: record the refusal so this id can never act later.
+            receipt_save(db, req_id, {"closed": False, "refused": str(exc)[:300]})
+            raise
+        target = pane["pane_id"]
+        try:
+            call(prefix + ["pane", "close", target])
+        except HerdrRejected as exc:
+            receipt_save(db, req_id, {"closed": False, "code": exc.code})
+            if exc.code == "pane_not_found": raise BridgeError("没关：这个窗格已经不在了，刷新一下") from exc
+            raise BridgeError("没关：Herdr 没接受（" + exc.code + "）") from exc
+        except BridgeError as exc:
+            raise BridgeError("关闭结果未知：Herdr 没及时回应。刷新列表看看，别直接重试") from exc
+        result = {"closed": True, "pane_id": target, "agent": (agent or {}).get("agent"), "verified": False}
+        receipt_save(db, req_id, result)
+        try: call(prefix + ["pane", "get", target])
+        except HerdrRejected as exc: result["verified"] = exc.code == "pane_not_found"
+        except BridgeError: pass
+        receipt_save(db, req_id, result)
+        return result
+    finally:
+        db.close()
+
+
+def hidden_path(state_dir):
+    return state_dir / "hidden-records.json"
+
+
+def hidden_records(request, state_dir):
+    """History records the person removed from the app's list. Only IDs; transcripts are never touched."""
+    path = hidden_path(state_dir)
+    try:
+        ids = json.loads(path.read_text()) if path.is_file() and not path.is_symlink() else []
+        if not isinstance(ids, list): ids = []
+    except (OSError, ValueError): ids = []
+    ids = [x for x in ids if isinstance(x, str) and HIDDEN_ID.fullmatch(x)]
+    add, remove = request.get("add", []), request.get("remove", [])
+    if not add and not remove: return {"ids": ids}
+    for value in (add, remove):
+        if not isinstance(value, list) or len(value) > 200 or not all(isinstance(x, str) and HIDDEN_ID.fullmatch(x) for x in value):
+            raise BridgeError("Invalid record ids")
+    ids = [x for x in ids if x not in remove and x not in add] + [x for x in dict.fromkeys(add) if x not in remove]
+    ids = ids[-HIDDEN_MAX:]
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temp = state_dir / ".hidden-records.tmp"
+    temp.write_text(json.dumps(ids))
+    os.chmod(temp, 0o600)
+    os.replace(temp, path)
+    return {"ids": ids}
+
+
 def ssh_info():
     import getpass
     import socket
@@ -1966,7 +2179,12 @@ def handle(request, state_dir=None):
         prefix = select_session(request)
         if op == "createInfo": return create_info(prefix)
         return create_agent(request, prefix, state_dir or Path.home() / ".local/state/herdr-pocket")
-    if op not in ("agents", "status", "read", "prompt", "key", "answer", "stageFile"):
+    if op == "hidden": return hidden_records(request, state_dir or Path.home() / ".local/state/herdr-pocket")
+    if op in ("closeInfo", "closePane"):
+        prefix = select_session(request)
+        if op == "closeInfo": return close_info(request, prefix)
+        return close_pane(request, prefix, state_dir or Path.home() / ".local/state/herdr-pocket")
+    if op not in ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent"):
         raise BridgeError("Unknown operation")
     prefix = select_session(request)
     if op == "status":
@@ -1985,8 +2203,12 @@ def handle(request, state_dir=None):
         raise BridgeError("Agent changed or disappeared; reload the agent list")
     if op == "stageFile":
         return stage_file(request, prefix, agent)
+    if op == "commands":
+        return custom_commands(agent)
     if op == "read":
-        return with_menu(call(prefix + ["agent", "read", target, "--source", "recent-unwrapped", "--lines", "160"]), agent)
+        # `menu: true` (after a slash command) parses a picker even when Herdr does not call it blocked.
+        return with_menu(call(prefix + ["agent", "read", target, "--source", "recent-unwrapped", "--lines", "160"]), agent,
+                         request.get("menu") is True)
     return mutate(request, prefix, agent, state_dir or Path.home() / ".local/state/herdr-pocket")
 
 

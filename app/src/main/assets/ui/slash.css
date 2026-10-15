@@ -1,0 +1,43 @@
+/* Slash commands (slash.js): the suggestion list above the composer and the 「命令输出」 cards. */
+.slash-pop{margin-bottom:8px;border:1px solid var(--line-strong);border-radius:var(--radius-card);background:var(--surface);box-shadow:var(--shadow-lift);max-height:min(42vh,300px);max-height:min(42dvh,300px);overflow:auto;overscroll-behavior:contain;padding:4px}
+.slash-head{position:sticky;top:-4px;z-index:1;display:flex;justify-content:space-between;gap:8px;margin:-4px -4px 2px;padding:8px 12px 6px;background:var(--surface);border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.slash-count{color:var(--faint)}
+.slash-item{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:6px 10px;border-radius:var(--radius-control);text-align:left}
+.slash-item.active{background:var(--soft)}
+.slash-item:active{transform:none;background:var(--sunken)}
+.slash-name{font:600 13.5px/1.3 var(--mono);color:var(--ink);flex-shrink:0;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slash-item.active .slash-name{color:var(--accent)}
+.slash-desc{flex:1;min-width:0;font-size:12.5px;line-height:1.35;color:var(--muted);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.slash-tag{flex-shrink:0;font-size:11px;padding:1px 6px;border-radius:6px;background:var(--sunken);color:var(--ink-2)}
+.slash-empty{padding:10px 12px;font-size:12.5px;color:var(--muted)}
+@media(max-width:360px){.slash-name{max-width:52%}.slash-item{gap:8px;padding:6px 8px}}
+@media(max-height:480px){.slash-pop{max-height:46vh}}
+
+/* Output cards in the timeline */
+.slash-card{align-self:stretch;min-width:0;border:1px solid var(--line);border-radius:var(--radius-card);background:var(--surface);padding:10px 12px 4px;box-shadow:var(--shadow)}
+.slash-card.panel{border-color:var(--soft-line)}
+.slash-card.failed{border-color:#f3c9c6}
+.slash-card-head{display:flex;align-items:center;gap:8px;min-height:28px}
+.slash-card-head .notice-icon{background:var(--soft);color:var(--accent)}
+.slash-card-title{min-width:0;font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slash-card-kicker{font-weight:600;color:var(--ink-2)}
+.slash-cmd{font:600 13px var(--mono);color:var(--ink);background:none;padding:0}
+.slash-state{display:flex;align-items:center;gap:6px;flex-shrink:0;font-size:12px;color:var(--faint)}
+.slash-card.panel .slash-state{color:var(--accent);font-weight:600}
+.slash-card.failed .slash-state,.slash-error{color:var(--danger)}
+.slash-desc-line{margin:2px 0 4px 30px;font-size:12px;color:var(--muted)}
+.slash-screen,.slash-out{margin:8px 0 2px;max-height:min(46vh,340px);overflow:auto;overscroll-behavior:contain;font:11.5px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;background:var(--terminal);color:var(--terminal-ink);border-radius:var(--radius-control);padding:10px 12px;user-select:text;-webkit-user-select:text}
+.slash-out{background:var(--sunken);color:var(--ink-2);max-height:220px}
+.slash-out.err{color:var(--danger)}
+.slash-hint{margin:8px 0 0;font-size:12.5px;color:var(--ink-2)}
+.slash-error{margin:8px 0 0;font-size:12.5px;line-height:1.5}
+.slash-keys{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.slash-keys button{min-height:44px;min-width:48px}
+.slash-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:2px;margin-top:2px}
+.slash-actions .link-btn{display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:0 10px;color:var(--muted)}
+.slash-actions .link-btn svg{width:15px;height:15px}
+.slash-card.logged{box-shadow:none;background:var(--bg)}
+/* The screen capture inside Claude's own command record. */
+.slash-card.in-turn{border:0;box-shadow:none;background:none;padding:6px 0 0;margin-top:4px;border-top:1px dashed var(--line-strong);border-radius:0}
+.slash-screen-head{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+@media(max-height:480px){.slash-screen{max-height:52vh}}
