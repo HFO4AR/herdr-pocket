@@ -370,4 +370,25 @@ class HistoryTests(unittest.TestCase):
         page=bridge.history_page({'record_id':record['id']},catalog)
         self.assertEqual(len(page['children']),1)
 
+
+    def test_forked_codex_subagent_is_a_child_not_a_copy_of_its_parent(self):
+        parent='01a13593-0000-0000-0000-000000000001'; child='01a13e78-0000-0000-0000-000000000002'
+        rows=[{'ordinal':0,'type':'session_meta','payload':{'id':child,'parent_thread_id':parent,'cwd':'/w','agent_path':'/root/history_fix','agent_nickname':'Peirce','subagent_history_start_ordinal':3,'source':{'subagent':{'thread_spawn':{'parent_thread_id':parent}}}}},
+              {'ordinal':1,'type':'session_meta','payload':{'id':parent,'cwd':'/w'}},
+              dict(codex('user','parent prompt copied into the fork'),ordinal=2),
+              dict(codex('user','find why history is missing'),ordinal=3),
+              dict(codex('assistant','found it'),ordinal=4)]
+        self.write('codex','child.jsonl',rows)
+        entry=next(x for x in bridge.transcript_catalog() if x['thread']==child)
+        self.assertEqual((entry['parent'],entry['role'],entry['title']),(parent,'history_fix','find why history is missing'))
+        texts=[m['text'] for m in bridge.history_page({'record_id':entry['id']},[entry])['messages']]
+        self.assertEqual(texts,['find why history is missing','found it'])
+
+    def test_claude_subagent_uses_meta_description(self):
+        self.write('claude','proj/sess/subagents/agent-abc.jsonl',[{'type':'user','sessionId':'sess','message':{'content':'You are the follow agent. Long brief...'}}])
+        (self.home/'claude/proj/sess/subagents/agent-abc.meta.json').write_text(json.dumps({'agentType':'general-purpose','description':'Follow pane session changes'}))
+        entry=next(x for x in bridge.transcript_catalog() if x['thread']=='abc')
+        self.assertEqual((entry['parent'],entry['title'],entry['role']),('sess','Follow pane session changes','general-purpose'))
+
+
 if __name__=='__main__':unittest.main()

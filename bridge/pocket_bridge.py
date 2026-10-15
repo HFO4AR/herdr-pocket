@@ -650,14 +650,19 @@ def text_content(value):
 def record_meta(path, provider):
     meta = {"provider": provider, "thread": path.stem, "parent": None, "cwd": "", "title": "", "role": ""}
     read = 0
+    seen_meta = False
+    start = 0
     with path.open("rb") as stream:
-        for _ in range(32):
+        for _ in range(96):
             line = stream.readline(2_000_001); read += len(line)
             if len(line) > 2_000_000 or read > 4_000_000: break
             try: row = json.loads(line)
             except (ValueError, UnicodeError): continue
             if not isinstance(row,dict): continue
-            if provider == "codex" and row.get("type") == "session_meta":
+            # A forked Codex sub-agent copies its parent's history (including the parent's
+            # session_meta) before its own work starts; only the first session_meta is ours.
+            if provider == "codex" and row.get("type") == "session_meta" and not seen_meta:
+                seen_meta = True
                 value = row.get("payload", {})
                 source = value.get("source", {})
                 sub = source.get("subagent", {}) if isinstance(source, dict) else {}
@@ -665,31 +670,53 @@ def record_meta(path, provider):
                 if isinstance(sub, dict) and sub.get("other") in ("guardian", "review"):
                     return None
                 spawn = sub.get("thread_spawn", {}) if isinstance(sub, dict) else {}
+                agent_path = value.get("agent_path") or spawn.get("agent_path") or ""
                 meta.update(thread=value.get("id", path.stem), cwd=value.get("cwd", ""),
                             parent=value.get("parent_thread_id") or spawn.get("parent_thread_id"),
-                            role=value.get("agent_nickname") or value.get("agent_role") or
+                            role=agent_path.rstrip("/").rsplit("/", 1)[-1] or value.get("agent_nickname") or value.get("agent_role") or
                                  (sub.get("other", "") if isinstance(sub, dict) else ""))
+                start = value.get("subagent_history_start_ordinal") or 0
+                if isinstance(start, int) and start > 0: meta["start"] = start
+                continue
+            if provider == "codex" and start and isinstance(row.get("ordinal"), int) and row["ordinal"] < start:
+                continue
             if provider == "codex" and row.get("type") == "response_item":
                 message = row.get("payload", {})
                 if message.get("role") == "user" and not meta["title"]:
                     title = text_content(message.get("content", []))
                     if title and not title.startswith(("<", "# AGENTS")):
                         meta["title"] = title[:100]
+            # Normal sessions are identified within 32 lines; forks may need to skip a copied prefix.
+            if meta["title"] and _ >= 31: break
             if provider == "claude":
                 meta["cwd"] = row.get("cwd", meta["cwd"])
                 if "subagents" in path.parts:
                     meta["parent"] = path.parent.parent.name
                     meta["thread"] = path.stem.removeprefix("agent-")
+                    if not meta["role"]: meta.update(claude_subagent_label(path))
                 else: meta["thread"] = row.get("sessionId", path.stem)
                 if row.get("type") == "user" and not row.get("isMeta") and not meta["title"]:
                     title = text_content(row.get("message", {}).get("content", ""))
                     if title and not title.startswith(("<", "# AGENTS")): meta["title"] = title[:100]
+    if meta.get("label"): meta["title"] = meta.pop("label")
     meta["title"] = meta["title"] or meta["role"] or ("对话 · " + (Path(meta["cwd"]).name or str(meta["thread"])[:8]))
     return meta
 
 
+def claude_subagent_label(path):
+    """Claude writes <agent>.meta.json beside a sub-agent transcript with its short description."""
+    side = path.with_name(path.stem + ".meta.json")
+    try:
+        if side.is_symlink() or side.stat().st_size > 65536: return {"role": "subagent"}
+        value = json.loads(side.read_text())
+        label = str(value.get("description") or "").strip()[:100]
+        return {"role": str(value.get("agentType") or "subagent")[:60], **({"label": label} if label else {})}
+    except (OSError, ValueError, AttributeError):
+        return {"role": "subagent"}
+
+
 def transcript_catalog(write_cache=True):
-    cache_path = Path.home() / ".local/state/herdr-pocket/catalog-v3.json"
+    cache_path = Path.home() / ".local/state/herdr-pocket/catalog-v4.json"
     try: cache = json.loads(cache_path.read_text())
     except (OSError, ValueError): cache = {}
     entries, new_cache = [], {}
@@ -828,7 +855,10 @@ def history_page(request, catalog):
             # If one record exceeds the whole window, advance across that record.
             before = start if start < end else window_start
             for offset, line in reversed(lines):
-                try: values = normalize_record(json.loads(line), entry["provider"], offset)
+                try:
+                    row = json.loads(line)
+                    copied = entry.get("start") and isinstance(row.get("ordinal"), int) and row["ordinal"] < entry["start"]
+                    values = [] if copied else normalize_record(row, entry["provider"], offset)
                 except (ValueError, TypeError, AttributeError): values = []
                 messages[0:0] = values; before = offset
                 if len(messages) >= 35: break

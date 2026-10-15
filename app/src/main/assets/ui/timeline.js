@@ -84,11 +84,30 @@ function workPreview(turn){const last=turn.work.filter(e=>e.type!=='notice').at(
  if(last.type==='agent')return agentName(last.m.title)+'：'+tlFirstLine(last.m.text);return tlFirstLine(last.m.text);}
 function agentName(path){return String(path||'子 Agent').split('/').filter(Boolean).pop()||'子 Agent';}
 
+// Link a spawn call or an agent message to the child transcript it refers to:
+// Claude spawn results carry the child's agentId; Codex messages carry its agent path.
+function childFor(texts){
+ const kids=S.children||[];if(!kids.length)return null;const hay=texts.filter(Boolean).map(String);
+ for(const c of kids){const role=c.role&&!/^(subagent|general-purpose)$/i.test(c.role)?c.role:'';
+  for(const t of hay){if(c.thread&&String(c.thread).length>=8&&t.includes(c.thread))return c;
+   if(role&&(t==='/root/'+role||t.endsWith('/'+role)||t===role))return c;}}
+ for(const c of kids){if(c.title&&hay.some(t=>{try{return JSON.parse(t).description===c.title;}catch(_){return false;}}))return c;}
+ return null;}
+// Sub-agents spawned in a turn stay reachable without opening the work block.
+function turnChildren(turn){const seen=new Map();for(const e of turn.work){let c=null;
+ if(e.type==='tool'&&toolKind(e.entry.tool?.title||e.entry.result?.title).label==='子 Agent')c=childFor([e.entry.tool?.text,e.entry.result?.text]);
+ else if(e.type==='agent')c=childFor([e.m.title]);else if(e.type==='notice')c=childFor([e.m.text]);if(c&&!seen.has(c.id))seen.set(c.id,c);}return [...seen.values()];}
+function childStrip(kids){const box=el('div','sub-strip');box.append(el('span','sub-strip-label',kids.length+' 个子 Agent'));
+ for(const c of kids){const b=btn('','sub-chip',()=>openRecord(c,true),'branch');b.append(el('span','truncate',c.title||c.role||String(c.thread).slice(0,8)),icon('chevron'));b.setAttribute('aria-label','查看子 Agent '+(c.title||c.role||''));box.append(b);}
+ return box;}
+function childLink(c){const b=btn('查看','sub-open',e=>{e.preventDefault();e.stopPropagation();openRecord(c,true);},'chevron');b.setAttribute('aria-label','查看子 Agent '+(c.title||c.role||''));return b;}
+
 // ─── Rows ───────────────────────────────────────────────────────────────────
 function toolRow(entry,open){
  const t=entry.tool,r=entry.result;const kind=toolKind(t?.title||r?.title);const failed=resultFailed(r);
  const d=el('details','tool-row'+(failed?' failed':''));d.dataset.key='row:'+entry.id;d.dataset.id=entry.id;d.open=!!open;const s=el('summary');
- s.append(el('span','tool-icon'),el('span','tool-verb',kind.label),el('span','tool-text',t?toolSummary(t):(r?.title||'输出')),el('span','tool-state '+(failed?'bad':r?'good':'wait'),failed?'失败':r?'':'…'));s.firstChild.append(icon(kind.icon));d.append(s);
+ s.append(el('span','tool-icon'),el('span','tool-verb',kind.label),el('span','tool-text',t?toolSummary(t):(r?.title||'输出')),el('span','tool-state '+(failed?'bad':r?'good':'wait'),failed?'失败':r?'':'…'));s.firstChild.append(icon(kind.icon));
+ const child=kind.label==='子 Agent'?childFor([t?.text,r?.text]):null;if(child)s.append(childLink(child));d.append(s);
  // Bodies are built on first open: a long turn can hold hundreds of large outputs.
  const fill=()=>{if(d.childElementCount>1)return;const body=el('div','tool-body');
   if(t){const cap=el('div','tool-caption');cap.append(el('span','',t.title||'调用内容'),btn('复制','code-copy',()=>copyText(toolInput(t)),'copy'));body.append(cap,el('pre','',toolInput(t)));if(t.truncated)body.append(el('small','','内容超过 16 KB，已截断。'));}
@@ -122,11 +141,13 @@ function promptRow(m){
  return row;}
 function noticeRow(m,n,open){
  const d=el('details','notice-row'+(n.tone?' '+n.tone:''));d.dataset.key='notice:'+m.id;d.open=open.has('notice:'+m.id);const s=el('summary');
- const ic=el('span','notice-icon');ic.append(icon(n.icon||'tool'));s.append(ic,el('span','notice-label',n.label),el('span','notice-text',n.text),el('span','notice-time',clock(m.timestamp)));d.append(s);
+ const ic=el('span','notice-icon');ic.append(icon(n.icon||'tool'));s.append(ic,el('span','notice-label',n.label),el('span','notice-text',n.text),el('span','notice-time',clock(m.timestamp)));
+ const child=childFor([m.text]);if(child)s.append(childLink(child));d.append(s);
  const fill=()=>{if(d.childElementCount<2)d.append(el('pre','notice-body',m.text));};if(d.open)fill();d.addEventListener('toggle',()=>{if(d.open)fill();});return d;}
 function agentMessageRow(m,open){
  const d=el('details','notice-row agent'+(m.phase==='final_answer'?' done':''));d.dataset.key='agent:'+m.id;d.open=open.has('agent:'+m.id);const s=el('summary');
- const ic=el('span','notice-icon');ic.append(icon('branch'));s.append(ic,el('span','notice-label',agentName(m.title)+(m.phase==='final_answer'?' 完成':'')),el('span','notice-text',tlFirstLine(m.text)),el('span','notice-time',clock(m.timestamp)));d.append(s);
+ const ic=el('span','notice-icon');ic.append(icon('branch'));s.append(ic,el('span','notice-label',agentName(m.title)+(m.phase==='final_answer'?' 完成':'')),el('span','notice-text',tlFirstLine(m.text)),el('span','notice-time',clock(m.timestamp)));
+ const child=childFor([m.title]);if(child)s.append(childLink(child));d.append(s);
  const fill=()=>{if(d.childElementCount<2){const b=el('div','notice-md');b.append(markdown(m.text));d.append(b);}};if(d.open)fill();d.addEventListener('toggle',()=>{if(d.open)fill();});return d;}
 function noteRow(m){const n=el('div','work-note');n.append(markdown(m.text));const t=el('span','work-time',clock(m.timestamp));n.prepend(t);n.oncontextmenu=e=>{e.preventDefault();messageMenu(m);};return n;}
 // The collapsed 「工作过程」 block of a turn.
@@ -155,6 +176,7 @@ function turnView(turn,who,open){
  if(turn.partial)sec.append(el('div','turn-cont','接上文 · 这一轮的开头在更早的记录里'));
  if(turn.prompt)sec.append(promptRow(turn.prompt));else if(turn.notice)sec.append(noticeRow(turn.notice.m,turn.notice.n,open));
  if(turn.work.length)sec.append(workBlock(turn,open));
+ const kids=turnChildren(turn);if(kids.length)sec.append(childStrip(kids));
  if(turn.final)sec.append(replyRow(turn.final.m,who,turn));
  else if(turn.live||turn.last){const last=turn.work.filter(e=>e.type==='text').at(-1);if(last)sec.append(progressRow(last.m,who));}
  return sec;}
