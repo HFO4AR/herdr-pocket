@@ -31,7 +31,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         web = WebView(this)
-        web.setBackgroundColor(android.graphics.Color.rgb(247, 248, 250))
+        web.setBackgroundColor(android.graphics.Color.rgb(251, 250, 246))
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = false
@@ -109,7 +109,7 @@ class MainActivity : Activity() {
                                     vault.save(JSONObject().put("host", host).put("user", user).put("name", host)
                                         .put("port", pins.getString("port", "22")?.toIntOrNull() ?: 22).put("remember", false))
                                 }
-                                pins.edit().putBoolean("profilesMigrated", true).apply()
+                                pins.edit().remove("host").remove("port").remove("user").putBoolean("profilesMigrated", true).apply()
                             }
                             success(id, JSONObject().put("devices", vault.list()))
                         }
