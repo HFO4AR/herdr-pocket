@@ -61,6 +61,12 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual((exc.code, exc.detail), ("agent_not_found", "agent target w1:p9 not found"))
         self.assertIsNone(bridge.herdr_error("plain text"))
 
+    def test_read_carries_herdr_state_for_fast_question_cards(self):
+        self.agent["agent_status"] = "blocked"
+        result = bridge.handle(dict(v=1, op="read", session="default", target="w1:p1", identity=bridge.identity(self.agent)))
+        self.assertEqual(result["agent_status"], "blocked")
+        self.assertIn("menu", result)
+
     def test_sessions_only_exposes_public_fields(self):
         self.assertEqual(bridge.handle({"v": 1, "op": "sessions"}),
                          {"sessions": [{"name": "default", "running": True, "default": None}]})

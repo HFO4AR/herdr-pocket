@@ -1125,7 +1125,11 @@ def parse_menu(text, provider=""):
 
 
 def with_menu(screen, agent):
-    """Attach the parsed menu to a read while the agent waits on one."""
+    """Attach the parsed menu to a read while the agent waits on one.
+
+    The read also carries Herdr's state from the same request, so the phone sees
+    "blocked" as soon as it reads the screen instead of waiting for a status poll."""
+    screen["agent_status"] = agent.get("agent_status")
     if agent.get("agent_status") == "blocked":
         screen["menu"] = parse_menu(screen.get("text", ""), agent.get("agent", ""))
     return screen

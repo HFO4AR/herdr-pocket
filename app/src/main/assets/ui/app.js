@@ -339,9 +339,16 @@ function onAgentStatus(was,now){
  renderComposer();updateChatMeta();
  if(now==='blocked'){fetchTerminal(true);if(S.active)toast('Agent 在等你确认');}
  if(was==='working'&&now!=='working'){S.activity='';fetchHistory();}}
+// A screen read carries Herdr's state from the same request. Act on "blocked"/"working" at once so a
+// question card shows without waiting for the next status poll; idle/done stay with the poll, because
+// right after a send Herdr may not have noticed the new turn yet.
+function applyReadStatus(now){
+ const a=S.chat?.agent;if(!a||S.chat.stale||!['blocked','working'].includes(now)||now===a.agent_status)return;
+ const updated={...a,agent_status:now};S.agents=S.agents.map(x=>x.pane_id===a.pane_id&&x.identity===a.identity?{...x,agent_status:now}:x);
+ noteStatus([updated]);const was=a.agent_status;S.chat.agent=updated;onAgentStatus(was,now);}
 async function fetchTerminal(quiet=false){
  if(!S.chat?.agent){if(!quiet)toast('这条历史没有在线终端');return;}const epoch=S.epoch;
- try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;qaScreen(r);
+ try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;applyReadStatus(r.agent_status);qaScreen(r);
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
   const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;const c=document.getElementById('confirm-screen');if(c){c.textContent=tail(r.text,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
   if(!S.chat.record&&S.chatMode==='conversation')paintTimeline();}
@@ -423,7 +430,7 @@ let tick=0;
 setInterval(()=>{
  if(!S.active||S.demo||!S.device)return;tick++;
  const busy=S.chat?.agent&&!S.chat.stale&&['working','blocked'].includes(S.chat.agent.agent_status);
- if(S.chat){if(!S.paused&&!S.polling&&S.chatMode!=='terminal'&&(busy||tick%3===0))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);if(tick%2===0)refreshStatus();}
+ if(S.chat){if(!S.paused&&!S.polling&&S.chatMode!=='terminal'&&(busy||tick%3===0))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);refreshStatus();}
  else if(S.tab==='live'&&tick%3===0)refreshStatus();
 },2500);
 
