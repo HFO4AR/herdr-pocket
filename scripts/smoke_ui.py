@@ -19,11 +19,19 @@ def screen():
 
 def find(text, editable=False):
     nodes=list(screen().iter('node'))
-    if editable: nodes=[x for x in nodes if 'EditText' in x.get('class','')]
+    candidates=[x for x in nodes if 'EditText' in x.get('class','')] if editable else nodes
     for exact in [True,False]:
-        for node in nodes:
+        for node in candidates:
             values=[node.get('text',''),node.get('content-desc','')]
             if any(text==v if exact else text in v for v in values): return node
+    # WebView exposes empty inputs without their computed HTML label in UIAutomator.
+    # Resolve the adjacent visible label to the following input in accessibility order.
+    if editable:
+        for i,node in enumerate(nodes):
+            if text == node.get('text',''):
+                for following in nodes[i+1:]:
+                    if 'EditText' in following.get('class',''): return following
+        if text == '消息输入框' and len(candidates)==1: return candidates[0]
     return None
 
 
@@ -33,6 +41,8 @@ def tap(text, editable=False):
         if node is not None:
             x1,y1,x2,y2=map(int,re.findall(r'\d+',node.attrib['bounds']))
             run('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2));time.sleep(.6);return
+        if editable:
+            run('shell','input','swipe','540','1200','540','650','250')
         time.sleep(.6)
     raise AssertionError('Missing UI action: '+text)
 
