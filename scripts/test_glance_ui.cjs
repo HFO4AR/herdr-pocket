@@ -111,7 +111,9 @@ const previewOf=(page,title)=>rowOf(page,title).locator('.glance').evaluate(n=>[
 // 5. Old bridge without `glance`: asked once, then never again; the list still works.
 {const page=await fresh(390,844,{});
  await page.evaluate(()=>{fx.noGlance=true;GL.map.clear();GL.at=0;});await page.evaluate(()=>glanceRefresh(true));
- const n=(await calls(page,'glance')).length;await page.evaluate(()=>glanceRefresh(true));
+ // Requests already in flight (list polls run every 2.5 s now) may still land: count once the refusal is recorded and things are quiet.
+ await page.waitForFunction(()=>GL.unsupported&&!GL.busy);await page.waitForTimeout(1500);
+ const n=(await calls(page,'glance')).length;await page.evaluate(()=>glanceRefresh(true));await page.waitForTimeout(3000);
  assert.equal((await calls(page,'glance')).length,n);
  assert.equal(await page.locator('.agent-row').count(),22);
  await page.context().close();}
