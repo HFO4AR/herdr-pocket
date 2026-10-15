@@ -79,6 +79,9 @@ function settingsPage(main){
  upd.append(updateStatus());
  upd.append(toggle('自动检查更新','打开 App 时最多每 12 小时查一次 GitHub，不发送任何设备信息',p.autoUpdate!==false,async on=>!!(await settingsSet('autoUpdate',on))));
 
+ const help=group(main,'帮助与反馈');
+ help.append(linkRow('使用帮助','',()=>helpOpen()),linkRow('反馈问题','',()=>helpFeedback()));
+
  const about=group(main,'关于');
  about.append(linkRow('项目主页','GitHub',()=>rpc('openUrl',{url:'https://github.com/HFO4AR/herdr-pocket'}).catch(error),'globe'));
  about.append(linkRow('全部版本','',()=>rpc('openUrl',{url:'https://github.com/HFO4AR/herdr-pocket/releases'}).catch(error),'globe'));

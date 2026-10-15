@@ -220,9 +220,10 @@ function connectionBanner(root){
   if(d&&!S.device&&f.code==='auth_method')acts.append(btn('改用密钥登录','secondary small',()=>deviceForm({...saved,auth:'key'})));
   if(d&&!S.device&&['key_rejected','key_method'].includes(f.code))acts.append(btn('改用密码','secondary small',()=>deviceForm({...saved,auth:'password'})));
   if(d&&!S.device&&['auth_method','dns','refused','timeout','unreachable','tunnel'].includes(f.code))acts.append(btn('改设置','secondary small',()=>deviceForm(saved)));
+  acts.append(btn('怎么回事','link-btn help-why',()=>helpOpen(helpTopicFor(f?.code))));
   t.append(acts);box.append(t,ib('close','知道了',()=>{S.connectError='';S.connectFail=null;render();}));root.append(box);return;}
  if(S.hostIssue&&S.device&&!S.demo){const box=el('div','connection-status warn');box.setAttribute('role','status');box.append(icon('alert'));const t=el('div','grow');t.append(el('strong','',S.hostIssue.title),el('div','',S.hostIssue.text));
-  const acts=el('div','ob-banner-actions');const b=btn('重新检查','secondary small',()=>recheckHost(b));acts.append(b);t.append(acts);box.append(t,ib('close','知道了',()=>{S.hostIssue=null;render();}));root.append(box);}}
+  const acts=el('div','ob-banner-actions');const b=btn('重新检查','secondary small',()=>recheckHost(b));acts.append(b);acts.append(btn('怎么回事','link-btn help-why',()=>helpOpen('faq-herdr')));t.append(acts);box.append(t,ib('close','知道了',()=>{S.hostIssue=null;render();}));root.append(box);}}
 
 // A floating pill for silent reconnects; it lives outside #app so re-renders keep it.
 // state: null | 'reconnecting' | 'failed' | 'hostkey' | 'ok'

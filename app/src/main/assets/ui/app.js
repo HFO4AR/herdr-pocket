@@ -414,7 +414,9 @@ async function fetchTerminal(quiet=false){
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
   const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;const c=document.getElementById('confirm-screen');if(c){c.textContent=tail(r.text,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
   if(!S.chat.record&&S.chatMode==='conversation')paintTimeline();}
- catch(e){if(epoch===S.epoch&&!quiet)error(e);}
+ catch(e){if(epoch!==S.epoch)return;if(!quiet)error(e);
+  // Never leave 「正在读取…」 up after a failed read: say what happened and how to retry.
+  if(!S.terminalText){const msg='读取终端画面失败：'+(e.message||e)+'。点「刷新」再试';const n=document.getElementById('terminal-output');if(n)n.textContent=msg;const c=document.getElementById('confirm-screen');if(c)c.textContent=msg;const l=document.getElementById('activity-line');if(l)l.textContent='读取终端失败，稍后会自动再试';}}
  finally{if(S.reading===epoch)S.reading=null;}}
 
 // ─── Sheets ─────────────────────────────────────────────────────────────────

@@ -89,7 +89,8 @@ class RelayTests(unittest.TestCase):
             self.send(text="a\nb")
         self.assertEqual([c for c in self.commands if c[0] == "pane"], [["pane", "send-text", "w1:p1", "\x1b[200~a\nb\x1b[201~"], ["pane", "send-keys", "w1:p1", "enter"]], "never typed twice")
 
-    def test_other_not_ready_reasons_are_not_rerouted(self):
+    def test_not_ready_on_a_local_agent_is_not_rerouted(self):
+        self.probe = {"ok": True, "route": None, "native": True}
         def refuse(args):
             if args == ["session", "list", "--json"]: return {"sessions": [{"name": "default", "running": True}]}
             if args[-2:] == ["agent", "list"]: return {"agents": [self.agent]}
@@ -124,6 +125,20 @@ class RelayTests(unittest.TestCase):
             # Anything else still has to answer in JSON.
             with self.assertRaisesRegex(bridge.BridgeError, "non-JSON"):
                 self.real_call(["agent", "list"])
+
+    def test_blocked_full_screen_agent_is_read_from_the_visible_screen(self):
+        self.agent["agent_status"] = "blocked"
+        def read(args):
+            if args == ["session", "list", "--json"]: return {"sessions": [{"name": "default", "running": True}]}
+            if args[-2:] == ["agent", "list"]: return {"agents": [self.agent]}
+            if args[:2] == ["--session", "default"]: args = args[2:]
+            self.commands.append(args)
+            if "recent-unwrapped" in args: raise bridge.HerdrRejected("agent_not_idle", "cannot read 160 lines while w1:p1 is blocked; use --source visible")
+            return {"text": "  1. 先不动\n  2. 重写\n"}
+        with patch.object(bridge, "call", side_effect=read):
+            r = bridge.handle({"v": 1, "op": "read", "session": "default", "target": "w1:p1", "identity": bridge.identity(self.agent)})
+        self.assertEqual(r["text"], "  1. 先不动\n  2. 重写\n")
+        self.assertEqual(self.commands[-1], ["agent", "read", "w1:p1", "--source", "visible"])
 
     def test_busy_relay_agent_is_not_prompted(self):
         self.agent["agent_status"] = "working"

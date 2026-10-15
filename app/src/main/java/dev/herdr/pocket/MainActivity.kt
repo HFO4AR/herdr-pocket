@@ -42,8 +42,8 @@ private const val ASK_PHOTOS = 44
 private const val PICK_KEY = 45
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/native.css", "ui/lists.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/onboard.js", "ui/native.js", "ui/glance.js", "ui/app.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/native.css", "ui/lists.css", "ui/help.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/onboard.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/app.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -76,6 +76,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         core.init(this)
+        if (core.alertsEnabled) WatchService.ensureChannels(this)
         applySecure()
         SystemBars.edgeToEdge(window)
         pendingPane = intent?.getStringExtra(WatchService.EXTRA_PANE)
@@ -379,7 +380,7 @@ class MainActivity : Activity() {
                         }
                         "setAlerts" -> {
                             core.settings.edit().putBoolean("backgroundAlerts", req.getBoolean("enabled")).apply()
-                            if (req.getBoolean("enabled")) runOnUiThread { core.settings.edit().putBoolean("askedNotifications", false).apply(); askNotificationPermission() }
+                            if (req.getBoolean("enabled")) { WatchService.ensureChannels(this@MainActivity); runOnUiThread { core.settings.edit().putBoolean("askedNotifications", false).apply(); askNotificationPermission() } }
                             success(id, JSONObject().put("alerts", core.alertsEnabled))
                         }
                         "openNotificationSettings" -> runOnUiThread {
@@ -444,7 +445,7 @@ class MainActivity : Activity() {
                             success(id, JSONObject().put("devices", core.vault.list()))
                         }
                         "remote" -> {
-                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "hidden", "doctor", "glance")) { "不支持的操作" }
+                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "hidden", "doctor", "glance", "hello")) { "不支持的操作" }
                             success(id, core.request(req))
                         }
                         else -> error("不支持的操作")

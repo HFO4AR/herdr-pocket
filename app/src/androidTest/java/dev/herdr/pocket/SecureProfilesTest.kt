@@ -14,11 +14,12 @@ class SecureProfilesTest : Instrumentation() {
             testUncheckingRememberErasesPassword()
             testTerminalBuffer()
             testImagePrep()
+            val mediaStore = testImagePrepMediaStore()
             testConnectErrors()
             testShareIn()
             testIdentity()
             if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeyLogin() }
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-key-login: PASS" else "ssh-pty: SKIPPED") })
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-key-login: PASS" else "ssh-pty: SKIPPED") })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
@@ -67,6 +68,53 @@ class SecureProfilesTest : Instrumentation() {
         }
         val missing = java.io.File(targetContext.cacheDir, "missing.png")
         try { ImagePrep.prepare(targetContext.contentResolver, android.net.Uri.fromFile(missing)); fail("missing picture accepted") } catch (_: java.io.FileNotFoundException) { } catch (_: IllegalStateException) { }
+    }
+    /**
+     * The real picker and "share from Gallery" hand over a MediaStore content:// URI, and camera JPEGs
+     * carry an EXIF rotation. Insert such a picture into MediaStore, then prepare it directly and
+     * through the share path: it comes out upright, downscaled and re-encoded without EXIF.
+     */
+    private fun testImagePrepMediaStore(): String {
+        if (android.os.Build.VERSION.SDK_INT < 29) return "SKIPPED (API < 29)"
+        val resolver = targetContext.contentResolver
+        val tmp = java.io.File(targetContext.cacheDir, "exif.jpg")
+        android.graphics.Bitmap.createBitmap(3000, 1800, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(80, 120, 200)) }
+            .let { b -> tmp.outputStream().use { b.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) } }
+        android.media.ExifInterface(tmp.absolutePath).apply {
+            setAttribute(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_ROTATE_90.toString()); saveAttributes()
+        }
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "pocket-test-${System.nanoTime()}.jpg")
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/HerdrPocketTest")
+            put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val collection = android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val uri = resolver.insert(collection, values) ?: fail("MediaStore insert refused")
+        try {
+            (resolver.openOutputStream(uri) ?: fail("MediaStore output missing")).use { out -> tmp.inputStream().use { it.copyTo(out) } }
+            resolver.update(uri, android.content.ContentValues().apply { put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+            check(uri.scheme == "content" && uri.authority == "media") { "Not a MediaStore URI: $uri" }
+            check(resolver.getType(uri) == "image/jpeg") { "MediaStore type ${resolver.getType(uri)}" }
+            val p = ImagePrep.prepare(resolver, uri)
+            // 3000×1800 stored sideways with ROTATE_90: upright portrait, long edge 2048.
+            check(p.height == 2048 && p.width in 1228..1229) { "MediaStore image-prep size ${p.width}x${p.height} (EXIF rotation not applied?)" }
+            check(p.ext == "jpg" && p.bytes.isNotEmpty() && p.bytes.size <= ImagePrep.MAX_BYTES && p.thumb.isNotEmpty()) { "MediaStore image-prep bytes" }
+            val exif = android.media.ExifInterface(java.io.ByteArrayInputStream(p.bytes))
+            check(exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL) in
+                setOf(android.media.ExifInterface.ORIENTATION_NORMAL, android.media.ExifInterface.ORIENTATION_UNDEFINED)) { "Prepared picture kept an EXIF rotation" }
+            ImagePrep.drop(p.id)
+            // Same picture shared from a gallery app: ShareIn reads it as one prepared image plus the caption.
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("image/jpeg")
+                .putExtra(android.content.Intent.EXTRA_STREAM, uri).putExtra(android.content.Intent.EXTRA_TEXT, "看这张图")
+            val shared = ShareIn.read(resolver, send)
+            val images = shared.getJSONArray("images")
+            check(images.length() == 1 && shared.getInt("failed") == 0 && shared.getString("text") == "看这张图") { "Shared MediaStore picture: $shared".take(300) }
+            val first = images.getJSONObject(0)
+            check(first.getInt("width") in 1228..1229 && first.getInt("height") == 2048 && first.getString("thumb").startsWith("data:image/jpeg;base64,")) { "Shared picture size" }
+            ImagePrep.drop(first.getString("id"))
+        } finally { resolver.delete(uri, null, null); tmp.delete() }
+        return "PASS"
     }
     /** Raw JSch / socket / shell failures become short Chinese errors with a stable code. */
     private fun testConnectErrors() {

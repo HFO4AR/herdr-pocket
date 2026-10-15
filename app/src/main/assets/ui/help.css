@@ -1,0 +1,43 @@
+/* 帮助与反馈: a tall reading sheet with a table of contents, plain sections and collapsible FAQ. */
+.sheet.help-sheet{height:90%;padding-bottom:calc(28px + env(safe-area-inset-bottom))}
+.help-sheet .sheet-head{position:sticky;top:-6px;z-index:2;margin:-6px -18px 4px;padding:6px 18px 0;background:var(--raised)}
+.help-lead p{margin:0 2px 14px;font-size:var(--fs-sm);line-height:1.65;color:var(--muted)}
+.help-toc{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px;margin-bottom:6px}
+.help-toc-item{display:flex;align-items:center;min-height:44px;padding:0 12px;border-radius:var(--radius-control);background:var(--surface);border:1px solid var(--line);font-size:var(--fs-sm);color:var(--ink);text-align:left;overflow-wrap:anywhere}
+.help-toc-item:active{background:var(--press);transform:none}
+.help-toc-item.accent{color:var(--accent);border-color:var(--soft-line);background:var(--soft);font-weight:600}
+.help-section{padding-top:18px;margin-top:18px;border-top:1px solid var(--line);scroll-margin-top:64px}
+.help-section h3{margin:0 2px 10px;font-size:var(--fs-lg);font-weight:700;color:var(--ink);outline:none}
+.help-part{margin:0 0 14px;padding:2px 2px 0;border-radius:var(--radius-control)}
+.help-part h4{margin:12px 0 6px;font-size:var(--fs-md);font-weight:600;color:var(--ink);outline:none}
+.help-part p,.help-body p,.help-feedback p{margin:6px 0;font-size:var(--fs-sm);line-height:1.7;color:var(--ink-2)}
+.help-list{margin:6px 0 8px;padding-left:20px}
+.help-list li{margin:4px 0;font-size:var(--fs-sm);line-height:1.65;color:var(--ink-2)}
+.help-list li::marker{color:var(--faint)}
+.help-code{font-family:var(--mono);font-size:.9em;padding:1px 5px;border-radius:5px;background:var(--sunken);color:var(--ink);overflow-wrap:anywhere}
+.help-cmd{margin:8px 0}
+.help-faq{border:1px solid var(--line);border-radius:var(--radius-control);background:var(--surface);margin:0 0 8px}
+.help-faq summary{display:flex;align-items:center;gap:10px;min-height:48px;padding:6px 12px 6px 14px;list-style:none;cursor:pointer;font-size:var(--fs-md);font-weight:600;color:var(--ink);border-radius:var(--radius-control);outline:none}
+.help-faq summary::-webkit-details-marker{display:none}
+.help-faq summary:active{background:var(--press)}
+.help-faq summary:focus-visible{box-shadow:0 0 0 2px var(--focus)}
+.help-faq summary svg{width:18px;height:18px;color:var(--faint);flex-shrink:0;transition:transform .2s var(--ease)}
+.help-faq[open] summary svg{transform:rotate(180deg)}
+.help-body{padding:0 14px 10px}
+.help-hit{animation:help-hit 1.4s var(--ease)}
+@keyframes help-hit{0%,35%{background:var(--soft)}100%{background:transparent}}
+.help-faq.help-hit{animation-name:help-hit-card}
+@keyframes help-hit-card{0%,35%{background:var(--soft);border-color:var(--soft-line)}100%{background:var(--surface)}}
+.help-note{font-size:var(--fs-xs)!important;color:var(--muted)!important}
+.help-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.help-actions button{flex:1 1 140px;min-height:44px}
+.help-actions svg,.help-fb-actions svg{width:17px;height:17px}
+.help-end{margin-top:24px}
+.help-fb-sheet.sheet{height:auto}
+.help-diag{margin:12px 0 6px;padding:12px 14px;max-height:46vh;overflow:auto;border-radius:var(--radius-control);background:var(--sunken);border:1px solid var(--line);font-family:var(--mono);font-size:12px;line-height:1.65;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
+.help-fb-actions{flex-direction:column}
+.help-fb-actions button{min-height:48px;flex:none;width:100%}
+.help-back{display:block;margin:12px auto 0;min-height:44px}
+/* Error banners: a quiet text link next to the action buttons. */
+.ob-banner-actions .help-why{min-height:38px;padding:0 8px}
+@media (prefers-reduced-motion:reduce){.help-hit{animation:none}.help-faq summary svg{transition:none}}

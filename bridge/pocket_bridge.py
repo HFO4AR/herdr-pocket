@@ -15,7 +15,7 @@ import stat as stat_module
 from urllib.parse import quote as uri_quote
 from contextlib import closing
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 LIMIT = 65536
 
 
@@ -150,6 +150,20 @@ def relay_pane(agent, prefix):
     return bool(probe["ok"] and probe["route"] and not probe.get("native"))
 
 
+def read_screen(prefix, agent, lines):
+    """The agent's screen. A blocked full-screen agent (a ch pane's remote Claude, for one) cannot have
+    its history scrolled back, and Herdr says so (agent_not_idle): the visible screen holds the menu
+    anyway. A ch pane that Herdr's agent commands refuse is read at the pane level."""
+    target = agent["pane_id"]
+    try: return call(prefix + ["agent", "read", target, "--source", "recent-unwrapped", "--lines", str(lines)])
+    except HerdrRejected as exc:
+        if exc.code == "agent_not_idle": return call(prefix + ["agent", "read", target, "--source", "visible"])
+        if exc.code == "agent_not_ready" and relay_pane(agent, prefix):
+            try: return call(prefix + ["pane", "read", target, "--source", "recent-unwrapped", "--lines", str(lines)])
+            except HerdrRejected: return call(prefix + ["pane", "read", target, "--source", "visible"])
+        raise
+
+
 def relay_prompt(prefix, pane_id, text):
     """Type a prompt into a relay pane. One line: `pane run` (text, then Enter). Several lines go in
     as one bracketed paste, so the agent's input box keeps the line breaks, then Enter submits."""
@@ -230,7 +244,7 @@ def mutate(request, prefix, agent, state_dir):
             except HerdrRejected as exc:
                 # Herdr refused before writing anything. A ch pane (see relay_pane) takes the same
                 # input at the pane level instead: still the one and only write for this receipt.
-                if not (exc.code == "agent_not_ready" and "foreground" in exc.detail and op in ("prompt", "key", "answer", "exitAgent")
+                if not (exc.code == "agent_not_ready" and op in ("prompt", "key", "answer", "exitAgent")
                         and relay_pane(agent, prefix)): raise
                 if op == "answer": value = answer_question(request, prefix, dict(agent, relay=True))
                 elif op == "key": value = call(prefix + ["pane", "send-keys", agent["pane_id"], key])
@@ -1596,7 +1610,7 @@ def answer_question(request, prefix, agent):
     steps = []
 
     def screen():
-        text = call(prefix + ["agent", "read", target, "--source", "recent-unwrapped", "--lines", "80"]).get("text", "")
+        text = read_screen(prefix, agent, 80).get("text", "")
         return parse_menu(text, agent.get("agent", ""))
 
     def press(name):
@@ -2594,7 +2608,7 @@ def handle(request, state_dir=None):
         return custom_commands(agent)
     if op == "read":
         # `menu: true` (after a slash command) parses a picker even when Herdr does not call it blocked.
-        return with_menu(call(prefix + ["agent", "read", target, "--source", "recent-unwrapped", "--lines", "160"]), agent,
+        return with_menu(read_screen(prefix, agent, 160), agent,
                          request.get("menu") is True)
     return mutate(request, prefix, agent, state_dir or Path.home() / ".local/state/herdr-pocket")
 

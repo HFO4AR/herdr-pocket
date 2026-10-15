@@ -43,7 +43,7 @@ class WatchService : Service() {
         PocketCore.init(this)
         thread = HandlerThread("pocket-watch").apply { start() }
         handler = Handler(thread.looper)
-        channels()
+        ensureChannels(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -223,22 +223,6 @@ class WatchService : Service() {
         return PendingIntent.getActivity(this, pane?.hashCode() ?: 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
-    private fun channels() {
-        val manager = getSystemService(NotificationManager::class.java)
-        // The first watcher channel was IMPORTANCE_MIN; importance can't be raised in place, so it is replaced.
-        manager.deleteNotificationChannel("watch")
-        manager.createNotificationChannel(NotificationChannel(CHANNEL_ALERT, "等你确认", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Agent 停下来等你批准或回答时"
-        })
-        manager.createNotificationChannel(NotificationChannel(CHANNEL_DONE, "做完了", NotificationManager.IMPORTANCE_DEFAULT).apply {
-            description = "Agent 做完一轮、等你下一句时"
-        })
-        manager.createNotificationChannel(NotificationChannel(CHANNEL_BACKGROUND, "后台连接", NotificationManager.IMPORTANCE_LOW).apply {
-            description = "切到后台时保持连接的常驻通知，不响不振"
-            setShowBadge(false)
-        })
-    }
-
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         thread.quitSafely()
@@ -260,6 +244,26 @@ class WatchService : Service() {
         private const val POLL_MS = 20_000L
         private const val MAX_RUNTIME_MS = 8 * 60 * 60 * 1000L
 
+        /**
+         * The three alert channels. Created as soon as alerts are on (app start, 设置 → 后台提醒), not
+         * only when the watcher first runs, so they can be tuned in the system settings right away.
+         * Idempotent: Android keeps the user's changes to an existing channel.
+         */
+        fun ensureChannels(context: Context) {
+            val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            // The first watcher channel was IMPORTANCE_MIN; importance can't be raised in place, so it is replaced.
+            manager.deleteNotificationChannel("watch")
+            manager.createNotificationChannel(NotificationChannel(CHANNEL_ALERT, "等你确认", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Agent 停下来等你批准或回答时"
+            })
+            manager.createNotificationChannel(NotificationChannel(CHANNEL_DONE, "做完了", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Agent 做完一轮、等你下一句时"
+            })
+            manager.createNotificationChannel(NotificationChannel(CHANNEL_BACKGROUND, "后台连接", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "切到后台时保持连接的常驻通知，不响不振"
+                setShowBadge(false)
+            })
+        }
         fun start(context: Context, session: String, states: String) {
             val intent = Intent(context, WatchService::class.java).putExtra(EXTRA_SESSION, session).putExtra(EXTRA_STATES, states)
             context.startForegroundService(intent)
