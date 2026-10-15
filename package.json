@@ -1,0 +1,6 @@
+{
+  "name": "herdr-pocket-ui-checks",
+  "private": true,
+  "scripts": { "test": "node scripts/test_ui.cjs" },
+  "devDependencies": { "playwright": "1.51.1" }
+}

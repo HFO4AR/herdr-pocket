@@ -11,3 +11,4 @@ __pycache__/
 *.iml
 .env
 ui-artifacts/
+node_modules/
