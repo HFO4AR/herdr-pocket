@@ -27,7 +27,7 @@ jobs:
       - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
       - run: python3 -m unittest discover -s tests -v
-      - run: ./gradlew assembleDebug lintDebug --no-daemon
+      - run: ./gradlew assembleDebug assembleDebugAndroidTest lintDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: herdr-pocket-debug
@@ -49,7 +49,7 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             export POCKET_VERSION_NAME="${REF_NAME#v}"
           else
-            export POCKET_VERSION_NAME="0.2.0-dev.${GITHUB_RUN_NUMBER}"
+            export POCKET_VERSION_NAME="0.3.0-dev.${GITHUB_RUN_NUMBER}"
           fi
           ./gradlew assembleRelease --no-daemon
           mkdir -p distribution
@@ -77,6 +77,7 @@ jobs:
           disable-animations: true
           script: |
             adb install app/build/outputs/apk/debug/app-debug.apk
+            adb install app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             python3 scripts/smoke_ui.py
       - uses: actions/upload-artifact@v4
         if: always()

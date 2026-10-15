@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline UI smoke test on a sole Android emulator; never connects to a host."""
+"""Android WebView UI smoke with only offline fixtures; never connects to a host."""
 import os
 from pathlib import Path
 import re
@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 
 
 def run(*args):
-    return subprocess.check_output(["adb", *args], timeout=25)
+    return subprocess.check_output(["adb", *args], timeout=35)
 
 
 def screen():
@@ -17,79 +17,88 @@ def screen():
     return ET.fromstring(run("exec-out", "cat", "/sdcard/pocket-ui.xml").decode())
 
 
-def find(text):
-    nodes = list(screen().iter("node"))
-    for node in nodes:
-        if text == node.get("text", ""):
-            return node
-    for node in nodes:
-        if text in node.get("text", ""):
-            return node
+def find(text, editable=False):
+    nodes=list(screen().iter('node'))
+    if editable: nodes=[x for x in nodes if 'EditText' in x.get('class','')]
+    for exact in [True,False]:
+        for node in nodes:
+            values=[node.get('text',''),node.get('content-desc','')]
+            if any(text==v if exact else text in v for v in values): return node
     return None
 
 
-def tap(text):
-    for attempt in range(4):
-        node = find(text)
+def tap(text, editable=False):
+    for _ in range(5):
+        node=find(text,editable)
         if node is not None:
-            x1, y1, x2, y2 = map(int, re.findall(r"\d+", node.attrib["bounds"]))
-            run("shell", "input", "tap", str((x1+x2)//2), str((y1+y2)//2))
-            time.sleep(1)
-            return
-        run("shell", "input", "swipe", "500", "1600", "500", "500", "300")
-    raise AssertionError("Missing UI action: " + text)
+            x1,y1,x2,y2=map(int,re.findall(r'\d+',node.attrib['bounds']))
+            run('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2));time.sleep(.6);return
+        time.sleep(.6)
+    raise AssertionError('Missing UI action: '+text)
+
+
+def fill(label,text):
+    tap(label,True);run('shell','input','text',text)
+
+
+def expect(text):
+    for _ in range(5):
+        if find(text) is not None:return
+        time.sleep(.5)
+    raise AssertionError('Missing UI text: '+text)
+
+
+def screenshot(name):
+    Path('ui-artifacts').mkdir(exist_ok=True)
+    Path('ui-artifacts',name+'.png').write_bytes(run('exec-out','screencap','-p'))
 
 
 def main():
-    devices = run("devices").decode().splitlines()[1:]
-    live = [line.split()[0] for line in devices if line.endswith("\tdevice")]
-    assert len(live) == 1 and live[0].startswith("emulator-"), "Require exactly one emulator, never a physical phone"
-    os.environ["ANDROID_SERIAL"] = live[0]
-    run("shell", "am", "start", "-W", "-n", "dev.herdr.pocket/.MainActivity")
-    tap("连接电脑")
-    assert find("填写主机、用户名和有效端口") is not None
-    tap("先看看界面")
-    tap("demo  →")
-    assert find("你的 Agent") is not None
-    output = Path("ui-artifacts"); output.mkdir(exist_ok=True)
-    (output / "agents.png").write_bytes(run("exec-out", "screencap", "-p"))
-    tap("移动端界面设计")
-    assert find("这是演示内容") is not None
-    (output / "agent.png").write_bytes(run("exec-out", "screencap", "-p"))
-    tap("刷新输出")
-    assert find("这是演示内容") is not None
-    tap("继续这段对话")
-    run("shell", "input", "text", "draft-check")
-    assert find("发送") is not None, "Composer must remain visible above keyboard"
-    (output / "keyboard.png").write_bytes(run("exec-out", "screencap", "-p"))
-    run("shell", "input", "keyevent", "4")  # hide keyboard
-    tap("发送")
-    assert find("草稿已保留") is not None
-    run("shell", "input", "keyevent", "4")  # back to list, not disconnect
-    assert find("你的 Agent") is not None
-    tap("移动端界面设计")
-    assert find("draft-check") is not None, "Draft lost on navigation"
-    run("shell", "settings", "put", "system", "accelerometer_rotation", "0")
-    run("shell", "settings", "put", "system", "user_rotation", "1")
-    time.sleep(2)
-    assert find("draft-check") is not None, "Rotation lost draft"
-    assert find("发送") is not None
-    (output / "landscape.png").write_bytes(run("exec-out", "screencap", "-p"))
-    run("shell", "settings", "put", "system", "user_rotation", "0")
-    time.sleep(2)
-    run("shell", "input", "keyevent", "4")
-    tap("搜索会话")
-    run("shell", "input", "text", "nonexistent")
-    assert find("没有匹配的会话") is not None
-    print("PASS: form, session, list, output, keyboard composer, safe demo send, back, drafts, rotation and search; zero host connections")
+    live=[line.split()[0] for line in run('devices').decode().splitlines()[1:] if line.endswith('\tdevice')]
+    assert len(live)==1 and live[0].startswith('emulator-'),'Require sole emulator, never phone'
+    os.environ['ANDROID_SERIAL']=live[0]
+    vault=run('shell','am','instrument','-w','dev.herdr.pocket.test/dev.herdr.pocket.SecureProfilesTest').decode()
+    assert 'vault-tests: PASS (2 tests)' in vault,vault
+    print('PASS: Keystore save/reload/no plaintext/destination change/forget/delete',flush=True)
+    run('shell','am','start','-W','-n','dev.herdr.pocket/.MainActivity')
+    tap('添加第一台设备')
+    fill('设备名称','Test-workstation')
+    fill('主机地址','fixture.invalid')
+    fill('SSH 用户名','fixture')
+    fill('登录密码','test-password')
+    run('shell','input','keyevent','4')
+    tap('保存设备');expect('密码已加密保存')
+    run('shell','am','force-stop','dev.herdr.pocket')
+    run('shell','am','start','-W','-n','dev.herdr.pocket/.MainActivity')
+    expect('Test-workstation');expect('密码已加密保存')
+    print('PASS: device/password survives process restart',flush=True)
+    tap('体验聊天演示')
+    expect('在线会话');screenshot('agents')
+    tap('把移动端做成真正的聊天工具')
+    expect('历史记录、子 Agent 和执行的命令都要能看到。')
+    screenshot('agent')
+    tap('加载更早消息');expect('先把连接设备和密码保存做好。')
+    tap('命令');expect('Ran 24 tests');screenshot('commands')
+    tap('对话')
+    fill('消息输入框','draft-check');expect('发送消息');screenshot('keyboard')
+    run('shell','input','keyevent','4')
+    tap('发送消息');expect('草稿已保留')
+    tap('切换 Agent');tap('布局检查 · 子 Agent · demo-chi')
+    expect('子 Agent：布局检查完成。');screenshot('subagent')
+    assert find('消息输入框',True) is None,'Child record must not send to parent'
+    tap('返回列表');expect('draft-check')
+    run('shell','settings','put','system','accelerometer_rotation','0')
+    run('shell','settings','put','system','user_rotation','1');time.sleep(2)
+    expect('draft-check');expect('发送消息');screenshot('landscape')
+    run('shell','settings','put','system','user_rotation','0');time.sleep(2)
+    tap('返回列表');tap('历史');expect('历史记录');screenshot('history')
+    tap('我的');expect('workstation.local');screenshot('account')
+    print('PASS: chat, pagination, commands, child isolation, drafts, keyboard, rotation, history and SSH info; no real host calls',flush=True)
 
 
-
-if __name__ == "__main__":
-    try:
-        main()
+if __name__=='__main__':
+    try: main()
     except Exception:
-        output = Path("ui-artifacts"); output.mkdir(exist_ok=True)
-        (output / "failure.png").write_bytes(run("exec-out", "screencap", "-p"))
-        (output / "failure.xml").write_bytes(ET.tostring(screen()))
+        screenshot('failure')
+        Path('ui-artifacts/failure.xml').write_bytes(ET.tostring(screen()))
         raise
