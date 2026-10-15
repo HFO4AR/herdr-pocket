@@ -200,7 +200,7 @@ async function refreshStatus(){
   if(next.length!==S.agents.length)changed=true;
   const fresh=next.filter(a=>!known.has(a.pane_id)||known.get(a.pane_id).identity!==a.identity);
   noteStatus(next);S.agents=next;if(changed)syncWatch();
-  if(S.chat?.agent){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status};onAgentStatus(was,cur.agent_status);}}
+  if(S.chat?.agent){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);followHint(cur);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status};onAgentStatus(was,cur.agent_status);}}
   if(fresh.length&&S.tab==='live'&&!S.chat){loadLive();return;}
   if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}
  catch(e){if(/Unknown operation|不支持的操作/.test(e.message))S.statusSupported=false;}
@@ -245,7 +245,7 @@ async function fetchHistory(older=false,initial=false){
 function paintTimeline(){const n=document.getElementById('chat-scroll');const top=n?n.scrollTop:0;renderTimeline();if(!n)return;n.scrollTop=S.stick?n.scrollHeight:top;updateJump();}
 function updateJump(){const j=document.getElementById('jump');if(!j)return;j.classList.toggle('hidden',S.stick);j.classList.toggle('has-count',S.unseen>0);const t=j.querySelector('.jump-text');if(t)t.textContent=S.unseen?S.unseen+' 条新消息':'';}
 function showJump(v){S.stick=!v;updateJump();}
-function chatSubtitle(){const c=S.chat;if(!c)return '';if(c.stale)return '窗格已变化 · 只读';if(c.agent){const parts=[stateLabel(c.agent),providerName(c.agent.agent)];const p=projectOf(c.agent);if(p)parts.splice(1,0,p);if(c.manual)parts.push('手动关联');return parts.join(' · ');}return (c.record?.parent?'子 Agent · ':'')+providerName(c.provider)+' · 历史只读';}
+function chatSubtitle(){const c=S.chat;if(!c)return '';if(c.stale)return followSubtitle(c);if(c.agent){const parts=[stateLabel(c.agent),providerName(c.agent.agent)];const p=projectOf(c.agent);if(p)parts.splice(1,0,p);if(c.manual)parts.push('手动关联');return parts.join(' · ');}return (c.record?.parent?'子 Agent · ':'')+providerName(c.provider)+' · 历史只读';}
 // Subtitle: "执行中 2:05 · 项目" — state first so it survives truncation; the
 // avatar already says Claude/Codex.
 function updateChatMeta(){
@@ -279,7 +279,7 @@ function renderChat(){
 // status changes so typing (and the keyboard) is never interrupted.
 function renderComposer(){
  const footer=document.getElementById('composer');if(!footer||!S.chat)return;const a=S.chat.agent;
- if(!a||S.chat.stale){footer.replaceChildren(el('div','readonly',S.chat.stale?'这个窗格的 Agent 已变化，回到列表重新打开':S.chat.record?.parent?'子 Agent 的历史记录 · 只读，不会向父会话发送':'历史只读 · 在「会话」里打开在线 Agent 才能继续对话'));return;}
+ if(!a||S.chat.stale){if(followFooter(footer))return;footer.replaceChildren(el('div','readonly',S.chat.stale?'这个窗格的 Agent 已变化，回到列表重新打开':S.chat.record?.parent?'子 Agent 的历史记录 · 只读，不会向父会话发送':'历史只读 · 在「会话」里打开在线 Agent 才能继续对话'));return;}
  const key=draftKey();let live=document.getElementById('live-state'),compose=footer.querySelector('.composer');
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
  renderLiveState(live,a);
@@ -305,6 +305,7 @@ function renderLiveState(live,a){
 async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'已发送 '+label);setTimeout(()=>{refreshStatus();fetchTerminal(true);},700);}catch(e){toast('按键未确认：'+e.message+'。不会自动重发。');}}
 async function sendMessage(input){
  const text=input.value;const a=S.chat?.agent;if(!text.trim()||!a)return;
+ if(followHoldsSend())return;
  if(['working','blocked'].includes(a.agent_status)&&!S.demo){toast(a.agent_status==='working'?'还在执行，等它停下再发（草稿已保留）':'它在等你确认，先处理上面的提示');return;}
  const epoch=S.epoch,key=draftKey();const button=document.querySelector('.send');button.disabled=true;
  const item={key,text,at:Date.now(),state:'sending'};

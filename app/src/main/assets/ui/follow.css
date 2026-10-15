@@ -1,0 +1,22 @@
+/* Following a pane: the "new conversation" divider and the exited / confirming footer. Tokens from app.css. */
+.follow-mark{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin:2px 0 6px;animation:arrive .2s ease-out}
+.follow-line{display:flex;align-items:center;gap:10px;font-size:12px;font-weight:600;color:var(--accent)}
+.follow-line:before,.follow-line:after{content:'';flex:1;height:1px;background:var(--soft-line)}
+.follow-label{white-space:nowrap}
+.follow-time{order:3;font-weight:500;color:var(--faint);font-variant-numeric:tabular-nums}
+.follow-line:after{order:2}
+.follow-prev{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:6px 12px;text-align:left;border:1px dashed var(--line-strong);border-radius:var(--radius-card);background:var(--bg);color:var(--ink-2)}
+.follow-prev:active{background:var(--sunken)}
+.follow-prev>svg{width:16px;height:16px;flex-shrink:0;color:var(--faint)}
+.follow-prev .grow{min-width:0;display:flex;flex-direction:column}
+.follow-prev-label{font-size:11px;color:var(--muted)}
+.follow-prev-title{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.follow-card{padding:2px 2px 0}
+.follow-head{display:flex;align-items:center;gap:8px;min-height:30px;font-size:14px;color:var(--ink)}
+.follow-head>svg{width:18px;height:18px;color:var(--muted);flex-shrink:0}
+.follow-head strong{font-weight:650}
+.follow-head .since{font-weight:500;font-size:12px;color:var(--muted)}
+.follow-text{margin:2px 0 0 26px;font-size:12.5px;line-height:1.55;color:var(--muted)}
+.follow-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 0 26px}
+.follow-actions svg{width:16px;height:16px}
+@media (max-width:360px){.follow-text,.follow-actions{margin-left:0}}

@@ -22,8 +22,8 @@ import java.util.concurrent.Executors
 private const val UNATTENDED_PAUSE_MS = 60_000L
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/demo.js", "ui/app.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/demo.js", "ui/follow.js", "ui/app.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {

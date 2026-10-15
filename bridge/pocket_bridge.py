@@ -867,6 +867,68 @@ def history_page(request, catalog):
             "children": [public_record(x) for x in catalog if x["parent"] == entry["thread"] and x["provider"] == entry["provider"]]}
 
 
+# ─── Following one pane ─────────────────────────────────────────────────────
+# The conversation inside a pane can change under an open chat: Claude /clear or
+# /resume, Codex /new or /resume, or the agent exits and the pane is a shell again.
+# `agents` with a `target` re-resolves just that pane with the same evidence order
+# as the full list, without walking every other pane. Read-only.
+PANE_FIELDS = ("pane_id", "terminal_id", "terminal_title", "terminal_title_stripped", "cwd", "foreground_cwd",
+               "workspace_id", "tab_id")
+
+
+def with_record(ref, catalog):
+    """Attach the public record to a local match so the app can open it without a catalog round trip."""
+    if ref.get("status") == "matched" and not ref.get("record"):
+        entry = next((x for x in catalog if x["id"] == ref.get("record_id")), None)
+        if entry: ref = dict(ref, record=public_record(entry))
+    return ref
+
+
+def resolve_one(agent, prefix):
+    provider = agent["agent"]
+    probe = probe_pane(agent, prefix, provider)
+    # Fast path: a local Claude keeps its current runtime session directory open, which
+    # already reflects /clear and /resume; locate just that file instead of scanning all.
+    if provider == "claude" and not probe["route"] and len(probe["active"]) == 1:
+        thread = next(iter(probe["active"]))
+        entry = locate_thread(provider, thread, probe["cwd"] or agent.get("foreground_cwd") or agent.get("cwd") or "")
+        if entry: return dict(matched(entry, "native-process"), record=public_record(entry))
+        return {"status": "pending", "thread": thread, "source": "native-process", "reason": "会话刚开始，历史文件还没写出"}
+    if probe["route"]:
+        global _remote_deadline
+        _remote_deadline = time.monotonic() + 15
+        _remote_results.clear()
+        try: return resolve_agent_history(agent, prefix, [], None, probe)
+        finally: _remote_deadline = None
+    catalog = transcript_catalog()
+    index = (codex_thread_names(), codex_loaded_threads()) if provider == "codex" else None
+    return with_record(resolve_agent_history(agent, prefix, catalog, index, probe), catalog)
+
+
+def follow_pane(request, prefix):
+    target = request.get("target")
+    if not isinstance(target, str) or not re.fullmatch(r"w[A-Za-z0-9]+:p[A-Za-z0-9]+", target):
+        raise BridgeError("Invalid pane target")
+    agent = next((a for a in agents(prefix) if a.get("pane_id") == target), None)
+    if agent:
+        if agent.get("agent") in ("codex", "claude"): agent["history_ref"] = resolve_one(agent, prefix)
+        state = "same" if agent["identity"] == request.get("identity") else "changed"
+        return {"follow": True, "state": state, "agents": [agent], "pane": None}
+    # No agent in the pane any more: tell "exited, the shell is still there" from "pane closed".
+    try: live = call(prefix + ["pane", "get", target])
+    except BridgeError as exc:
+        if "not_found" in str(exc) or "not found" in str(exc): return {"follow": True, "state": "gone", "agents": [], "pane": None}
+        raise
+    pane = live.get("pane", live)
+    if pane.get("pane_id") != target: return {"follow": True, "state": "gone", "agents": [], "pane": None}
+    if pane.get("agent"):
+        # Herdr's pane view caught an agent the list did not have yet; report it on the next poll.
+        return {"follow": True, "state": "starting", "agents": [], "pane": None}
+    public = {k: pane.get(k) for k in PANE_FIELDS}
+    public["identity"] = identity(pane)
+    return {"follow": True, "state": "exited", "agents": [], "pane": public}
+
+
 def ssh_info():
     import getpass
     import socket
@@ -917,6 +979,8 @@ def handle(request, state_dir=None):
         fields = ("pane_id", "agent", "agent_status", "agent_session", "terminal_id", "terminal_title",
                   "terminal_title_stripped", "title", "cwd", "foreground_cwd", "workspace_id", "tab_id", "identity")
         return {"agents": [{k: a.get(k) for k in fields} for a in agents(prefix)]}
+    if op == "agents" and request.get("target") is not None:
+        return follow_pane(request, prefix)
     found = agents(prefix, include_history=op == "agents")
     if op == "agents":
         return {"agents": found}

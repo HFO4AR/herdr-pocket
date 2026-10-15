@@ -187,6 +187,7 @@ function renderTimeline(){
  const body=document.getElementById('chat-scroll');if(!body)return;
  const open=new Set([...body.querySelectorAll('details[data-key][open]')].map(x=>x.dataset.key));
  body.replaceChildren();const list=el('div','timeline');body.append(list);
+ followMarker(list);
  if(S.chatMode==='terminal'){const pre=el('pre','agent-terminal',S.terminalText||(S.chat.agent?'正在读取终端…':'这条历史没有在线终端。'));pre.id='terminal-output';list.append(pre);if(S.chat.agent)list.append(btn('刷新终端','secondary',()=>fetchTerminal()));return;}
  if(!S.chat.record){const box=el('div','unlinked');box.append(el('h2','','还没关联到对话记录'),el('p','muted',S.chat.historyIssue||'正在定位这个窗格对应的历史记录…'));
   if(S.chat.historyIssue)box.append(btn('选择历史记录','primary',pickHistory));list.append(box);
