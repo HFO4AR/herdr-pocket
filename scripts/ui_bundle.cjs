@@ -1,0 +1,12 @@
+// Builds the same single-page HTML as MainActivity (keep the file lists in sync).
+const fs=require('node:fs'),path=require('node:path');
+const CSS=['vendor/xterm.css','app.css','chat.css','timeline.css','markdown.css'];
+const JS=['markdown.js','timeline.js','demo.js','app.js'];
+module.exports=function bundle(root){
+ const ui=path.join(root,'app/src/main/assets/ui'),read=f=>fs.readFileSync(path.join(ui,f),'utf8');
+ return read('index.html')
+  .replace('/*BUNDLED_CSS*/',()=>CSS.map(read).join('\n'))
+  .replace('/*TERMINAL_VENDOR*/',()=>read('vendor/xterm.js')+'\n'+read('vendor/addon-fit.js'))
+  .replace('/*TERMINAL_APP*/',()=>read('terminals.js'))
+  .replace('/*BUNDLED_JS*/',()=>JS.map(read).join('\n'));
+};

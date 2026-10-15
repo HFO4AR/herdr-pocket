@@ -19,6 +19,10 @@ import android.widget.FrameLayout
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
+// Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/timeline.js", "ui/demo.js", "ui/app.js")
+
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
     private lateinit var web: WebView
@@ -70,13 +74,15 @@ class MainActivity : Activity() {
         }
         setContentView(container)
         val html = assets.open("ui/index.html").bufferedReader().use { it.readText() }
-            .replace("/*BUNDLED_CSS*/", assets.open("ui/vendor/xterm.css").bufferedReader().use { it.readText() } + assets.open("ui/app.css").bufferedReader().use { it.readText() })
+            .replace("/*BUNDLED_CSS*/", UI_CSS.joinToString("\n") { asset(it) })
             .replace("/*TERMINAL_VENDOR*/", assets.open("ui/vendor/xterm.js").bufferedReader().use { it.readText() } + "\n" + assets.open("ui/vendor/addon-fit.js").bufferedReader().use { it.readText() })
             .replace("/*TERMINAL_APP*/", assets.open("ui/terminals.js").bufferedReader().use { it.readText() })
-            .replace("/*BUNDLED_JS*/", assets.open("ui/app.js").bufferedReader().use { it.readText() })
+            .replace("/*BUNDLED_JS*/", UI_JS.joinToString("\n") { asset(it) })
         web.loadDataWithBaseURL("https://pocket.invalid/", html, "text/html", "UTF-8", null)
         core.listener = { type, detail -> event(JSONObject().put("type", type).put("detail", detail)) }
     }
+
+    private fun asset(name: String) = assets.open(name).bufferedReader().use { it.readText() }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

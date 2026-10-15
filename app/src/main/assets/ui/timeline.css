@@ -1,0 +1,42 @@
+/* Conversation timeline (timeline.js): messages, turns, tool calls. Uses tokens from app.css. */
+.timeline{max-width:780px;margin:auto;display:flex;flex-direction:column;gap:12px}
+.timeline>.link-btn{align-self:center}
+.date-separator{align-self:center;font-size:11px;color:var(--muted);background:var(--sunken);padding:3px 10px;border-radius:999px;margin:4px 0}
+.message{max-width:100%;align-self:flex-start;min-width:0;animation:arrive .2s ease-out}
+.message.user{align-self:flex-end;max-width:86%}
+.message-label{font-size:11px;color:var(--faint);margin:0 4px 4px;display:flex;gap:8px}
+.user .message-label{justify-content:flex-end}
+.bubble{background:var(--surface);border:1px solid var(--line);border-radius:4px var(--radius-card) var(--radius-card) var(--radius-card);padding:10px 14px;font-size:15px;line-height:1.7;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
+.user .bubble{background:var(--soft);border-color:var(--soft-line);border-radius:var(--radius-card) 4px var(--radius-card) var(--radius-card)}
+.message.pending .bubble{opacity:.7}
+.message.failed .bubble{border-color:var(--danger);background:var(--danger-soft)}
+.message.failed .message-label{color:var(--danger)}
+/* Tool calls */
+.tool-group{align-self:stretch;border-radius:var(--radius-control);background:transparent}
+.tool-group>summary,.tool-row>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;min-height:40px;padding:4px 6px;border-radius:var(--radius-control);font-size:13px;color:var(--ink-2)}
+.tool-group>summary::-webkit-details-marker,.tool-row>summary::-webkit-details-marker{display:none}
+.tool-group>summary:active,.tool-row>summary:active{background:var(--sunken)}
+.tool-icon{width:26px;height:26px;border-radius:8px;background:var(--sunken);display:grid;place-items:center;flex-shrink:0;color:var(--muted)}
+.tool-icon svg{width:15px;height:15px}
+.tool-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.tool-text strong{font-family:-apple-system,system-ui,sans-serif;font-size:13px;color:var(--ink-2);font-weight:600}
+.tool-verb{font-size:12px;font-weight:600;color:var(--ink-2);flex-shrink:0}
+.tool-state{font-size:11px;font-weight:600;flex-shrink:0}
+.tool-state.bad{color:var(--danger)}
+.tool-state.wait{color:var(--faint)}
+.chev{display:grid;color:var(--faint);transition:transform .18s var(--ease)}
+.chev svg{width:16px;height:16px}
+.tool-group[open]>summary .chev{transform:rotate(180deg)}
+.tool-list{margin:2px 0 4px 18px;padding-left:12px;border-left:2px solid var(--line)}
+.tool-row.failed>summary .tool-icon{background:var(--danger-soft);color:var(--danger)}
+.tool-body{margin:2px 0 8px;padding:10px 12px;border-radius:var(--radius-control);background:var(--surface);border:1px solid var(--line)}
+.tool-caption{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--muted);font-weight:600}
+.tool-caption+pre{margin-top:2px}
+.tool-body pre{margin:0 0 8px;font:12px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;background:var(--sunken);border-radius:8px;padding:8px 10px}
+.tool-body pre.output{background:var(--terminal);color:var(--terminal-ink)}
+.timeline>.tool-row{align-self:stretch}
+/* Unlinked chat */
+.unlinked{padding:18px;border:1px dashed var(--line-strong);border-radius:var(--radius-card);text-align:center}
+.unlinked p{margin:6px 0 14px}
+.agent-terminal{font:12px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;margin:0;border-radius:var(--radius-control);padding:14px;background:var(--terminal);color:var(--terminal-ink);min-height:150px}
+.agent-terminal.compact{min-height:0;max-height:280px;overflow:auto}

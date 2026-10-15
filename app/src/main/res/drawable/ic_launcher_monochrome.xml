@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Themed icons are tinted by alpha, so the bubble is an outline around the prompt. -->
+    <group android:scaleX="0.9" android:scaleY="0.9" android:pivotX="54" android:pivotY="54">
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="4.2" android:strokeLineJoin="round"
+            android:pathData="M36,33h36a8,8 0,0 1,8 8v22a8,8 0,0 1,-8 8h-24l-10,8v-8h-2a8,8 0,0 1,-8 -8v-22a8,8 0,0 1,8 -8z" />
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="4.2" android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M41,45l7,6l-7,6M53,58h13" />
+    </group>
+</vector>

@@ -3,7 +3,7 @@ const {chromium}=require('playwright');
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 (async()=>{
 const root=path.resolve(__dirname,'..'), ui=path.join(root,'app/src/main/assets/ui');
-const html=fs.readFileSync(path.join(ui,'index.html'),'utf8').replace('/*BUNDLED_CSS*/',fs.readFileSync(path.join(ui,'vendor/xterm.css'),'utf8')+fs.readFileSync(path.join(ui,'app.css'),'utf8')).replace('/*TERMINAL_VENDOR*/',fs.readFileSync(path.join(ui,'vendor/xterm.js'),'utf8')+'\n'+fs.readFileSync(path.join(ui,'vendor/addon-fit.js'),'utf8')).replace('/*TERMINAL_APP*/',fs.readFileSync(path.join(ui,'terminals.js'),'utf8')).replace('/*BUNDLED_JS*/',fs.readFileSync(path.join(ui,'app.js'),'utf8'));
+const html=require('./ui_bundle.cjs')(root);
 const browser=await chromium.launch({headless:true,...(process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{})});
 const page=await browser.newPage({viewport:{width:390,height:844},deviceScaleFactor:2});
 const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});

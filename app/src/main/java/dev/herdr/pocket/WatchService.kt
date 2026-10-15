@@ -44,7 +44,7 @@ class WatchService : Service() {
         session = intent?.getStringExtra(EXTRA_SESSION).orEmpty()
         intent?.getStringExtra(EXTRA_STATES)?.let { seed(it) }
         val ongoing = Notification.Builder(this, CHANNEL_WATCH)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("正在关注 " + device.optString("name"))
             .setContentText("Agent 完成或等你确认时会提醒你")
             .setContentIntent(open(null))
@@ -99,7 +99,7 @@ class WatchService : Service() {
     private fun notify(key: String, title: String, text: String, pane: String, urgent: Boolean) {
         val manager = getSystemService(NotificationManager::class.java)
         val n = Notification.Builder(this, if (urgent) CHANNEL_ALERT else CHANNEL_DONE)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(open(pane))
