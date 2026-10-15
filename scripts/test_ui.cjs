@@ -12,7 +12,8 @@ await page.addInitScript(()=>{let devices=[];window.PocketNative={request(id,op,
 await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
 await page.getByRole('button',{name:'添加第一台设备'}).click();
 await page.getByRole('button',{name:'保存设备',exact:true}).click();
-await page.getByText('填写主机、用户名和有效端口',{exact:true}).waitFor();
+// Inline validation: nothing reaches native until the fields make sense.
+await page.getByText('填电脑的地址：域名或 IP',{exact:true}).waitFor();
 await page.getByRole('textbox',{name:'设备名称',exact:true}).fill('测试电脑');
 await page.getByRole('textbox',{name:'主机地址',exact:true}).fill('fixture.invalid');
 await page.getByRole('textbox',{name:'SSH 用户名',exact:true}).fill('fixture');
@@ -26,7 +27,7 @@ await page.getByRole('button',{name:'连接',exact:true}).click();
 await page.getByRole('dialog',{name:'安装配套桥接程序',exact:true}).waitFor();
 assert.equal(await page.evaluate(()=>window.fixtureConnect.remember),true);
 assert.equal(await page.evaluate(()=>S.devices[0].remember),true);
-await page.getByRole('button',{name:'取消',exact:true}).click();
+await page.getByRole('button',{name:'先不装，断开',exact:true}).click();
 await page.evaluate(()=>disconnect());
 
 // Hold each asynchronous stage to prove loading does not turn into a false empty state.

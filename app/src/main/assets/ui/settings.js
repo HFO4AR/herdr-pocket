@@ -64,6 +64,7 @@ function settingsPage(main){
 
  const privacy=group(main,'提醒与隐私');
  privacy.append(toggle('后台提醒','切到后台后，Agent 做完或等你确认时发通知',S.alerts!==false,async on=>{try{S.alerts=(await rpc('setAlerts',{enabled:on})).alerts;toast(S.alerts?'切到后台时会继续关注 Agent':'已关闭后台提醒');return true;}catch(e){error(e);return false;}}));
+ if(S.alerts!==false&&p.notifications===false){privacy.append(el('p','set-note error','系统通知被关掉了，后台提醒弹不出来。'));const go=btn('打开系统通知','secondary small',()=>rpc('openNotificationSettings').catch(error));go.classList.add('set-action');privacy.append(go);}
  privacy.append(toggle('防截图','打开后不能截图、录屏，最近任务里也看不到画面',!!p.secureScreen,async on=>{const r=await settingsSet('secureScreen',on);if(r)toast(on?'已禁止截图':'现在可以截图了');return !!r;}));
 
  const store=group(main,'缓存');

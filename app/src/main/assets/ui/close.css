@@ -22,7 +22,8 @@
 
 .close-sheet .section-label{margin:16px 2px 8px}
 .close-opts{display:flex;flex-direction:column;gap:8px}
-.close-opt{width:100%;display:flex;align-items:flex-start;gap:12px;text-align:left;padding:12px 12px 12px 14px;border:1px solid var(--line);border-radius:var(--radius-card);background:var(--surface)}
+.close-opt{width:100%;display:flex;align-items:flex-start;gap:12px;text-align:left;padding:12px 12px 12px 14px;border:1px solid var(--line);border-radius:var(--radius-card);background:var(--raised)}
+.close-opt:active{transform:scale(.985)}
 .close-opt strong{display:block;font-size:15px;font-weight:600;line-height:1.4}
 .close-opt small{display:block;margin-top:2px;font-size:12.5px;line-height:1.5}
 .close-radio{width:20px;height:20px;border-radius:50%;border:1.6px solid var(--line-strong);flex-shrink:0;margin-top:1px;position:relative}
@@ -36,9 +37,9 @@
 .close-opt.off .close-radio{border-style:dashed}
 .close-warn.strong{align-items:center}
 .close-warn.strong svg{margin-top:0}
-.close-stop{flex-shrink:0;min-height:36px;margin:-6px -6px -6px 0;padding:0 12px;border-radius:999px;background:var(--surface);border:1px solid var(--danger-line);color:var(--danger);font-size:13px;font-weight:600;white-space:nowrap}
+.close-stop{flex-shrink:0;min-height:36px;margin:-6px -6px -6px 0;padding:0 12px;border-radius:999px;background:var(--raised);border:1px solid var(--danger-line);color:var(--danger);font-size:13px;font-weight:600;white-space:nowrap}
 
-.close-foot{position:sticky;bottom:calc(-22px - env(safe-area-inset-bottom));margin:16px -18px calc(-22px - env(safe-area-inset-bottom));padding:2px 18px calc(14px + env(safe-area-inset-bottom));background:var(--surface);box-shadow:0 -1px 0 var(--line)}
+.close-foot{position:sticky;bottom:calc(-22px - env(safe-area-inset-bottom));margin:16px -18px calc(-22px - env(safe-area-inset-bottom));padding:2px 18px calc(14px + env(safe-area-inset-bottom));background:var(--raised);box-shadow:0 -1px 0 var(--line)}
 .close-foot .sheet-actions{margin-top:12px}
 .close-foot .sheet-actions .primary{margin-top:0}
 .close-foot .sheet-actions>*{flex:1}

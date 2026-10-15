@@ -129,18 +129,21 @@ object PocketCore {
                 transport.connect(endpoint, password, pin)
             }
             transport.useBundled(bridge)
-        } catch (e: HostKeyChanged) {
-            listener?.invoke("reconnect_failed", e.message ?: "")
-            throw IllegalStateException("服务器主机密钥变了，已停止自动重连；请回到设备页核对后再连接")
-        } catch (e: UntrustedHost) {
-            listener?.invoke("reconnect_failed", e.message ?: "")
-            throw IllegalStateException("服务器主机密钥变了，已停止自动重连；请回到设备页核对后再连接")
         } catch (e: Exception) {
-            listener?.invoke("reconnect_failed", e.message ?: "")
-            throw IllegalStateException("SSH 断了，自动重连没成功（请求没有发出）：" + (e.message ?: "未知原因"))
+            if (e is HostKeyChanged || e is UntrustedHost) {
+                // Never trusted silently: the user has to look at the fingerprint on the devices page.
+                listener?.invoke("hostkey_changed", "电脑的 SSH 指纹变了，已停止自动重连。到设备页重新连接时核对一下。")
+                throw Friendly("hostkey_changed", "电脑的 SSH 指纹变了，已停止自动重连；到设备页重新连接时核对一下。")
+            }
+            val friendly = ConnectErrors.connect(e, endpoint)
+            listener?.invoke("reconnect_failed", friendly.message ?: "")
+            throw Friendly(friendly.code, "SSH 断了，自动重连没成功（请求没有发出）：" + friendly.message)
         }
         listener?.invoke("reconnected", device.optString("name"))
     }
+
+    /** Banner 「重试」: reconnects now if the session is gone; sends nothing to Herdr. */
+    fun retry() { ensureConnected() }
 
     private fun ensureConnected() = synchronized(lock) {
         if (connectedDevice == null) error("请先连接设备")

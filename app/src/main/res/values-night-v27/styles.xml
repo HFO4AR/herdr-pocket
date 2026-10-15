@@ -1,0 +1,6 @@
+<resources>
+    <style name="AppTheme" parent="PocketBase">
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:navigationBarColor">#1F1E1C</item>
+    </style>
+</resources>

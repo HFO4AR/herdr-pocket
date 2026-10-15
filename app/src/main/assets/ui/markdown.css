@@ -34,7 +34,7 @@
 .md ol>li::marker{color:var(--muted);font-variant-numeric:tabular-nums;font-weight:600}
 .md li.task{list-style:none;margin-left:-1.3em}
 .md .box{display:inline-grid;place-items:center;width:15px;height:15px;border:1.5px solid var(--line-strong);border-radius:4px;margin-right:6px;font-size:10px;line-height:1;vertical-align:-2px}
-.md .box.done{background:var(--success);border-color:var(--success);color:#fff}
+.md .box.done{background:var(--success);border-color:var(--success);color:var(--on-success)}
 
 /* Inline code, file references and links. Tapping a file or link copies it (navigation is blocked). */
 .md code,.md .md-file{font-variant-ligatures:none}

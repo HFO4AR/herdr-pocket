@@ -2,7 +2,7 @@
   "name": "herdr-pocket-ui-checks",
   "private": true,
   "scripts": {
-    "test": "node scripts/test_ui.cjs && node scripts/test_follow_ui.cjs && node scripts/test_answer_ui.cjs && node scripts/test_images_ui.cjs && node scripts/test_files_ui.cjs && node scripts/test_queue_ui.cjs && node scripts/test_new_ui.cjs && node scripts/test_slash_ui.cjs && node scripts/test_close_ui.cjs && node scripts/test_settings_ui.cjs && node scripts/test_cache_ui.cjs"
+    "test": "node scripts/test_ui.cjs && node scripts/test_follow_ui.cjs && node scripts/test_answer_ui.cjs && node scripts/test_images_ui.cjs && node scripts/test_files_ui.cjs && node scripts/test_queue_ui.cjs && node scripts/test_new_ui.cjs && node scripts/test_slash_ui.cjs && node scripts/test_close_ui.cjs && node scripts/test_settings_ui.cjs && node scripts/test_cache_ui.cjs && node scripts/test_chat_ui.cjs && node scripts/test_onboard_ui.cjs && node scripts/test_share_ui.cjs && node scripts/test_lists_ui.cjs"
   },
   "devDependencies": {
     "playwright": "1.55.1"

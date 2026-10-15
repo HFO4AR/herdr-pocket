@@ -49,7 +49,13 @@ function mdCopyable(node,value,hint){
  node.onclick=e=>{if(getSelection&&String(getSelection()).length)return;e.stopPropagation();copyText(value);};
  node.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();copyText(value);}};return node;}
 function mdUrl(href,label){const a=el('span','md-link',label===undefined?mdShortUrl(href):label);return mdCopyable(a,href,'链接');}
-function mdFile(ref,label){const a=el('span','md-file',label===undefined?ref:label);return mdCopyable(a,ref,'文件');}
+function mdFile(ref,label){const a=el('span','md-file',label===undefined?ref:label);return mdFileNode(a,ref);}
+// In the app a tapped path opens its sheet (timeline.js fileSheet: copy, and this chat's edits to it).
+function mdFileNode(node,ref){
+ mdCopyable(node,ref,'文件');if(typeof fileSheet!=='function')return node;
+ const open=()=>fileSheet(ref);node.setAttribute('aria-label','文件：'+ref+'，点按查看');
+ node.onclick=e=>{if(getSelection&&String(getSelection()).length)return;e.stopPropagation();open();};
+ node.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}};return node;}
 const mdIsLocal=h=>/^(?:\/|~\/|\.{1,2}\/|file:)/.test(h)||(!/^[a-z][\w+.-]*:\/\//i.test(h)&&/[\w-]\.[A-Za-z]\w{0,7}(?:[:#]L?\d+.*)?$/.test(h));
 function mdLocalRef(h){
  let p=h.replace(/^file:\/\//,'');try{p=decodeURI(p);}catch(_){}const line=p.match(/(?:#L|:)(\d+)(?:[-:]L?(\d+))?$/);p=p.replace(/(?:#L\d+(?:-L?\d+)?|:\d+(?:[-:]\d+)?)$/,'');
@@ -65,7 +71,7 @@ function inline(text,parent){
   if(t[0]==='\\'){add(t[1]);continue;}
   if(t[0]==='`'){const n=t.match(/^`+/)[0].length;let c=t.slice(n,-n);if(/^ .*[^ ] $/.test(c)||/^ [^ ] $/.test(c))c=c.slice(1,-1);
    const code=el('code','',c);
-   if(/^(?:~|\.{0,2}\/)?(?:[\w.@+-]+\/)*[\w.@+-]+\.[A-Za-z]\w{0,7}(?::\d+(?:[-:,]\d+)*)?$/.test(c)&&(c.includes('/')||/:\d/.test(c))){code.className='md-file';mdCopyable(code,c,'文件');}
+   if(/^(?:~|\.{0,2}\/)?(?:[\w.@+-]+\/)*[\w.@+-]+\.[A-Za-z]\w{0,7}(?::\d+(?:[-:,]\d+)*)?$/.test(c)&&(c.includes('/')||/:\d/.test(c))){code.className='md-file';mdFileNode(code,c);}
    parent.append(code);continue;}
   if(/^<br/i.test(t)){parent.append(el('br'));continue;}
   if(t[0]==='<'){parent.append(mdUrl(t.slice(1,-1)));continue;}

@@ -21,6 +21,8 @@ function cacheLive(){S.fromCache=false;if(!S.session)return;cachePut('live',{ses
 async function cacheShowLive(dev=cacheDevice()){
  const v=await cacheGet('live',dev);if(!v||!v.agents?.length||S.agents.length||cacheDevice()!==dev)return false;
  if(S.device&&!S.liveLoading)return false;
+ // A different Herdr session was picked on purpose: its own list loads, not the cached one.
+ if(S.device&&S.session&&v.session!==S.session)return false;
  S.session=v.session;S.sessions=v.sessions||[v.session];S.agents=v.agents;S.fromCache=v.at||Date.now();
  if(S.tab==='live'&&!S.chat)render();return true;}
 // Picked a device: show what it had last time while SSH connects.

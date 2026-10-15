@@ -1,6 +1,6 @@
 /* Slash commands (slash.js): the suggestion list above the composer and the 「命令输出」 cards. */
-.slash-pop{margin-bottom:8px;border:1px solid var(--line-strong);border-radius:var(--radius-card);background:var(--surface);box-shadow:var(--shadow-lift);max-height:min(42vh,300px);max-height:min(42dvh,300px);overflow:auto;overscroll-behavior:contain;padding:4px}
-.slash-head{position:sticky;top:-4px;z-index:1;display:flex;justify-content:space-between;gap:8px;margin:-4px -4px 2px;padding:8px 12px 6px;background:var(--surface);border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.slash-pop{margin-bottom:8px;border:1px solid var(--line-strong);border-radius:var(--radius-card);background:var(--raised);animation:arrive .16s var(--ease-out);box-shadow:var(--shadow-lift);max-height:min(42vh,300px);max-height:min(42dvh,300px);overflow:auto;overscroll-behavior:contain;padding:4px}
+.slash-head{position:sticky;top:-4px;z-index:1;display:flex;justify-content:space-between;gap:8px;margin:-4px -4px 2px;padding:8px 12px 6px;background:var(--raised);border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
 .slash-count{color:var(--faint)}
 .slash-item{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:6px 10px;border-radius:var(--radius-control);text-align:left}
 .slash-item.active{background:var(--soft)}

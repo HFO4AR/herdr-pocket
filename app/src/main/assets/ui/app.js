@@ -3,7 +3,7 @@
 // terminals.js shares the helpers and state declared here (S, el, btn, ib, sheet, remote…).
 
 // ─── Icons & DOM helpers ────────────────────────────────────────────────────
-const paths={chat:'M4 4h16v12H8l-4 4V4z',history:'M3 12a9 9 0 1 0 3-6M3 3v6h6M12 7v5l3 2',device:'M4 4h16v12H4zM8 20h8M12 16v4',account:'M20 21v-2a7 7 0 0 0-14 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',plus:'M12 5v14M5 12h14',back:'M15 5l-7 7 7 7',close:'M6 6l12 12M18 6L6 18',search:'M21 21l-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16',chevron:'M9 5l7 7-7 7',down:'M6 9l6 6 6-6',send:'M12 19V5M5 12l7-7 7 7',more:'M5 12h.01M12 12h.01M19 12h.01',terminal:'M4 6l6 6-6 6M12 18h8',branch:'M6 3v12a4 4 0 0 0 8 0V9M10 9l4-4 4 4',refresh:'M20 7a8 8 0 1 0 1 7M20 3v5h-5',lock:'M5 10h14v11H5zM8 10V6a4 4 0 0 1 8 0v4',check:'M4 12l5 5L20 6',edit:'M16 3l5 5-12 12H4v-5z',folder:'M3 6h7l2 2h9v12H3z',pause:'M8 5v14M16 5v14',file:'M6 2h8l5 5v15H6zM14 2v5h5',pen:'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',globe:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18',tool:'M14 7a4 4 0 0 0 5 5l-8 8-4-4 8-8z',x:'M7 7l10 10M17 7L7 17',copy:'M9 9h11v11H9zM5 15V4h11',alert:'M12 3l10 18H2zM12 10v5M12 18h.01',stop:'M6 6h12v12H6z',plug:'M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4',image:'M4 5h16v14H4zM4 16l5-5 4 4 2-2 5 5M15.5 9.5h.01',camera:'M3 8h4l2-3h6l2 3h4v11H3zM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7',download:'M12 4v11M7 10l5 5 5-5M5 20h14',settings:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z'};
+const paths={chat:'M6 4h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4V6a2 2 0 0 1 2-2z',history:'M3 12a9 9 0 1 0 3-6M3 3v6h6M12 7v5l3 2',device:'M5 4h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM8 20h8M12 16v4',account:'M20 21v-2a7 7 0 0 0-14 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',plus:'M12 5v14M5 12h14',back:'M15 5l-7 7 7 7',close:'M6 6l12 12M18 6L6 18',search:'M21 21l-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16',chevron:'M9 5l7 7-7 7',down:'M6 9l6 6 6-6',send:'M12 19V5M5 12l7-7 7 7',more:'M5 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0M11 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0M17 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0',terminal:'M4 6l6 6-6 6M12 18h8',branch:'M6 3v12a4 4 0 0 0 8 0V9M10 9l4-4 4 4',refresh:'M20 7a8 8 0 1 0 1 7M20 3v5h-5',lock:'M6 10h12a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1zM8 10V7a4 4 0 0 1 8 0v3',check:'M4 12l5 5L20 6',edit:'M16 3l5 5-12 12H4v-5z',folder:'M4 5h5l2 2.5h9a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z',pause:'M8 5v14M16 5v14',file:'M6 2h8l5 5v15H6zM14 2v5h5',pen:'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',globe:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18',tool:'M14 7a4 4 0 0 0 5 5l-8 8-4-4 8-8z',x:'M7 7l10 10M17 7L7 17',copy:'M9 9h11v11H9zM5 15V4h11',alert:'M12 3l10 18H2zM12 10v5M12 18h.01',stop:'M7 6h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z',plug:'M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4',image:'M4 5h16v14H4zM4 16l5-5 4 4 2-2 5 5M15.5 9.5h.01',camera:'M3 8h4l2-3h6l2 3h4v11H3zM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7',download:'M12 4v11M7 10l5 5 5-5M5 20h14',settings:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',reply:'M10 8V4L3 11l7 7v-4c5 0 8.5 1.5 11 5-1-5-4-10-11-11z'};
 function icon(name){const n=document.createElementNS('http://www.w3.org/2000/svg','svg');n.setAttribute('viewBox','0 0 24 24');n.setAttribute('aria-hidden','true');const p=document.createElementNS(n.namespaceURI,'path');p.setAttribute('d',paths[name]||paths.chat);n.append(p);return n;}
 function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;}
 function btn(text,cls,fn,name){const n=el('button',cls);n.type='button';if(name)n.append(icon(name));if(text)n.append(document.createTextNode(text));n.onclick=fn;return n;}
@@ -13,13 +13,10 @@ function uuid(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=
 // ─── Native bridge ──────────────────────────────────────────────────────────
 let seq=0;const pending=new Map();
 function rpc(op,args={},progress){return new Promise((resolve,reject)=>{const id='r'+(++seq);pending.set(id,{resolve,reject,progress});try{PocketNative.request(id,op,JSON.stringify(args));}catch(e){pending.delete(id);reject(e);}});}
-window.nativeResult=(id,r)=>{const p=pending.get(id);if(!p)return;pending.delete(id);r.ok?p.resolve(r.data):p.reject(new Error(r.error));};
+window.nativeResult=(id,r)=>{const p=pending.get(id);if(!p)return;pending.delete(id);if(r.ok){p.resolve(r.data);return;}const e=new Error(r.error);if(r.code)e.code=r.code;if(r.info)e.info=r.info;p.reject(e);};
 window.nativeProgress=(id,stage)=>{pending.get(id)?.progress?.(stage);};
-// Connection events pushed by the native layer (silent reconnects).
-window.nativeEvent=e=>{
- if(e.type==='reconnecting'){S.reconnecting=true;toast('连接断了，正在重新连接…');}
- else if(e.type==='reconnected'){S.reconnecting=false;toast('已重新连接');if(typeof T!=='undefined'&&T.shell&&!T.shell.ended){T.shell.ended=true;terminalStatus(T.shell,'连接中断过，这个 SSH 终端已结束；返回列表重新打开');}}
- else if(e.type==='reconnect_failed'){S.reconnecting=false;}};
+// Connection events pushed by the native layer (silent reconnects); see onboard.js.
+window.nativeEvent=e=>netEvent(e);
 window.openFromNotification=pane=>{S.pendingPane=pane;if(!S.device)return;const a=S.agents.find(x=>x.pane_id===pane);if(a){openPending();return;}setTab('live');};
 function openPending(){const pane=S.pendingPane;if(!pane||!S.device)return;S.pendingPane=null;const a=S.agents.find(x=>x.pane_id===pane);if(!a){toast('那个 Agent 已经不在这个会话里了');return;}if(typeof T!=='undefined')leaveTerminal();closeSheet();openAgent(a);}
 // The background watcher only notifies about changes after what the UI already showed.
@@ -40,8 +37,19 @@ let toastTimer;
 function toast(text){const n=document.getElementById('toast');const c=document.getElementById('composer');n.style.bottom=c?c.offsetHeight+14+'px':'';n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.classList.remove('show'),4200);}
 function error(e){toast(e.message||String(e));}
 async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const t=el('textarea');t.value=text;document.body.append(t);t.select();document.execCommand('copy');t.remove();}toast('已复制');}
-function sheet(title){overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);back.onclick=e=>{if(e.target===back)closeSheet();};overlay.append(back);return body;}
-function closeSheet(){overlay.replaceChildren();}
+function sheet(title){dropGhost();overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);back.onclick=e=>{if(e.target===back)closeSheet();};overlay.append(back);return body;}
+function closeSheet(){ghostSheet();overlay.replaceChildren();}
+// Exit animation without delaying the real close: an inert copy of the closing sheet lives in a closed
+// shadow root (invisible to queries and assistive tech) and slides away on its own.
+let sheetGhost=null,ghostCss=null;
+function dropGhost(){if(sheetGhost){sheetGhost.remove();sheetGhost=null;}}
+function ghostSheet(){dropGhost();const back=overlay.firstElementChild,panel=back&&back.classList.contains('sheet-backdrop')&&back.querySelector('.sheet');
+ if(!panel||document.documentElement.classList.contains('reduce-motion')||matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+ try{if(!ghostCss){ghostCss=new CSSStyleSheet();ghostCss.replaceSync([...document.querySelectorAll('style')].map(s=>s.textContent).join('\n'));}
+  const host=el('div','sheet-ghost');host.setAttribute('aria-hidden','true');host.inert=true;const root=host.attachShadow({mode:'closed'});root.adoptedStyleSheets=[ghostCss];
+  const wrap=el('div','sheet-ghost');const copy=back.cloneNode(true);wrap.append(copy);root.append(wrap);document.body.append(host);sheetGhost=host;
+  copy.querySelector('.sheet').scrollTop=panel.scrollTop;const done=()=>{if(sheetGhost===host)dropGhost();};copy.querySelector('.sheet').addEventListener('animationend',done);setTimeout(done,400);}
+ catch(_){dropGhost();}}
 function confirmAction(title,text,label,action,danger){const box=sheet(title);box.append(el('p','muted',text));const row=el('div','sheet-actions');row.append(btn('取消','secondary',closeSheet),btn(label,'primary'+(danger?' danger-fill':''),()=>{closeSheet();action();}));box.append(row);}
 function menuItem(box,label,fn,name,detail){const b=btn('','menu-item',()=>{closeSheet();fn();},name);const t=el('span','grow');t.append(el('span','menu-label',label));if(detail)t.append(el('small','',detail));b.append(t);box.append(b);return b;}
 
@@ -69,7 +77,9 @@ function draftKey(){return S.chat?.agent?S.session+'/'+S.chat.agent.identity:S.c
 function dur(ms){const s=Math.max(0,Math.floor(ms/1000));if(s<3600)return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');const h=Math.floor(s/3600);return h<24?h+' 小时 '+Math.floor(s%3600/60)+' 分':Math.floor(h/24)+' 天';}
 function ago(ms){const s=ms/1000;return s<60?'刚刚':s<3600?Math.floor(s/60)+' 分钟':s<86400?Math.floor(s/3600)+' 小时':Math.floor(s/86400)+' 天';}
 // A live-updating duration node; the 1 s ticker below rewrites every [data-since].
-function since(at,fmt='dur',prefix=''){const n=el('span','since',prefix+(fmt==='ago'?ago(Date.now()-at):dur(Date.now()-at)));n.dataset.since=at;n.dataset.fmt=fmt;n.dataset.prefix=prefix;return n;}
+// 'upd' reads "12 秒前更新" (list freshness).
+function sinceText(fmt,ms){if(fmt==='upd'){const s=Math.max(0,ms/1000);return s<5?'刚刚更新':s<60?Math.floor(s)+' 秒前更新':ago(ms)+'前更新';}return fmt==='ago'?ago(ms):dur(ms);}
+function since(at,fmt='dur',prefix=''){const n=el('span','since',prefix+sinceText(fmt,Date.now()-at));n.dataset.since=at;n.dataset.fmt=fmt;n.dataset.prefix=prefix;return n;}
 
 // ─── Agent status memory (this run only) ────────────────────────────────────
 // Herdr reports the current state but not when it changed, so the UI remembers
@@ -89,7 +99,7 @@ function noteStatus(list){
   if(k===viewing||!S.active)continue;
   if(prev.status==='working'&&(s==='idle'||s==='done')){S.unread.add(k);toast('「'+titleOf(a)+'」做完了');}
   else if(s==='blocked')toast('「'+titleOf(a)+'」在等你确认');}}
-setInterval(()=>{if(!S.active)return;document.querySelectorAll('[data-since]').forEach(n=>{const ms=Date.now()-Number(n.dataset.since);n.textContent=(n.dataset.prefix||'')+(n.dataset.fmt==='ago'?ago(ms):dur(ms));});},1000);
+setInterval(()=>{if(!S.active)return;document.querySelectorAll('[data-since]').forEach(n=>{const ms=Date.now()-Number(n.dataset.since);n.textContent=(n.dataset.prefix||'')+sinceText(n.dataset.fmt,ms);});},1000);
 
 // ─── App shell & navigation ─────────────────────────────────────────────────
 const TABS=[['live','chat','会话'],['history','history','历史'],['terminals','terminal','终端'],['devices','device','设备'],['settings','settings','设置']];
@@ -98,12 +108,12 @@ function shell(){app.replaceChildren();const root=el('div','shell');app.append(r
 function header(root){
  const bar=el('header','topbar');const title=(TABS.find(t=>t[0]===S.tab)||[])[2]||'Herdr Pocket';bar.append(el('h1','',title));
  const chip=btn('','device-chip',()=>setTab('devices'));chip.setAttribute('aria-label','当前设备');chip.append(el('span',S.loading?'spinner':S.device?'dot':'dot offline'),el('span','truncate',S.loading?'连接中':S.device?S.device.name:'未连接'));bar.append(chip);root.append(bar);
- if(S.loading||S.connectError){const box=el('div','connection-status'+(S.connectError?' failed':''));box.setAttribute('role','status');if(S.loading)box.append(el('span','spinner'));else box.append(icon('alert'));const text=el('div','grow');text.append(el('strong','',S.connectError?'连接未完成':'正在连接 '+(S.connecting?.name||S.device?.name||'')),el('div','',S.connectError||S.connectStage));box.append(text);if(S.connectError&&S.connecting)box.append(btn('重试','secondary small',()=>S.device?setupBridge():connectDevice(S.connecting)));root.append(box);}
+ connectionBanner(root);
 }
 function pageHead(main,kicker,title,subtitle,action){const h=el('div','page-head');const t=el('p','grow',subtitle||'');h.append(t);if(action)h.append(action);main.append(h);}
 function loadingCard(main,title,detail){const box=el('div','loading-card');box.setAttribute('role','status');box.setAttribute('aria-live','polite');box.append(el('span','spinner'));const text=el('div');text.append(el('h2','',title),el('p','muted',detail));box.append(text);main.append(box);}
 function skeleton(main,rows=4){for(let i=0;i<rows;i++){const r=el('div','skeleton-row');r.append(el('div','sk-avatar'),el('div','sk-lines'));main.append(r);}}
-function empty(main,title,desc,action){const n=el('div','empty');const a=el('div','empty-icon');a.append(icon('chat'));n.append(a,el('h2','',title),el('p','',desc));if(action)n.append(action);main.append(n);}
+function empty(main,title,desc,action,name='chat'){const n=el('div','empty');const a=el('div','empty-icon');a.append(icon(name));n.append(a,el('h2','',title),el('p','',desc));if(action)n.append(action);main.append(n);}
 function render(){
  if(S.chat){renderChat();return;}if(typeof T!=='undefined'&&T.view){renderTerminal();return;}
  const root=shell();header(root);const main=el('main','main pane-enter');root.append(main);
@@ -113,51 +123,34 @@ function render(){
  TABS.forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waiting){const badge=el('span','nav-badge',String(waiting));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waiting+' 个 Agent 等你确认';}if(tab==='settings'&&settingsBadge()){n.append(el('span','nav-dot'));n.title='有新版本';}nav.append(n);});
  root.append(nav);}
 function requireDevice(main){if(S.device||cacheBrowsing())return true;if(S.loading){loadingCard(main,'连接正在进行','连接成功后会自动读取会话，请稍候。');return false;}empty(main,'先连接你的电脑','连接后，在线会话、历史记录和终端会出现在这里。',btn('选择设备','primary',()=>setTab('devices')));return false;}
-function searchBox(placeholder,change,value=''){const box=el('div','search');const input=el('input');input.type='search';input.placeholder=placeholder;input.value=value;input.setAttribute('aria-label',placeholder);input.oninput=()=>change(input.value);box.append(icon('search'),input);return box;}
+function searchBox(placeholder,change,value=''){const box=el('div','search');const input=el('input');input.type='search';input.placeholder=placeholder;input.value=value;input.setAttribute('aria-label',placeholder);input.setAttribute('enterkeyhint','search');
+ const clear=ib('x','清除搜索',()=>{input.value='';clear.classList.add('hidden');change('');input.focus();});clear.classList.add('search-clear');clear.classList.toggle('hidden',!value);
+ input.oninput=()=>{clear.classList.toggle('hidden',!input.value);change(input.value);};input.onkeydown=e=>{if(e.key==='Enter')input.blur();};box.append(icon('search'),input,clear);return box;}
+// Pull down at the top of a list to refresh it (touch only; the refresh button does the same).
+function pullRefresh(main,fn){
+ const tip=el('div','pull-tip');tip.setAttribute('aria-hidden','true');const spin=el('span','pull-icon');spin.append(icon('refresh'));const label=el('span','','下拉刷新');tip.append(spin,label);main.prepend(tip);
+ let y0=null,dist=0;const max=72,need=56;
+ main.addEventListener('touchstart',e=>{y0=main.scrollTop<=0&&e.touches.length===1&&!overlay.childElementCount?e.touches[0].clientY:null;dist=0;},{passive:true});
+ main.addEventListener('touchmove',e=>{if(y0===null)return;dist=Math.max(0,Math.min(max,(e.touches[0].clientY-y0)*.5));if(main.scrollTop>0){y0=null;dist=0;}tip.style.height=dist+'px';tip.classList.toggle('ready',dist>=need);label.textContent=dist>=need?'松手刷新':'下拉刷新';spin.style.transform='rotate('+dist*4+'deg)';},{passive:true});
+ const end=()=>{if(y0===null)return;const go=dist>=need;y0=null;dist=0;tip.style.height='';tip.classList.remove('ready');if(go){tip.classList.add('busy');label.textContent='正在刷新…';fn();}};
+ main.addEventListener('touchend',end);main.addEventListener('touchcancel',()=>{y0=null;dist=0;tip.style.height='';});}
 
 // ─── Devices & connection ───────────────────────────────────────────────────
-function devicesPage(main){
- rpc('protect').catch(error);
- if(S.device)main.append(connectionCard());
- const head=el('div','section-head');head.append(el('span','section-label','保存的设备'),ib('plus','添加设备',()=>deviceForm()));main.append(head);
- if(!S.devices.length){const n=el('div','card intro');n.append(el('h2','','添加运行 Herdr 的电脑'),el('p','muted','填 SSH 地址即可，局域网、Tailscale、Sakura Frp 的 TCP 入口都可以。'));const b=btn('添加第一台设备','primary',()=>deviceForm());n.append(b);main.append(n);}
- for(const d of S.devices){const current=S.device?.id===d.id&&!S.demo;const card=el('section','card device-card'+(current?' current':''));const row=el('div','row');row.append(avatar('',current?'ok':''));const text=el('div','grow');text.append(el('div','card-title',d.name),el('div','card-meta truncate',d.user+' @ '+d.host+':'+d.port));row.append(text,ib('edit','编辑 '+d.name,()=>deviceForm(d)));card.append(row);
-  const line=el('div','device-line');line.append(icon('lock'),document.createTextNode(d.remember?'密码已加密保存':'连接时输入密码'));card.append(line);
-  const actions=el('div','device-actions');const busy=S.loading&&S.connecting?.id===d.id;const connect=btn(busy?'正在连接…':current?'已连接':'连接设备',current?'secondary':'primary',()=>connectDevice(d));connect.disabled=S.loading;actions.append(connect,btn('删除','secondary danger',()=>confirmAction('删除设备？','会移除这台设备及其保存的密码。','删除',async()=>{try{S.devices=(await rpc('deleteDevice',{id:d.id})).devices;render();}catch(e){error(e);}},true)));card.append(actions);main.append(card);}
- const demo=btn('体验聊天演示','secondary wide',startDemo);main.append(demo);
- main.append(el('p','fine','设备资料和勾选保存的密码用 Android Keystore 加密，只存在这台手机上。'));}
-function connectionCard(){
- const card=el('section','card account-card');const top=el('div','row');top.append(avatar('', 'ok'));const t=el('div','grow');t.append(el('div','card-title',S.device.name),el('div','card-meta',S.demo?'离线演示':'SSH 已连接'));top.append(t);card.append(top);
- [['SSH 用户',S.account?.ssh_user||S.device.user],['主机地址',S.device.host],['端口',String(S.device.port)],['电脑主机名',S.account?.hostname||'读取中…'],['密码保存',S.device.remember?'已加密保存':'未保存']].forEach(([k,v])=>{const n=el('div','setting-row');n.append(el('span','',k),el('span','',v));card.append(n);});
- const actions=el('div','device-actions');actions.append(btn('更新桥接程序','secondary',setupBridge),btn('断开连接','secondary danger',()=>confirmAction('断开当前设备？','电脑上的 Agent 会继续运行。','断开',()=>disconnect().catch(error),true)));card.append(actions);
- card.append(el('p','fine','只显示 SSH 连接信息，不读取 Codex / Claude 的登录资料。'));return card;}
-function field(box,title,value='',type='text',placeholder=''){const label=el('label','',title);const input=el('input','field');input.type=type;input.value=value;input.placeholder=placeholder;input.autocomplete='off';input.setAttribute('aria-label',title);label.append(input);box.append(label);return input;}
-function deviceForm(d={}){rpc('protect').catch(error);const box=sheet(d.id?'编辑设备':'添加设备');const name=field(box,'设备名称',d.name||'','','例如：家里的电脑');const grid=el('div','form-grid');box.append(grid);const host=field(grid,'主机地址',d.host||'','text','域名或 IP');const port=field(grid,'端口',d.port||22,'number');const user=field(box,'SSH 用户名',d.user||'');const pass=field(box,'登录密码','','password',d.remember?'已保存；留空保留原密码':'输入 SSH 密码');const check=el('label','check');const remember=el('input');remember.type='checkbox';remember.checked=d.remember!==false;check.append(remember,document.createTextNode('记住密码 · 本机加密保存'));box.append(check);box.append(el('p','fine','更换主机或用户名后，需要重新输入密码。'));const actions=el('div','sheet-actions');const save=btn('保存设备','primary',async()=>{save.disabled=true;try{const r=await rpc('saveDevice',{id:d.id||'',name:name.value,host:host.value,port:Number(port.value),user:user.value,password:pass.value,remember:remember.checked});pass.value='';S.devices=r.devices;closeSheet();render();toast('设备已保存');}catch(e){error(e);}finally{save.disabled=false;}});actions.append(btn('取消','secondary',closeSheet),save);box.append(actions);}
-function connectionPassword(d){const box=sheet('连接 '+d.name);const pass=field(box,'本次登录密码','','password');const label=el('label','check');const remember=el('input');remember.type='checkbox';remember.checked=true;remember.setAttribute('aria-label','记住本次登录密码');label.append(remember,document.createTextNode('记住密码 · 登录成功后加密保存'));box.append(label,el('p','fine','勾选后，下次点这台设备就能直接连接。'));const actions=el('div','sheet-actions');const go=()=>{if(!pass.value){toast('请输入登录密码');return;}const value=pass.value,save=remember.checked;pass.value='';closeSheet();doConnect(d,value,save);};pass.onkeydown=e=>{if(e.key==='Enter')go();};actions.append(btn('连接','primary',go));box.append(actions);setTimeout(()=>pass.focus(),50);}
-function connectDevice(d){if(S.loading){toast('正在连接，请稍候');return;}if(S.device?.id===d.id&&!S.demo){setTab('live');return;}if(!d.remember)connectionPassword(d);else doConnect(d);}
-async function doConnect(d,password='',remember){
- if(S.loading)return;
- if(S.device&&!S.demo&&S.device.id!==d.id){confirmAction('切换设备？','当前 SSH 连接会断开；未发送的草稿只在本次运行中保留。','切换',async()=>{await disconnect(false);doConnect(d,password,remember);});return;}
- S.loading=true;S.connecting=d;S.connectError='';S.connectStage='正在建立 SSH 连接并验证身份…';render();cacheConnecting(d);
- try{if(S.demo){S.demo=false;S.device=null;}
-  const r=await rpc('connect',{id:d.id,password,...(remember===undefined?{}:{remember})},stage=>{S.connectStage=stage;render();});
-  S.loading=false;clearTerminals();S.device=r.device;if(r.devices)S.devices=r.devices;S.account=null;S.records=[];S.statusSupported=true;
-  if(r.ready){if(!cacheResume())setTab('live');}else{render();setupBridge();}
- }catch(e){S.loading=false;S.device=null;S.connectError=e.message||String(e);cacheAbandon();render();if(/auth fail|authentication/i.test(e.message))connectionPassword(d);}
- finally{S.loading=false;}}
-function setupBridge(){confirmAction('安装配套桥接程序','把随 App 分发的开源程序安装到当前 SSH 用户的 ~/.herdr-pocket。历史功能只读 ~/.codex/sessions 和 ~/.claude/projects，不读服务商登录资料。需要 Python 3.9+。','安装并进入',async()=>{if(S.loading)return;S.loading=true;S.connectError='';S.connectStage='SSH 已连接，正在安装与校验桥接程序…';render();try{await rpc('install');S.loading=false;S.statusSupported=true;setTab('live');}catch(e){S.loading=false;S.connectError=e.message;render();}});}
-async function disconnect(show=true){await rpc('disconnect');clearTerminals();Object.assign(S,{device:null,loading:false,connecting:null,connectError:'',liveLoading:false,liveError:'',demo:false,records:[],agents:[],account:null,chat:null,outbox:[],activity:'',fromCache:false});S.drafts.clear();S.bindings.clear();queueClear();S.epoch++;if(show)setTab('devices');}
+// Devices, device form, connecting, host-key trust, bridge install and disconnect live in onboard.js.
 async function startDemo(){if(S.loading){toast('正在连接，请稍候');return;}S.connectError='';if(S.device&&!S.demo){confirmAction('断开并体验演示？','演示不连接任何电脑，也不会给 Agent 发消息。','进入演示',async()=>{await disconnect(false);startDemo();});return;}try{await rpc('demo');S.demo=true;S.device={id:'demo',name:'演示工作站',user:'demo',host:'workstation.local',port:22};S.account={ssh_user:'demo',hostname:'workstation'};S.session='demo';S.sessions=['demo'];S.agents=demoAgents;S.records=demoRecords;S.tab='live';S.chat=null;render();}catch(e){error(e);}}
 async function loadAccount(){const epoch=S.epoch;try{const a=await remote('account');if(epoch!==S.epoch)return;S.account=a;if(S.tab==='devices'&&!S.chat)render();}catch(e){if(epoch===S.epoch)error(e);}}
 
 // ─── Live agents ────────────────────────────────────────────────────────────
 // One row per agent: what it is (title), where (provider · project), and what it
 // is doing right now (state + how long), with a dot when it finished unseen.
+// Rows open on tap; swipe left (or long press) for 关闭.
 function agentRow(a){
  const k=agentKey(a),unread=S.unread.has(k),tone=stateTone(a),st=a.agent_status;
  const n=btn('','card-button agent-row tone-'+tone+(unread?' unread':''),()=>openAgent(a));
  const text=el('div','grow');text.append(el('div','card-title',titleOf(a)));
- const meta=el('div','card-meta');meta.append(el('span','',providerName(a.agent)));const project=projectOf(a);if(project)meta.append(el('span','sep',project));
+ // The avatar already says Claude / Codex; the meta line is where it runs.
+ const meta=el('div','card-meta');const project=projectOf(a);meta.append(el('span','project',project||providerName(a.agent)));
+ if(closeIsCh(a))meta.append(el('span','tag remote-tag','远端'));
  const ref=a.history_ref;if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(el('span','sep warn','历史未关联'));queueBadge(meta,a);
  text.append(meta);
  const side=el('div','row-side');const at=statusSince(a);
@@ -165,31 +158,62 @@ function agentRow(a){
  else{const last=lastActivity(a);side.append(el('span','row-time',last?(at?ago(Date.now()-at)+'前':relative(last/1000)).replace('刚刚前','刚刚'):''));
   if(unread){const d=el('span','unread-dot');d.title='做完了，还没看';side.append(d,el('span','sr-only','有新进展'));}
   else if(st==='done')side.append(el('span','row-state','已完成'));}
- n.append(avatar(a.agent,tone),text,side);closeHold(n,()=>agentActions(a));return n;}
+ n.append(avatar(a.agent,tone),text,side);closeHold(n,()=>agentActions(a));
+ return closeSwipe(n,[['关闭','x','danger',()=>closeSession(a)],['更多','more','',()=>agentActions(a)]]);}
 // Within a group: unseen results first, then whatever changed most recently.
 function sortAgents(items){return items.map((a,i)=>({a,i,u:S.unread.has(agentKey(a))?1:0,t:lastActivity(a)})).sort((x,y)=>y.u-x.u||y.t-x.t||x.i-y.i).map(x=>x.a);}
-function livePage(main){
- const actions=el('div','row');if(S.sessions.length>1)actions.append(btn(S.session||'选择会话','pill',chooseSession,'folder'));actions.append(ib('refresh','刷新会话',loadLive));if(S.device&&S.session)actions.append(createButton());
+function liveProjects(){const m=new Map();for(const a of S.agents){const p=projectOf(a)||'其他';m.set(p,(m.get(p)||0)+1);}return [...m].sort((x,y)=>y[1]-x[1]||x[0].localeCompare(y[0]));}
+function liveMatch(a,q){return !q||(titleOf(a)+' '+providerName(a.agent)+' '+projectOf(a)+' '+(a.foreground_cwd||a.cwd||'')).toLowerCase().includes(q);}
+// A filter chip whose count is visual only, so its accessible name stays the plain label.
+function chip(label,count,on,fn){const b=btn(label,'pill chip'+(on?' active':''),fn);b.setAttribute('aria-pressed',String(!!on));if(count!==undefined&&count!==''){const c=el('span','chip-count',String(count));c.setAttribute('aria-hidden','true');b.append(c);}return b;}
+// "22 个在线 · 2 个等你确认 …… 12 秒前更新": what needs you first, and how fresh the list is.
+function liveStatus(main){
+ const line=el('div','list-status');const facts=el('span','grow list-facts');
  const unread=S.agents.filter(a=>S.unread.has(agentKey(a))).length;
- pageHead(main,'','会话',S.device?(S.agents.length?S.agents.length+' 个 Agent 在线'+(unread?' · '+unread+' 个有新进展':''):''):'',actions);
- if(!requireDevice(main))return;cacheLiveNote(main);
+ facts.append(el('span','',S.agents.length+' 个在线'));
+ if(unread)facts.append(el('span','sep fact-new',unread+' 个有新进展'));
+ line.append(facts);
+ if(S.fromCache)line.append(el('span','list-fresh cache-note',(S.device?'上次读取':'正在连接 · 显示上次读取的列表')+' · '+cacheAge(S.fromCache)));
+ else if(S.liveLoading)line.append(el('span','list-fresh','正在刷新…'));
+ else if(S.liveAt){const f=el('span','list-fresh');f.append(since(S.liveAt,'upd'));line.append(f);}
+ main.append(line);}
+function livePage(main){
+ if(!requireDevice(main))return;
+ const actions=el('div','row list-actions');
+ if(S.sessions.length>1){const s=btn('','pill session-pill',chooseSession,'folder');s.append(el('span','truncate',S.session||'选择会话'),icon('down'));s.setAttribute('aria-label','切换 Herdr 会话 · 当前 '+(S.session||'未选'));actions.append(s);}
+ actions.append(el('span','grow'),ib('refresh','刷新会话',loadLive));if(S.device&&S.session)actions.append(createButton());
+ main.append(actions);
  if(S.liveLoading&&!S.agents.length){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并关联历史记录…');skeleton(main,3);return;}
  if(S.liveError){empty(main,'会话读取失败',S.liveError,btn('重新读取','primary',loadLive));return;}
- if(S.agents.length>6)main.append(searchBox('搜索 Agent 或项目',q=>{S.search=q;draw();},S.search));
+ if(S.agents.length)liveStatus(main);
+ const projects=liveProjects();if(S.liveProject&&!projects.some(p=>p[0]===S.liveProject))S.liveProject='';
+ if(S.agents.length>8)main.append(searchBox('搜索标题、项目或 Agent',q=>{S.search=q;draw();},S.search));
+ if(projects.length>1&&S.agents.length>5){const row=el('div','tabs chips');row.setAttribute('aria-label','按项目筛选');
+  const draw2=()=>{row.replaceChildren(chip('全部',S.agents.length,!S.liveProject,()=>{S.liveProject='';draw2();draw();}));projects.forEach(([p,n])=>row.append(chip(p,n,S.liveProject===p,()=>{S.liveProject=S.liveProject===p?'':p;draw2();draw();})));};
+  draw2();main.append(row);}
  const list=el('div','agent-list');main.append(list);
- function draw(){list.replaceChildren();const q=S.search.toLowerCase();const matches=S.agents.filter(a=>(titleOf(a)+' '+a.agent+' '+projectOf(a)).toLowerCase().includes(q));
-  if(!matches.length){empty(list,'暂时没有会话',S.search?'没有匹配的 Agent。':'点「新建」开一个 Codex 或 Claude，或者在电脑的 Herdr 里启动。',S.search?undefined:createButton());return;}
-  const groups=[['等你确认',a=>a.agent_status==='blocked'],['执行中',a=>a.agent_status==='working'],['空闲',a=>!['blocked','working'].includes(a.agent_status)]];
-  for(const [label,test] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;list.append(el('div','section-label',label+' · '+items.length));const g=el('div','card list-card');items.forEach(a=>g.append(agentRow(a)));list.append(g);}
+ function draw(){list.replaceChildren();const q=S.agents.length>8?S.search.trim().toLowerCase():'';const matches=S.agents.filter(a=>liveMatch(a,q)&&(!S.liveProject||(projectOf(a)||'其他')===S.liveProject));
+  if(!matches.length){
+   if(q||S.liveProject)empty(list,'没有匹配的 Agent','换个关键词，或者看看全部会话。',btn('清除筛选','secondary',()=>{S.search='';S.liveProject='';render();}));
+   else empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动，这里会自动出现。',S.device&&S.session?createButton():undefined);
+   return;}
+  const groups=[['等你确认',a=>a.agent_status==='blocked','alert'],['执行中',a=>a.agent_status==='working','work'],['空闲',a=>!['blocked','working'].includes(a.agent_status),'']];
+  for(const [label,test,tone] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;const h=el('div','section-label group-label'+(tone?' g-'+tone:''));h.append(el('span','',label),el('span','group-count',String(items.length)));list.append(h);const g=el('div','card list-card');items.forEach(a=>g.append(agentRow(a)));list.append(g);}
   closeHint(list);}
  draw();
- if(S.liveLoading)main.append(el('p','fine center','正在刷新…'));}
-function chooseSession(){const box=sheet('切换 Herdr 会话');S.sessions.forEach(name=>menuItem(box,name,()=>{S.session=name;loadLive();},name===S.session?'check':'folder'));}
+ pullRefresh(main,loadLive);}
+// Herdr can run several sessions (sets of workspaces). The list, terminals and 新建 all work in one.
+function chooseSession(){
+ const box=sheet('切换 Herdr 会话');box.append(el('p','fine close-sub','电脑上的 Herdr 开了 '+S.sessions.length+' 个会话，每个会话有自己的工作区。会话、终端和新建都在当前会话里。'));
+ S.sessions.forEach(name=>{const here=name===S.session;const b=menuItem(box,name,()=>switchSession(name),here?'check':'folder',here?'当前 · '+S.agents.length+' 个 Agent':'点一下切换');if(here){b.classList.add('current');b.setAttribute('aria-current','true');}});}
+function switchSession(name){
+ if(name===S.session)return;S.session=name;S.agents=[];S.liveProject='';S.search='';S.fromCache=false;if(typeof T!=='undefined')T.panes=[];
+ if(S.tab==='terminals')loadPanes();else loadLive();toast('切到 Herdr 会话「'+name+'」');}
 async function loadLive(){
  if(!S.device)return;const epoch=++S.epoch;S.liveLoading=S.agents.length?'agents':'sessions';S.liveError='';if(!S.agents.length)cacheShowLive();if(S.tab==='live'&&!S.chat)render();
  try{const r=await remote('sessions');if(epoch!==S.epoch)return;S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];S.fromCache=false;return;}
   S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
-  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;noteStatus(S.agents);syncWatch();cacheLive();if(S.pendingPane){S.liveLoading=false;openPending();return;}}
+  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();if(S.pendingPane){S.liveLoading=false;openPending();return;}}
  catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
  finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
 // Lightweight status refresh: Herdr state only, keeps resolved history refs.
@@ -199,7 +223,7 @@ async function refreshStatus(){
   const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}if(old.agent_status!==a.agent_status||titleOf(old)!==titleOf(a))changed=true;return {...old,...a,history_ref:old.history_ref};});
   if(next.length!==S.agents.length)changed=true;
   const fresh=next.filter(a=>!known.has(a.pane_id)||known.get(a.pane_id).identity!==a.identity);
-  noteStatus(next);S.agents=next;if(changed){syncWatch();cacheLive();}
+  noteStatus(next);S.agents=next;S.liveAt=Date.now();document.querySelectorAll('[data-fmt="upd"]').forEach(n=>{n.dataset.since=S.liveAt;});if(changed){syncWatch();cacheLive();}
   if(S.chat?.agent){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);followHint(cur);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status};onAgentStatus(was,cur.agent_status);}}
   if(fresh.length&&S.tab==='live'&&!S.chat){loadLive();return;}
   if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}
@@ -279,23 +303,27 @@ function renderChat(){
 // Composer, live activity and confirmation panel. The input itself survives
 // status changes so typing (and the keyboard) is never interrupted.
 function renderComposer(){
- const footer=document.getElementById('composer');if(!footer||!S.chat)return;const a=S.chat.agent;if(cacheOffline(footer))return;
+ const footer=document.getElementById('composer');if(!footer||!S.chat)return;const a=S.chat.agent;
+ // Connecting with a cached chat: the composer stays (drafts can be written) but nothing is sent.
+ const offline=!S.device&&!S.demo;if(offline&&(!a||S.chat.stale)&&cacheOffline(footer))return;
  if(!a||S.chat.stale){if(followFooter(footer))return;footer.replaceChildren(el('div','readonly',S.chat.stale?'这个窗格的 Agent 已变化，回到列表重新打开':S.chat.record?.parent?'子 Agent 的历史记录 · 只读，不会向父会话发送':'历史只读 · 在「会话」里打开在线 Agent 才能继续对话'));return;}
  const key=draftKey();let live=document.getElementById('live-state'),compose=footer.querySelector('.composer');
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
- renderLiveState(live,a);
- const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status;
- input.placeholder=st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':'说点什么，继续这段对话…（/ 看命令）';
+ if(offline){live.replaceChildren(el('div','compose-note','正在连接 · 显示的是上次的缓存，连上后才能发送'));}else renderLiveState(live,a);
+ const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status,later=!offline&&(st==='working'||st==='blocked');
+ input.placeholder=offline?'可以先写，连上再发':st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':'说点什么，继续这段对话…（/ 看命令）';
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
- send.classList.toggle('later',st==='working'||st==='blocked');imgTray(compose,key);fileTray(compose,key);send.disabled=!input.value.trim()&&!attCount(key);}
+ // Busy agent: the button says it will queue, so sending never looks like it failed.
+ send.classList.toggle('later',later);send.querySelector('.send-label').textContent=later?'排队':'';send.title=offline?'连上后才能发送':later?'先排队，它停下就发':'发送';
+ compose.classList.toggle('offline',offline);imgTray(compose,key);fileTray(compose,key);send.disabled=offline||!input.value.trim()&&!attCount(key);}
 function buildComposer(key){
  const compose=el('div','composer');compose.dataset.key=key;const input=el('textarea');input.rows=1;input.setAttribute('aria-label','消息输入框');input.setAttribute('enterkeyhint','enter');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-expanded','false');input.value=S.drafts.get(key)||'';
- const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');
+ const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');send.append(el('span','send-label'));
  const grow=()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,innerHeight<560?96:140)+'px';};compose.grow=grow;
  // Enter is a newline on phones; Ctrl/⌘+Enter sends with a hardware keyboard.
  // While the slash list is open, arrows/Enter/Tab/Esc drive it (slash.js).
  input.onkeydown=e=>{if(slashKeydown(e,compose,input))return;if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMessage(input);}};
- input.oninput=()=>{if(input.value)S.drafts.set(key,input.value);else S.drafts.delete(key);send.disabled=!input.value.trim()&&!attCount(key);grow();slashSuggest(compose,input);};
+ input.oninput=()=>{if(input.value)S.drafts.set(key,input.value);else S.drafts.delete(key);send.disabled=compose.classList.contains('offline')||!input.value.trim()&&!attCount(key);grow();slashSuggest(compose,input);};
  input.onblur=()=>setTimeout(()=>{if(document.activeElement!==input)slashClose(compose);},150);input.onfocus=()=>slashSuggest(compose,input);
  const attach=ib('plus','添加附件',imgMenu);attach.classList.add('attach');
  compose.append(attach,input,send);requestAnimationFrame(grow);return compose;}
@@ -309,6 +337,7 @@ function renderLiveState(live,a){
 async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'已发送 '+label);setTimeout(()=>{refreshStatus();fetchTerminal(true);},700);}catch(e){toast('按键未确认：'+e.message+'。不会自动重发。');}}
 async function sendMessage(input){
  const text=input.value;const a=S.chat?.agent;const key=draftKey();const pics=imgAttached(key).slice(),docs=fileAttached(key).slice();if((!text.trim()&&!pics.length&&!docs.length)||!a)return;
+ if(!S.device&&!S.demo){toast('还在连接，连上后才能发送；草稿留着');return;}
  if(followHoldsSend())return;
  slashClose(input.closest('.composer'));
  // A panel left open by the last slash command would swallow this message (or Enter would pick in it).
@@ -357,11 +386,14 @@ function applyReadStatus(now){
  noteStatus([updated]);const was=a.agent_status;S.chat.agent=updated;onAgentStatus(was,now);}
 async function fetchTerminal(quiet=false){
  if(!S.chat?.agent){if(!quiet)toast('这条历史没有在线终端');return;}const epoch=S.epoch;
+ // Polls skip while a read for this chat is still out: on a slow link they would pile up behind each other.
+ if(quiet&&S.reading===epoch)return;S.reading=epoch;
  try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;applyReadStatus(r.agent_status);qaScreen(r);
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
   const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;const c=document.getElementById('confirm-screen');if(c){c.textContent=tail(r.text,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
   if(!S.chat.record&&S.chatMode==='conversation')paintTimeline();}
- catch(e){if(epoch===S.epoch&&!quiet)error(e);}}
+ catch(e){if(epoch===S.epoch&&!quiet)error(e);}
+ finally{if(S.reading===epoch)S.reading=null;}}
 
 // ─── Sheets ─────────────────────────────────────────────────────────────────
 function agentSwitcher(){
@@ -405,26 +437,62 @@ function chooseHistory(rec,targetAgent){
  actions.append(btn('只读查看','secondary',()=>{closeSheet();openRecord(rec,true);}),btn('关联当前 Agent','primary',()=>{closeSheet();S.bindings.set(S.session+'/'+targetAgent.identity,rec);resetChat({agent:targetAgent,record:rec,title:titleOf(targetAgent),provider:targetAgent.agent,manual:true});S.epoch++;renderChat();fetchHistory(false,true);}));box.append(actions);}
 
 // ─── History tab ────────────────────────────────────────────────────────────
+// Day sections (sticky), filter chips with counts, debounced search and endless scrolling.
+// Filters work on what is loaded; a "+" on a count means more pages are still on the computer.
 let searchTimer;
+const HISTORY_FILTERS=[['all','全部',()=>true],['codex','Codex',r=>r.provider==='codex'],['claude','Claude',r=>r.provider==='claude'],['child','子 Agent',r=>!!r.parent]];
 function historyPage(main){
- pageHead(main,'','历史',S.device&&S.total?S.total+' 条记录':'',ib('refresh','刷新历史',()=>loadCatalog(S.catalogQuery||'')));if(!requireDevice(main))return;
- main.append(searchBox('搜索项目、标题或会话 ID',q=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>loadCatalog(q),400);},S.catalogQuery||''));
- const filters=el('div','tabs');closeLoadHidden();[['all','全部'],['codex','Codex'],['claude','Claude'],['child','子 Agent'],...closeHiddenFilter()].forEach(([id,t])=>filters.append(btn(t,'pill'+(S.filter===id?' active':''),()=>{S.filter=id;renderHistoryList();filters.querySelectorAll('button').forEach(n=>n.classList.toggle('active',n.textContent===t));})));main.append(filters);
- const list=el('div');list.id='history-list';main.append(list);renderHistoryList();}
+ if(!requireDevice(main))return;
+ const head=el('div','row list-actions search-row');
+ head.append(searchBox('搜索项目、标题或会话 ID',q=>{clearTimeout(searchTimer);S.catalogPending=q;historySummary();searchTimer=setTimeout(()=>loadCatalog(q.trim()),300);},S.catalogQuery||''),ib('refresh','刷新历史',()=>loadCatalog(S.catalogQuery||'')));main.append(head);
+ const filters=el('div','tabs chips');filters.id='history-filters';filters.setAttribute('aria-label','筛选历史');main.append(filters);closeLoadHidden();
+ const summary=el('div','list-status');summary.id='history-summary';main.append(summary);
+ const list=el('div','history-list');list.id='history-list';main.append(list);renderHistoryList();
+ pullRefresh(main,()=>loadCatalog(S.catalogQuery||''));}
+function historyFilters(){
+ const box=document.getElementById('history-filters');if(!box)return;box.replaceChildren();
+ const hidden=new Set(closeHiddenIds()),shown=S.records.filter(r=>!hidden.has(r.id)),more=S.next!==null&&S.next!==undefined?'+':'';
+ for(const [id,label,test] of HISTORY_FILTERS){const n=shown.filter(test).length;box.append(chip(label,id==='all'?(S.catalogQuery?S.total:Math.max(n,(S.total||0)-hidden.size)):n+more,S.filter===id,()=>{S.filter=id;renderHistoryList();document.getElementById('history-list')?.scrollIntoView?.({block:'start'});}));}
+ for(const [id,label] of closeHiddenFilter()){const b=btn(label,'pill chip'+(S.filter===id?' active':''),()=>{S.filter=id;renderHistoryList();});b.setAttribute('aria-pressed',String(S.filter===id));box.append(b);}}
+// "找到 12 条" while searching; "正在搜索…" until the debounced read is back.
+function historySummary(){
+ const n=document.getElementById('history-summary');if(!n)return;n.replaceChildren();
+ const q=S.catalogPending!==undefined?S.catalogPending.trim():S.catalogQuery||'';
+ if(q&&(q!==S.catalogQuery||S.catalogLoading)){n.append(el('span','spinner small-spin'),el('span','grow list-facts','正在搜索「'+q+'」…'));return;}
+ if(S.catalogQuery)n.append(el('span','grow list-facts','「'+S.catalogQuery+'」找到 '+S.total+' 条'));}
+function historyRow(r,hidden){
+ const b=btn('','card-button history-row',()=>openRecord(r));const text=el('div','grow');text.append(el('div','card-title',r.title));
+ const meta=el('div','card-meta');const project=(r.cwd||'').split('/').filter(Boolean).pop();meta.append(el('span','project',project||providerName(r.provider)));if(r.parent)meta.append(el('span','tag child-tag','子 Agent'));text.append(meta);
+ const side=el('div','row-side');side.append(el('span','row-time',clock(r.modified)));
+ b.append(avatar(r.provider),text,side);closeHold(b,()=>historyActions(r));
+ return closeSwipe(b,[[hidden?'放回':'移除',hidden?'history':'x',hidden?'':'danger',()=>closeSetHidden(r,!hidden)],['更多','more','',()=>historyActions(r)]]);}
 function renderHistoryList(){
- const list=document.getElementById('history-list');if(!list)return;list.replaceChildren();
- const records=closeVisible(S.records.filter(r=>S.filter==='all'||S.filter==='hidden'||(S.filter==='child'?r.parent:r.provider===S.filter)));
- if(!records.length){if(S.catalogLoading)skeleton(list,5);else empty(list,'没有匹配的记录','只显示当前 SSH 用户的 Codex / Claude 本地历史。');return;}
+ const list=document.getElementById('history-list');if(!list)return;historyFilters();historySummary();list.replaceChildren();
+ const test=(HISTORY_FILTERS.find(f=>f[0]===S.filter)||HISTORY_FILTERS[0])[2];
+ const records=closeVisible(S.records.filter(r=>S.filter==='hidden'||test(r)));
+ const more=S.next!==null&&S.next!==undefined;
+ if(!records.length){
+  if(S.catalogLoading)skeleton(list,5);
+  else if(S.catalogQuery)empty(list,'没有匹配的记录','换个关键词试试：项目名、标题里的词，或者会话 ID 的开头。',btn('清除搜索','secondary',()=>{S.catalogPending=undefined;S.catalogQuery='';render();loadCatalog('');}));
+  else if(S.filter!=='all'&&S.filter!=='hidden'&&more){list.append(el('p','fine center','已读到的记录里没有，继续往下加载…'));}
+  else if(S.filter!=='all'&&S.filter!=='hidden')empty(list,'这一类还没有记录','切回「全部」看看。',btn('看全部','secondary',()=>{S.filter='all';renderHistoryList();}));
+  else if(S.filter!=='hidden')empty(list,'还没有历史记录','只显示当前 SSH 用户的 Codex / Claude 本地历史。开一个会话，聊过的内容会出现在这里。',btn('新建会话','primary',()=>{setTab('live');openCreate();},'plus'));
+  if(!more||S.filter==='all'){closeHiddenNote(list);return;}}
+ const hidden=new Set(closeHiddenIds());
  let day='',group=null;
- for(const r of records){const d=dayLabel(r.modified);if(d!==day||!group){day=d;list.append(el('div','section-label',d||'更早'));group=el('div','card list-card');list.append(group);}
-  const b=btn('','card-button history-row',()=>openRecord(r));const text=el('div','grow');text.append(el('div','card-title',r.title));const meta=el('div','card-meta');meta.append(el('span','',providerName(r.provider)),el('span','sep',clock(r.modified)));const project=(r.cwd||'').split('/').filter(Boolean).pop();if(project)meta.append(el('span','sep',project));if(r.parent)meta.append(el('span','badge muted','子 Agent'));text.append(meta);b.append(avatar(r.provider),text,icon('chevron'));closeHold(b,()=>historyActions(r));group.append(b);}
+ for(const r of records){const d=dayLabel(r.modified);if(d!==day||!group){day=d;const h=el('div','section-label day-label',d||'更早');list.append(h);group=el('div','card list-card');list.append(group);}
+  group.append(historyRow(r,hidden.has(r.id)));}
  closeHiddenNote(list);
- if(S.next!==null&&S.next!==undefined)list.append(btn('加载更多历史','secondary wide',()=>loadCatalog(S.catalogQuery||'',true)));}
+ if(more){const b=btn(S.catalogLoading?'正在加载…':'加载更多历史','secondary wide load-more',()=>loadCatalog(S.catalogQuery||'',true));b.disabled=!!S.catalogLoading;list.append(b);
+  // Endless scroll: the button loads by itself once it scrolls into view.
+  if(typeof IntersectionObserver!=='undefined'){const io=new IntersectionObserver(es=>{if(es.some(e=>e.isIntersecting)&&b.isConnected&&!S.catalogLoading){io.disconnect();loadCatalog(S.catalogQuery||'',true);}},{root:list.closest('.main'),rootMargin:'0px 0px 400px 0px'});io.observe(b);}}
+ else if(records.length>20)list.append(el('p','fine center list-end','到底了 · 共 '+records.length+' 条'));}
 async function loadCatalog(query='',more=false){
- if(!S.device)return;const epoch=++S.epoch;S.catalogLoading=true;if(!more&&!S.records.length){renderHistoryList();if(!query)cacheShowCatalog();}
- try{const r=await remote('catalog',{offset:more?S.next||0:0,query});if(epoch!==S.epoch)return;S.records=more?S.records.concat(r.records):r.records;S.total=r.total;S.next=r.next;S.catalogQuery=query;if(!more&&!query)cacheCatalog();}
+ if(!S.device)return;if(more&&S.catalogLoading)return;const epoch=++S.epoch;S.catalogLoading=true;
+ if(!more&&!S.records.length){renderHistoryList();if(!query)cacheShowCatalog();}else if(more)renderHistoryList();else historySummary();
+ try{const r=await remote('catalog',{offset:more?S.next||0:0,query});if(epoch!==S.epoch)return;S.records=more?S.records.concat(r.records):r.records;S.total=r.total;S.next=r.next;S.catalogQuery=query;if(S.catalogPending!==undefined&&S.catalogPending.trim()===query)S.catalogPending=undefined;if(!more&&!query)cacheCatalog();if(!more&&S.tab==='history'){const m=document.querySelector('.main');if(m)m.scrollTop=0;}}
  catch(e){if(epoch===S.epoch)error(e);}
- finally{if(epoch===S.epoch){S.catalogLoading=false;if(S.tab==='history'&&!S.chat){if(more||query)renderHistoryList();else render();}}}}
+ finally{if(epoch===S.epoch){S.catalogLoading=false;if(S.tab==='history'&&!S.chat){if(more||query||document.querySelector('.search input:focus'))renderHistoryList();else render();}}}}
 
 // ─── Back & lifecycle ───────────────────────────────────────────────────────
 function pocketBack(){
@@ -435,7 +503,7 @@ function pocketBack(){
  if(S.tab!=='live'&&S.device)setTab('live');else if(S.tab!=='devices')setTab('devices');else toast('设备和保存的密码都在，可以直接关闭应用');}
 window.pocketBack=pocketBack;
 addEventListener('resize',()=>{const c=document.getElementById('confirm-screen');if(c)c.scrollTop=c.scrollHeight;});
-window.setForeground=v=>{S.active=v;if(v){refreshStatus();if(S.chat?.record&&!S.paused)fetchHistory();}};
+window.setForeground=v=>{S.active=v;if(v){netForeground();refreshStatus();if(S.chat?.record&&!S.paused)fetchHistory();}};
 // Busy agents refresh faster; nothing polls in the background or in demo mode.
 let tick=0;
 setInterval(()=>{

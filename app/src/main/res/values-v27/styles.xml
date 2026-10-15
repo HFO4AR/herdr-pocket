@@ -1,6 +1,6 @@
 <resources>
     <style name="AppTheme" parent="PocketBase">
         <item name="android:windowLightNavigationBar">true</item>
-        <item name="android:navigationBarColor">#FBFAF6</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
     </style>
 </resources>

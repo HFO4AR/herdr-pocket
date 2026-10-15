@@ -64,7 +64,8 @@ await page.getByRole('button',{name:/修复登录页/}).click();
 await page.getByText('缓存里的旧回答').waitFor();
 await page.getByText(/连接好后自动刷新/).waitFor();
 await page.getByText(/连上后才能发送/).waitFor();
-assert.equal(await page.getByRole('textbox',{name:'消息输入框',exact:true}).count(),0);
+// The draft can be written while connecting, but nothing can be sent from the cache.
+assert(await page.getByRole('button',{name:'发送消息',exact:true}).isDisabled());
 assert.deepEqual(await page.evaluate(()=>fx.calls),[]);
 await shot('chat-connecting');
 

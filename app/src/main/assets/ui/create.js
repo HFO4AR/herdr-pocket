@@ -3,7 +3,7 @@
 // where to open it; the bridge opens a new Herdr tab there (never stealing focus on the
 // computer) and starts the agent with a command line it chooses itself. The optional first
 // message goes out through the normal prompt path, only once the new agent is ready.
-const NEW={info:null,infoSession:'',busy:false,watch:0,form:null};
+const NEW={info:null,infoSession:'',busy:false,watch:0,form:null,recent:null,recentFor:''};
 const NEW_KINDS={codex:['Codex','codex','本机运行'],claude:['Claude','claude','本机运行'],ch:['Claude · ch','claude','用 ch new 开']};
 const NEW_DEMO={kinds:[{kind:'codex',found:true},{kind:'claude',found:true},{kind:'ch',found:true}],home:'/home/demo',
  workspaces:[{workspace_id:'w1',label:'pocket',focused:true,dirs:[{path:'/home/demo/projects/pocket',agents:2,panes:3}]},{workspace_id:'w2',label:'site',dirs:[{path:'/home/demo/projects/site',agents:1,panes:1}]}],
@@ -15,6 +15,9 @@ function newShort(p){const home=NEW.info?.home;return home&&(p===home||p.startsW
 function newAgo(t){const a=ago(Date.now()-t*1000);return a==='刚刚'?'刚用过':a+'前用过';}
 function newBase(p){return NEW.info?.home&&p.replace(/\/+$/,'')===NEW.info.home?'家目录':p.split('/').filter(Boolean).pop()||'/';}
 
+// The last directories used from this phone (per computer, in the encrypted cache): they go first.
+async function newRecentLoad(){const dev=S.device?.id||'';if(S.demo||NEW.recentFor===dev)return;const v=await cacheGet('new:recent');NEW.recent=Array.isArray(v?.dirs)?v.dirs.filter(d=>typeof d?.path==='string').slice(0,6):[];NEW.recentFor=dev;if(v?.kind)NEW.lastKind=v.kind;}
+function newRecentSave(path,kind){const dev=S.device?.id||'';if(S.demo||!dev)return;const list=(NEW.recentFor===dev&&NEW.recent||[]).filter(d=>d.path!==path);list.unshift({path,at:Date.now()/1000});NEW.recent=list.slice(0,6);NEW.recentFor=dev;NEW.lastKind=kind;cachePut('new:recent',{dirs:NEW.recent,kind});}
 async function openCreate(){
  if(!S.device){toast('先连接电脑');return;}
  if(!S.session&&!S.demo){toast('还没读到 Herdr 会话，刷新一下');return;}
@@ -24,7 +27,7 @@ async function openCreate(){
  const cached=NEW.infoSession===S.session?NEW.info:null;
  if(cached)createForm(body,cached);else body.append(el('div','loading','读取目录和工作区…'));
  try{const info=S.demo?NEW_DEMO:await remote('createInfo',{session:S.session});
-  NEW.info=info;NEW.infoSession=S.session;
+  await newRecentLoad().catch(()=>{});NEW.info=info;NEW.infoSession=S.session;
   if(!body.isConnected||NEW.busy)return;
   if(!cached)createForm(body,info);}
  catch(e){if(body.isConnected&&!cached)body.replaceChildren(el('p','note error','读不到目录：'+e.message));}}
@@ -32,9 +35,13 @@ async function openCreate(){
 function createForm(body,info){
  body.replaceChildren();
  const kinds=info.kinds.filter(k=>k.found||k.kind!=='ch').map(k=>k.kind);
- const last=newPref('kind'),lastDir=newPref('dir');
+ const last=NEW.lastKind||newPref('kind'),recent=(NEW.recentFor===(S.device?.id||'')&&NEW.recent)||[];
  const f=NEW.form={kind:kinds.includes(last)?last:kinds[0]||'codex',dir:'',custom:false,place:'new',placeTouched:false};
- const dirs=info.dirs||[];f.dir=dirs.some(d=>d.path===lastDir)?lastDir:dirs[0]?.path||'';f.custom=!dirs.length;
+ // Recently used from here first (marked), then what the computer reports (busiest first).
+ const known=new Map((info.dirs||[]).map(d=>[d.path,d]));const dirs=[];
+ for(const r of recent){dirs.push({...(known.get(r.path)||{path:r.path,source:'recent'}),recentAt:r.at});known.delete(r.path);}
+ dirs.push(...known.values());
+ f.dir=dirs[0]?.path||'';f.custom=!dirs.length;
 
  // Agent kind
  body.append(el('div','section-label','用哪个 Agent'));
@@ -52,7 +59,7 @@ function createForm(body,info){
  let showAll=dirs.findIndex(d=>d.path===f.dir)>=4;
  function dirRow(d){const on=!f.custom&&f.dir===d.path;const b=btn('','menu-item new-dir'+(on?' on':''),()=>{f.custom=false;f.dir=d.path;drawDirs();autoPlace();},'folder');b.setAttribute('role','radio');b.setAttribute('aria-checked',String(on));
   const t=el('span','grow');t.append(el('span','menu-label',newBase(d.path)));
-  const meta=d.source==='pane'?(d.agents?d.agents+' 个 Agent 在用':'有终端在这'):d.modified?newAgo(d.modified):'用过';
+  const meta=(d.recentAt?(d===dirs[0]?'上次用的':'最近用过')+(d.agents?' · ':''):'')+(d.source==='pane'?(d.agents?d.agents+' 个 Agent 在用':d.recentAt?'':'有终端在这'):d.recentAt?'':d.modified?newAgo(d.modified):'用过');
   t.append(el('small','truncate',newShort(d.path)+' · '+meta));b.append(t);if(on)b.append(icon('check'));return b;}
  function drawDirs(){dirList.replaceChildren();const list=showAll?dirs:dirs.slice(0,4);list.forEach(d=>dirList.append(dirRow(d)));
   if(!showAll&&dirs.length>4)dirList.append(btn('更多目录 · '+(dirs.length-4),'link-btn new-more',()=>{showAll=true;drawDirs();}));
@@ -99,7 +106,7 @@ async function createSubmit(text,go,status){
  try{
   const r=await remote('create',req);NEW.busy=false;
   if(!r||!r.created){newStatus(status,'error','没创建：Herdr 没接受，可以改一下再试');restoreGo(go);return;}
-  newPref('kind',f.kind);if(!f.custom)newPref('dir',f.dir);NEW.info=null;
+  newPref('kind',f.kind);newRecentSave(f.dir.replace(/\/+$/,''),f.kind);NEW.info=null;
   if(status.isConnected)closeSheet();createDone(r,text.trim()?text:'',label);}
  catch(e){NEW.busy=false;const m=e.message||String(e);
   if(/^没创建/.test(m)){if(status.isConnected){newStatus(status,'error',m);restoreGo(go);}else toast(m);return;}

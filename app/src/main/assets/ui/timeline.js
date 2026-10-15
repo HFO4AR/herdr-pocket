@@ -8,15 +8,84 @@
 const TOOL_KINDS=[[/^(bash|shell|exec_command|exec|local_shell|run|write_stdin|BashOutput)$/i,'运行','terminal'],[/^(read|view|cat|notebookread)$/i,'读取','file'],[/^(edit|multiedit|write|apply_patch|notebookedit|str_replace)/i,'编辑','pen'],[/^(grep|glob|search|find|ls|rg)$/i,'搜索','search'],[/^(webfetch|websearch|web_search|fetch)$/i,'网络','globe'],[/^(sleep|wait|wait_for)$/i,'等待','pause'],[/^(task|agent|spawn_agent|send_message|followup_task|wait_agent|close_agent|resume_agent|send_input)$/i,'子 Agent','branch']];
 function toolKind(name=''){for(const [re,label,i] of TOOL_KINDS)if(re.test(name))return {label,icon:i};return {label:name||'工具',icon:'tool'};}
 // Codex "code mode" wraps calls in JS: text(await tools.exec_command({cmd:"…"})).
-function codeModeSummary(t){const calls=[...t.matchAll(/tools\.(\w+)\(\{/g)].map(m=>m[1]);if(!calls.length)return '';
- const cmds=[...t.matchAll(/\bcmd\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map(m=>{try{return JSON.parse('"'+m[1]+'"');}catch(_){return m[1];}});
+const tlJsStr=s=>{try{return JSON.parse('"'+s+'"');}catch(_){return s;}};
+function codeModeCalls(t){return [...String(t).matchAll(/tools\.(\w+)\(\{/g)].map(m=>m[1]);}
+function codeModeCmds(t){return [...String(t).matchAll(/\bcmd\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map(m=>tlJsStr(m[1]));}
+function codeModeSummary(t){const calls=codeModeCalls(t);if(!calls.length)return '';
+ const cmds=codeModeCmds(t);
  const s=cmds.length?cmds[0].split('\n').find(x=>x.trim())||cmds[0]:calls.every(c=>c==='write_stdin')?'查看运行中命令的输出':calls[0];
  return s.trim()+(calls.length>1?'  ·  共 '+calls.length+' 步':'');}
-function toolSummary(m){let t=m.text||'';const code=/^\s*(text\()?await tools\./.test(t)?codeModeSummary(t):'';if(code)return code;try{const v=JSON.parse(t);if(v&&typeof v==='object')t=v.command||v.cmd||v.file_path||v.path||v.pattern||v.query||v.url||v.description||v.message||v.prompt||Object.values(v).find(x=>typeof x==='string')||t;}catch(_){}
- if(Array.isArray(t))t=t.join(' ');t=String(t).replace(/^\s*(bash\s+-lc\s+|\/bin\/\w+\s+-c\s+)/,'').trim();return t.split('\n').find(x=>x.trim())||t;}
-// Show the command itself when a tool input is a JSON envelope around it.
-function toolInput(m){try{const v=JSON.parse(m.text);if(v&&typeof v==='object'&&!Array.isArray(v)){const c=v.command??v.cmd;if(typeof c==='string')return c;if(Array.isArray(c))return c.join(' ');}}catch(_){}return m.text;}
-function resultFailed(r){return !!r&&(r.title==='执行失败'||/(^|\n)(Exit code|Process exited with code):?\s*[1-9]/.test(r.text)||/^Error:/.test(r.text));}
+const tlIsCode=t=>/^\s*(text\()?await tools\./.test(String(t||''));
+function toolSummary(m){let t=m.text||'';const code=tlIsCode(t)?codeModeSummary(t):'';if(code)return code;try{const v=JSON.parse(t);if(v&&typeof v==='object')t=v.command||v.cmd||v.file_path||v.path||v.pattern||v.query||v.url||v.description||v.message||v.prompt||Object.values(v).find(x=>typeof x==='string')||t;}catch(_){}
+ if(Array.isArray(t))t=t.join(' ');t=String(t).replace(/^\s*(bash\s+-lc\s+|\/bin\/\w+\s+-c\s+)/,'').trim();return tlCmdLine(t);}
+// The line of a shell script that says what it does: skip cd, variable setup, echo banners and comments.
+const TL_SETUP=/^\s*(cd\s+\S+|export\s+\S+|[A-Za-z_]\w*=\S*|set\s+-\w+|source\s+\S+|\.\s+\S+|echo\s+["']?[=#\-─━ ]*.*|#.*|)\s*;?\s*$/;
+function tlCmdLine(t){
+ const lines=String(t).split('\n').map(x=>x.trim()).filter(Boolean);const pick=lines.find(x=>!TL_SETUP.test(x))||lines[0]||String(t);
+ let c=pick,prev;do{prev=c;c=c.replace(/^cd\s+\S+\s*(&&|;)\s*/,'').replace(/^(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|\S*)\s+)+(?=\S)/,'');}while(c!==prev);return c||pick;}
+// Show the command itself when a tool input is a JSON envelope around it (or a code-mode script).
+function toolInput(m){if(tlIsCode(m.text)){const c=codeModeCmds(m.text);if(c.length)return c.map(x=>'$ '+x).join('\n\n');}
+ try{const v=JSON.parse(m.text);if(v&&typeof v==='object'&&!Array.isArray(v)){const c=v.command??v.cmd;if(typeof c==='string')return c;if(Array.isArray(c))return c.join(' ');}}catch(_){}return m.text;}
+function resultFailed(r){return !!r&&(r.title==='执行失败'||/(^|\n)(Exit code|Process exited with code):?\s*[1-9]/.test(r.text)||/^Error:/.test(r.text)||!!resultInfo(r)?.tests?.fail);}
+
+// ─── What a tool call did, for one-line summaries ───────────────────────────
+// Parsed once per message (messages are immutable once read).
+const TL_TOOL=new WeakMap(),TL_RESULT=new WeakMap();
+function tlArgs(m){try{const v=JSON.parse(m.text);return v&&typeof v==='object'&&!Array.isArray(v)?v:null;}catch(_){return null;}}
+function tlCwd(){return S.chat?.record?.cwd||S.chat?.agent?.cwd||'';}
+// "app/src/x.js" relative to the project when possible; split into name + folder for display.
+function tlRel(p){p=String(p||'').replace(/^file:\/\//,'');const c=tlCwd();return c&&p.startsWith(c+'/')?p.slice(c.length+1):p;}
+function tlSplitPath(p){const r=tlRel(p),i=r.lastIndexOf('/');if(i<0)return [r,''];const dir=r.slice(0,i);const parts=dir.split('/');return [r.slice(i+1),parts.length>3?'…/'+parts.slice(-2).join('/'):dir];}
+const tlLines=s=>{s=String(s??'').replace(/\n$/,'');return s?s.split('\n').length:0;};
+// Old → new as a small diff: unchanged lines at both ends become (at most two) context lines.
+function tlDiff(oldS,newS){
+ const a=oldS?String(oldS).split('\n'):[],b=newS?String(newS).split('\n'):[];let p=0;while(p<a.length&&p<b.length&&a[p]===b[p])p++;
+ let s=0;while(s<a.length-p&&s<b.length-p&&a[a.length-1-s]===b[b.length-1-s])s++;
+ const out=[];a.slice(Math.max(0,p-2),p).forEach(l=>out.push(['ctx',l]));a.slice(p,a.length-s).forEach(l=>out.push(['del',l]));b.slice(p,b.length-s).forEach(l=>out.push(['add',l]));a.slice(a.length-s,a.length-s+2).forEach(l=>out.push(['ctx',l]));
+ return {lines:out,add:b.length-p-s,del:a.length-p-s};}
+// apply_patch text ("*** Update File: x" sections, or unified diff) → per-file line lists.
+function tlPatch(text){
+ const files=[];let f=null;
+ for(const l of String(text).split('\n')){
+  const h=l.match(/^\*\*\* (Update|Add|Delete) File: (.+)$/)||l.match(/^\+\+\+ (?:b\/)?(.+)$/);
+  if(h){const path=(h[2]||h[1]).trim();if(path!=='/dev/null'){f={file:path,lines:[],add:0,del:0,op:h[2]?h[1]:''};files.push(f);}continue;}
+  if(/^(\*\*\*|--- |diff --git|index )/.test(l)||!f)continue;
+  if(l.startsWith('@@')){f.lines.push(['hunk',l]);continue;}
+  if(l[0]==='+'){f.add++;f.lines.push(['add',l.slice(1)]);}else if(l[0]==='-'){f.del++;f.lines.push(['del',l.slice(1)]);}else f.lines.push(['ctx',l.replace(/^ /,'')]);}
+ return files;}
+function toolInfo(t,r){
+ if(t&&TL_TOOL.has(t))return TL_TOOL.get(t);
+ const name=t?.title||r?.title||'';const kind=toolKind(name);const info={label:kind.label,icon:kind.icon,text:'',file:'',dir:'',diffs:[],add:0,del:0};
+ if(!t){info.text=r?.title||'输出';return info;}
+ const a=tlArgs(t),code=tlIsCode(t.text);
+ const setFile=p=>{if(!p)return;const [n,d]=tlSplitPath(p);info.file=n;info.dir=d;info.path=String(p);};
+ if(/^(edit|str_replace|str_replace_based_edit_tool)$/i.test(name)&&a){setFile(a.file_path||a.path);info.diffs.push({file:a.file_path||a.path,...tlDiff(a.old_string??a.old_str,a.new_string??a.new_str)});}
+ else if(/^multiedit$/i.test(name)&&a){setFile(a.file_path);(a.edits||[]).forEach(e=>info.diffs.push({file:a.file_path,...tlDiff(e.old_string,e.new_string)}));}
+ else if(/^write$/i.test(name)&&a){setFile(a.file_path||a.path);info.label='写入';const lines=String(a.content??'').split('\n');info.diffs.push({file:a.file_path||a.path,lines:lines.slice(0,400).map(l=>['add',l]),add:tlLines(a.content),del:0,whole:true});}
+ else if(/^notebookedit$/i.test(name)&&a){setFile(a.notebook_path);}
+ else if(/apply_patch/i.test(name)||/^\*\*\* Begin Patch/m.test(t.text)&&!code){const src=a?.input||a?.patch||t.text;tlPatch(src).forEach(f=>info.diffs.push(f));if(info.diffs[0])setFile(info.diffs[0].file);info.label='编辑';info.icon='pen';}
+ else if(code&&codeModeCalls(t.text).includes('apply_patch')){const m=t.text.match(/\b(?:input|patch)\s*:\s*"((?:[^"\\]|\\.)*)"/);if(m){tlPatch(tlJsStr(m[1])).forEach(f=>info.diffs.push(f));if(info.diffs[0])setFile(info.diffs[0].file);info.label='编辑';info.icon='pen';}}
+ else if(kind.label==='读取'&&a){setFile(a.file_path||a.path);if(a.offset)info.range='第 '+a.offset+(a.limit?'–'+(Number(a.offset)+Number(a.limit)-1):'')+' 行';}
+ info.diffs.forEach(d=>{info.add+=d.add;info.del+=d.del;});
+ if(info.diffs.length>1&&new Set(info.diffs.map(d=>d.file)).size>1)info.text=info.diffs.length+' 个文件';
+ if(!info.file&&!info.text)info.text=toolSummary(t);
+ TL_TOOL.set(t,info);return info;}
+// Outcome of a command: exit code and, for test runners, how many passed / failed.
+function resultInfo(r){
+ if(!r)return null;if(TL_RESULT.has(r))return TL_RESULT.get(r);
+ const all=String(r.text||''),t=all.length>8000?all.slice(0,2000)+'\n'+all.slice(-6000):all;
+ const ex=t.match(/(?:^|\n)(?:Exit code|Process exited with code):?\s*(-?\d+)/);let pass=0,fail=0,found=false,m;
+ if((m=t.match(/(?:^|\n)Ran (\d+) tests? in/))){found=true;const f=t.match(/FAILED \(([^)]*)\)/);if(f)for(const x of f[1].matchAll(/(failures|errors)=(\d+)/g))fail+=+x[2];pass=Math.max(0,+m[1]-fail);}
+ else if(/\b\d+ passed\b/.test(t)){found=true;for(const x of t.matchAll(/\b(\d+) passed\b/g))pass=Math.max(pass,+x[1]);for(const x of t.matchAll(/\b(\d+) (?:failed|errors?)\b/g))fail=Math.max(fail,+x[1]);}
+ else if((m=t.match(/(?:^|\n)# pass (\d+)/))){found=true;pass=+m[1];const f=t.match(/(?:^|\n)# fail (\d+)/);fail=f?+f[1]:0;}
+ else{const ps=(t.match(/(?:^|\n)PASS[: ]/g)||[]).length,fs=(t.match(/(?:^|\n)FAIL[: ]/g)||[]).length;if(ps+fs>=2){found=true;pass=ps;fail=fs;}}
+ const info={exit:ex?+ex[1]:null,tests:found?{pass,fail}:null,lines:tlLines(all)};TL_RESULT.set(r,info);return info;}
+// Small chips after a summary: "+12 −3", "24 通过", "2 失败".
+function tlStat(add,del){const n=el('span','tl-stat');if(add)n.append(el('span','plus','+'+add));if(del)n.append(el('span','minus','−'+del));return n;}
+function tlTests(t){return el('span','tl-test '+(t.fail?'bad':'good'),t.fail?t.fail+' 失败'+(t.pass?' · '+t.pass+' 通过':''):t.pass+' 通过');}
+function tlDiffView(d){const pre=el('pre','tl-diff');const lines=d.lines.slice(0,400);
+ lines.forEach(x=>pre.append(el('span','d-'+x[0],(x[0]==='add'?'+ ':x[0]==='del'?'− ':x[0]==='hunk'?'':'  ')+x[1])));
+ if(d.lines.length>400)pre.append(el('span','d-hunk','… 还有 '+(d.lines.length-400)+' 行'));return pre;}
 // Flat items, used by the 「命令」 view (commandsOnly) and kept for other callers.
 function buildItems(messages,commandsOnly){
  const results=new Map();messages.forEach(m=>{if(m.kind==='result'&&m.call_id)results.set(m.call_id,m);});
@@ -91,7 +160,7 @@ function workSummary(turn){const s=turn.stats,parts=[];if(s.notes)parts.push(s.n
  const d=tlDuration(turn.start,turn.live?new Date():turn.end);if(d&&turn.prompt)parts.push(d);return parts.join(' · ');}
 // One-line preview of the newest progress for the collapsed block.
 function workPreview(turn){const last=turn.work.filter(e=>e.type!=='notice').at(-1);if(!last)return '';
- if(last.type==='tool'){const t=last.entry.tool,r=last.entry.result;return toolKind(t?.title||r?.title).label+' '+(t?toolSummary(t):(r?.title||''));}
+ if(last.type==='tool'){const t=last.entry.tool,r=last.entry.result,i=toolInfo(t,r);return i.label+' '+(i.file?i.file:i.text);}
  if(last.type==='agent')return agentName(last.m.title)+'：'+tlFirstLine(last.m.text);return tlFirstLine(last.m.text);}
 function agentName(path){return String(path||'子 Agent').split('/').filter(Boolean).pop()||'子 Agent';}
 
@@ -114,24 +183,46 @@ function childStrip(kids){const box=el('div','sub-strip');box.append(el('span','
 function childLink(c){const b=btn('查看','sub-open',e=>{e.preventDefault();e.stopPropagation();openRecord(c,true);},'chevron');b.setAttribute('aria-label','查看子 Agent '+(c.title||c.role||''));return b;}
 
 // ─── Rows ───────────────────────────────────────────────────────────────────
+function toolSummaryNode(info,t,r){
+ const s=el('span','tool-text');
+ if(info.file){s.classList.add('has-file');s.append(el('span','tool-file',info.file));if(info.dir)s.append(el('span','tool-dir',info.dir));if(info.range)s.append(el('span','tool-dir',info.range));}
+ else s.append(document.createTextNode(info.text||(r?.title||'输出')));return s;}
 function toolRow(entry,open){
- const t=entry.tool,r=entry.result;const kind=toolKind(t?.title||r?.title);const failed=resultFailed(r);
+ const t=entry.tool,r=entry.result;const info=toolInfo(t,r),res=resultInfo(r);const failed=resultFailed(r);
  const d=el('details','tool-row'+(failed?' failed':''));d.dataset.key='row:'+entry.id;d.dataset.id=entry.id;d.open=!!open;const s=el('summary');
- s.append(el('span','tool-icon'),el('span','tool-verb',kind.label),el('span','tool-text',t?toolSummary(t):(r?.title||'输出')),el('span','tool-state '+(failed?'bad':r?'good':'wait'),failed?'失败':r?'':'…'));s.firstChild.append(icon(kind.icon));
- const child=kind.label==='子 Agent'?childFor([t?.text,r?.text]):null;if(child)s.append(childLink(child));d.append(s);
+ s.append(el('span','tool-icon'),el('span','tool-verb',info.label),toolSummaryNode(info,t,r));s.firstChild.append(icon(info.icon));
+ if(info.add||info.del)s.append(tlStat(info.add,info.del));
+ if(res?.tests)s.append(tlTests(res.tests));else s.append(el('span','tool-state '+(failed?'bad':r?'good':'wait'),failed?(res?.exit?'退出码 '+res.exit:'失败'):r?'':'…'));
+ const child=info.label==='子 Agent'?childFor([t?.text,r?.text]):null;if(child)s.append(childLink(child));d.append(s);
  // Bodies are built on first open: a long turn can hold hundreds of large outputs.
  const fill=()=>{if(d.childElementCount>1)return;const body=el('div','tool-body');
-  if(t){const cap=el('div','tool-caption');cap.append(el('span','',t.title||'调用内容'),btn('复制','code-copy',()=>copyText(toolInput(t)),'copy'));body.append(cap,el('pre','',toolInput(t)));if(t.truncated)body.append(el('small','','内容超过 16 KB，已截断。'));}
-  if(r){const cap=el('div','tool-caption');cap.append(el('span','',r.title||'执行结果'),btn('复制','code-copy',()=>copyText(r.text),'copy'));body.append(cap,el('pre','output',r.text));if(r.truncated)body.append(el('small','','结果过长，已截断。'));}
+  if(t&&info.diffs.length){info.diffs.forEach(df=>{const cap=el('div','tool-caption');const [n,dir]=tlSplitPath(df.file);const name=el('span','tool-cap-file',n);if(dir)name.title=df.file;cap.append(name);const right=el('span','tool-cap-side');right.append(tlStat(df.add,df.del));cap.append(right);body.append(cap,tlDiffView(df));});
+   const row=el('div','tool-raw');row.append(btn('复制原始调用','code-copy',()=>copyText(t.text),'copy'));body.append(row);}
+  else if(t){const cap=el('div','tool-caption');const a=tlArgs(t);cap.append(el('span','',a?.description&&typeof a.description==='string'?a.description:info.label==='运行'?'命令':t.title||'调用内容'),btn('复制','code-copy',()=>copyText(toolInput(t)),'copy'));body.append(cap,el('pre','',toolInput(t)));if(t.truncated)body.append(el('small','','内容超过 16 KB，已截断。'));}
+  if(r){const cap=el('div','tool-caption');cap.append(el('span','',(r.title||'执行结果')+(res.lines>12?' · '+res.lines+' 行':'')),btn('复制','code-copy',()=>copyText(r.text),'copy'));const out=el('pre','output',r.text);body.append(cap,out);if(r.truncated)body.append(el('small','','结果过长，已截断。'));
+   // The end of a long output (exit code, test summary) is what matters: start there.
+   requestAnimationFrame(()=>{out.scrollTop=out.scrollHeight;});}
   else body.append(el('p','fine','还没有输出。'));d.append(body);};
  if(d.open)fill();d.addEventListener('toggle',()=>{if(d.open)fill();});return d;}
+// Totals over tool entries: files changed (+/−) and test results.
+function tlTally(entries){
+ const files=new Map();let add=0,del=0,last=null;
+ for(const e of entries){const info=toolInfo(e.tool,e.result);info.diffs.forEach(d=>{files.set(d.file,1);});add+=info.add;del+=info.del;
+  const res=resultInfo(e.result);if(res?.tests)last=res.tests;}
+ // Tests are usually re-run until green: the latest run is the one that counts.
+ return {files:files.size,add,del,tests:last};}
+function tlTallyNodes(box,tally){
+ if(tally.files){const n=el('span','tl-files','改 '+tally.files+' 个文件');box.append(n,tlStat(tally.add,tally.del));}
+ if(tally.tests)box.append(tlTests(tally.tests));return box;}
 function toolGroup(g,open,openRows){
  const d=el('details','tool-group');d.dataset.key='group:'+g.id;d.dataset.id=g.id;d.open=open.has('group:'+g.id);const s=el('summary');
  const failed=g.entries.filter(e=>resultFailed(e.result)).length;const running=g.entries.some(e=>e.tool&&!e.result);
- const last=g.entries.at(-1);const lk=toolKind(last.tool?.title||last.result?.title);
- const ic=el('span','tool-icon');ic.append(icon(lk.icon));s.append(ic);
- const txt=el('span','tool-text');txt.append(el('strong','',g.entries.length===1?lk.label:g.entries.length+' 个操作'),document.createTextNode(' '+(last.tool?toolSummary(last.tool):'')));s.append(txt);
- if(failed)s.append(el('span','tool-state bad',failed+' 失败'));else if(running&&tlWorking())s.append(el('span','spinner mini'));
+ const kinds=new Map();g.entries.forEach(e=>{const l=toolInfo(e.tool,e.result).label;kinds.set(l,(kinds.get(l)||0)+1);});
+ const top=[...kinds.entries()].sort((a,b)=>b[1]-a[1]);const lk=toolInfo(g.entries.at(-1).tool,g.entries.at(-1).result);
+ const ic=el('span','tool-icon');ic.append(icon(top.length===1?lk.icon:'tool'));s.append(ic);
+ const txt=el('span','tool-text');txt.append(el('strong','',g.entries.length+' 个操作'),document.createTextNode(' '+(top.length===1?lk.label+' '+(lk.file||lk.text):top.map(([l,n])=>l+' '+n).join(' · '))));s.append(txt);
+ const tally=tlTally(g.entries);if(tally.add||tally.del)s.append(tlStat(tally.add,tally.del));if(tally.tests)s.append(tlTests(tally.tests));
+ if(failed&&!tally.tests?.fail)s.append(el('span','tool-state bad',failed+' 失败'));else if(running&&tlWorking())s.append(el('span','spinner mini'));
  s.append(el('span','chev'));s.lastChild.append(icon('down'));d.append(s);
  const list=el('div','tool-list');g.entries.forEach(e=>list.append(toolRow(e,open.has('row:'+e.id)||openRows?.has?.(e.id))));d.append(list);return d;}
 function tlWorking(){const st=S.chat?.agent?.agent_status;return !S.chat?.stale&&(st==='working'||st==='blocked');}
@@ -166,12 +257,16 @@ function agentMessageRow(m,open){
 function noteRow(m){const n=el('div','work-note');n.append(markdown(m.text));const t=el('span','work-time',clock(m.timestamp));n.prepend(t);n.oncontextmenu=e=>{e.preventDefault();messageMenu(m);};return n;}
 // The collapsed 「工作过程」 block of a turn.
 function workBlock(turn,open){
- const s=turn.stats;const d=el('details','work'+(turn.live?' live':'')+(s.failed?' has-failed':''));d.dataset.key='work:'+turn.id;d.open=open.has('work:'+turn.id);
+ const s=turn.stats;const d=el('details','work'+(turn.live?' live':'')+(s.failed?' has-failed':''));d.dataset.key='work:'+turn.id;
+ // A turn that started on an earlier page changes its id once that page loads: its steps keep it open.
+ const anchor=turn.work.at(-1)?.id||'';d.dataset.anchor=anchor;d.open=open.has('work:'+turn.id)||turn.work.some(e=>open.has('anchor:'+e.id));
  const sum=el('summary');const lead=el('span','work-lead');
  if(turn.live&&tlWorking())lead.append(el('span','spinner mini'));else lead.append(icon(s.failed?'alert':turn.interrupted?'stop':turn.final?'check':'tool'));
  const head=el('span','work-head');const title=el('span','work-title');title.append(el('strong','',turn.live&&tlWorking()?(S.chat.agent.agent_status==='blocked'?'等你确认':'正在工作'):turn.interrupted?'已中断':'工作过程'),el('span','work-stats',workSummary(turn)));
  if(s.failed)title.append(el('span','work-bad',s.failed+' 个失败'));
- head.append(title);const preview=workPreview(turn);if(preview)head.append(el('span','work-preview',preview));
+ head.append(title);const tally=tlTally(turn.work.filter(e=>e.type==='tool').map(e=>e.entry));
+ const facts=!turn.live&&(tally.files||tally.tests)?tlTallyNodes(el('span','work-facts'),tally):null;
+ const preview=facts?'':workPreview(turn);if(facts)head.append(facts);else if(preview)head.append(el('span','work-preview',preview));
  const chev=el('span','chev');chev.append(icon('down'));sum.append(lead,head,chev);d.append(sum);
  const fill=()=>{if(d.childElementCount>1)return;const list=el('div','work-list');let run=[];
   const flush=()=>{if(!run.length)return;if(run.length<=3)run.forEach(e=>list.append(toolRow(e,open.has('row:'+e.id))));else list.append(toolGroup({id:run[0].id,entries:run},open));run=[];};
@@ -181,6 +276,9 @@ function workBlock(turn,open){
  if(d.open)fill();d.addEventListener('toggle',()=>{if(d.open)fill();});return d;}
 function replyRow(m,who,turn){
  const row=el('article','message assistant reply');const meta=el('div','message-label');meta.append(el('span','who',who),el('span','',clock(m.timestamp)));
+ // The answer is what people copy and reply to: one tap, no long press needed.
+ const acts=el('span','msg-acts');const cp=btn('复制','msg-act',()=>copyText(mdClean(m.text)),'copy');cp.setAttribute('aria-label','复制回答');acts.append(cp);
+ if(tlCanSend()){const q=btn('引用','msg-act',()=>quoteInto(m),'reply');q.setAttribute('aria-label','引用回答');acts.append(q);}meta.append(acts);
  const bubble=el('div','bubble');bubble.append(markdown(m.text));bubble.oncontextmenu=e=>{e.preventDefault();messageMenu(m);};
  row.append(meta,bubble);if(m.truncated)row.append(el('small','fine','消息过长，已截断。'));return row;}
 // While a turn runs there is no reply yet; show its newest progress note in place.
@@ -189,19 +287,76 @@ function turnView(turn,who,open){
  const sec=el('section','turn'+(turn.live?' live':''));sec.dataset.id=turn.id;
  if(turn.partial)sec.append(el('div','turn-cont','接上文 · 这一轮的开头在更早的记录里'));
  if(turn.command)sec.append(slashCommandRow(turn));else if(turn.prompt)sec.append(promptRow(turn.prompt));else if(turn.notice)sec.append(noticeRow(turn.notice.m,turn.notice.n,open));
- if(turn.work.length)sec.append(workBlock(turn,open));
+ // Only harness notices (no notes, no tools): show them as their own rows, not an empty 「工作过程」.
+ const real=turn.work.filter(e=>e.type!=='notice'||e.question);
+ if(real.length)sec.append(workBlock(turn,open));else turn.work.forEach(e=>{if(turn.command&&e.n?.label==='命令')return;sec.append(noticeRow(e.m,e.n,open));});
  const kids=turnChildren(turn);if(kids.length)sec.append(childStrip(kids));
  qaTurnRows(sec,turn);
  if(turn.final)sec.append(replyRow(turn.final.m,who,turn));
  else if(turn.live||turn.last){const last=turn.work.filter(e=>e.type==='text').at(-1);if(last)sec.append(progressRow(last.m,who));}
  return sec;}
-function messageMenu(m){const box=sheet('消息');menuItem(box,'复制全文',()=>copyText(m.text),'copy');if(S.chat?.agent&&m.kind==='user')menuItem(box,'放入输入框',()=>{S.drafts.set(draftKey(),m.text);renderComposer();},'edit');}
+// ─── Message actions: copy, quote into the composer, select text ──────────
+function tlCanSend(){const c=S.chat;return !!(c?.agent&&!c.stale&&!c.exited&&(S.device||S.demo));}
+// "> " lines from the start of a message: enough to show what is being answered.
+function quoteText(text){
+ const lines=[];let fence=false;
+ for(const raw of mdClean(text).split('\n')){if(/^ {0,3}(```|~~~)/.test(raw)){fence=!fence;if(fence)lines.push('[代码]');continue;}if(fence)continue;
+  const l=raw.replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/,'').replace(/[*`]/g,'').replace(/\s+/g,' ').trim();
+  if(l&&!/^\|?\s*:?-{3,}/.test(l)&&lines.at(-1)!==l)lines.push(l);}
+ const out=[];let n=0;for(const l of lines){if(out.length>=4||n>240){out.push('…');break;}const s=l.length>120?l.slice(0,118)+'…':l;out.push(s);n+=s.length;}
+ return out.map(l=>'> '+l).join('\n');}
+function quoteInto(m){
+ if(!tlCanSend()){toast('这里只读，不能回复');return;}
+ const key=draftKey(),cur=S.drafts.get(key)||'';S.drafts.set(key,(cur.trim()?cur.replace(/\s*$/,'\n\n'):'')+quoteText(m.text)+'\n\n');renderComposer();
+ const input=document.querySelector('#composer textarea');if(input){input.focus();input.setSelectionRange(input.value.length,input.value.length);input.closest('.composer')?.grow?.();}}
+function codeBlocks(text){const out=[];const re=/^ {0,3}(`{3,}|~{3,})[ \t]*([^\s`]*)[^\n]*\n([\s\S]*?)\n {0,3}\1[ \t]*$/gm;let m;while((m=re.exec(String(text||''))))out.push({lang:m[2],code:m[3]});return out;}
+function selectSheet(m){const box=sheet('选择文字');box.classList.add('select-sheet');box.append(el('p','fine','长按拖动选择需要的部分。'));const t=el('div','select-text',m.kind==='user'?promptText(m.text):mdClean(m.text));box.append(t);}
+function messageMenu(m){
+ const box=sheet(m.kind==='user'?'你的消息':'消息');
+ const text=m.kind==='user'?promptText(m.text):mdClean(m.text);
+ menuItem(box,'复制全文',()=>copyText(text),'copy');
+ codeBlocks(m.text).slice(0,4).forEach((c,i,all)=>menuItem(box,all.length>1?'复制代码 '+(i+1):'复制代码',()=>copyText(c.code),'terminal',(c.lang?c.lang+' · ':'')+tlLines(c.code)+' 行'));
+ if(tlCanSend())menuItem(box,'引用回复',()=>quoteInto(m),'reply','在输入框里引用这段');
+ if(tlCanSend()&&m.kind==='user')menuItem(box,'放入输入框',()=>{S.drafts.set(draftKey(),text);renderComposer();},'edit','改一改再发');
+ menuItem(box,'选择文字',()=>selectSheet(m),'pen');}
+// Tapping a file path: where it is, copy, and what this conversation changed in it.
+function fileSheet(ref){
+ const path=String(ref).replace(/:\d+(?:[-:,]\d+)*$/,''),rel=tlRel(path),name=rel.split('/').pop()||rel;
+ const hits=[];const tail=rel.replace(/^(\.\/|~\/)/,'');
+ for(const m of S.messages){if(m.kind!=='tool')continue;const info=toolInfo(m,null);for(const d of info.diffs){const f=String(d.file||'');if(f===path||f.endsWith('/'+tail)||tlRel(f)===tail)hits.push({m,d});}}
+ const box=sheet(name);box.classList.add('file-sheet');box.append(el('p','file-sheet-path',hits[0]?.d.file||path));
+ const row=el('div','sheet-actions');row.append(btn('复制路径','secondary',()=>{closeSheet();copyText(ref);},'copy'),btn('复制文件名','secondary',()=>{closeSheet();copyText(name);},'file'));box.append(row);
+ if(!hits.length){box.append(el('p','fine',S.more?'已加载的记录里没改过这个文件。':'这段对话里没改过这个文件。'));return;}
+ const add=hits.reduce((a,h)=>a+h.d.add,0),del=hits.reduce((a,h)=>a+h.d.del,0);
+ const head=el('div','section-label');head.append(document.createTextNode('这段对话里的改动 · '+hits.length+' 处 '),tlStat(add,del));box.append(head);
+ hits.slice(-12).reverse().forEach(h=>{const cap=el('div','tool-caption');cap.append(el('span','',clock(h.m.timestamp)),tlStat(h.d.add,h.d.del));box.append(cap,tlDiffView(h.d));});
+ if(hits.length>12)box.append(el('p','fine','只显示最近 12 处。'));}
 
 // ─── Render ─────────────────────────────────────────────────────────────────
+// Finished turns never change, so their DOM is kept between renders (polls, queue and slash
+// updates repaint often): only new or still-changing turns are rebuilt. Open/closed state and
+// scroll position inside kept turns survive for free.
+const TL_KEEP={chat:null,mode:'',nodes:new Map()};
+function turnSig(turn){
+ if(turn.last||turn.live||turn.command||turn.entries.some(e=>e.question))return '';
+ const last=turn.entries.at(-1),lm=last?.m||last?.entry?.result||last?.entry?.tool;
+ return [turn.prompt?.id||turn.notice?.m.id||'',turn.entries.length,last?.id||'',lm?.text?.length||0,turn.entries.filter(e=>e.type==='tool'&&e.entry.result).length,turn.final?.id||'',turn.partial?1:0,S.children.length,tlCanSend()?1:0].join('|');}
+function keptTurn(turn,who,open,next){
+ const sig=turnSig(turn),old=TL_KEEP.nodes.get(turn.id);
+ const node=sig&&old&&old.sig===sig?old.node:turnView(turn,who,open);if(sig)next.set(turn.id,{sig,node});return node;}
 function renderTimeline(){
  const body=document.getElementById('chat-scroll');if(!body)return;
+ if(TL_KEEP.chat!==S.chat||TL_KEEP.mode!==S.chatMode){TL_KEEP.chat=S.chat;TL_KEEP.mode=S.chatMode;TL_KEEP.nodes=new Map();}
  const open=new Set([...body.querySelectorAll('details[data-key][open]')].map(x=>x.dataset.key));
- body.replaceChildren();const list=el('div','timeline');body.append(list);
+ body.querySelectorAll('details.work[open][data-anchor]').forEach(x=>open.add('anchor:'+x.dataset.anchor));
+ // Rows are collected first, then patched into the live list: kept nodes that stay in place are
+ // never detached (no re-run of the arrival animation, no layout thrash on every poll).
+ const nodes=[],sink={append:(...ns)=>ns.forEach(n=>nodes.push(typeof n==='string'?document.createTextNode(n):n))};
+ tlBuild(sink,open);
+ let list=body.firstElementChild;if(!list||!list.classList.contains('timeline')||body.childElementCount>1){body.replaceChildren();list=el('div','timeline');body.append(list);}
+ const want=new Set(nodes);[...list.childNodes].forEach(n=>{if(!want.has(n))n.remove();});
+ nodes.forEach((n,i)=>{const at=list.childNodes[i];if(at!==n)list.insertBefore(n,at||null);});}
+function tlBuild(list,open){
  followMarker(list);
  if(S.chatMode==='terminal'){const pre=el('pre','agent-terminal',S.terminalText||(S.chat.agent?'正在读取终端…':'这条历史没有在线终端。'));pre.id='terminal-output';list.append(pre);if(S.chat.agent)list.append(btn('刷新终端','secondary',()=>fetchTerminal()));return;}
  if(!S.chat.record){const box=el('div','unlinked');box.append(el('h2','','还没关联到对话记录'),el('p','muted',S.chat.historyIssue||'正在定位这个窗格对应的历史记录…'));
@@ -209,14 +364,18 @@ function renderTimeline(){
   const candidates=S.chat.agent?.history_ref?.candidates||[];if(candidates.length){list.append(el('div','section-label','候选历史 · 点击后确认'));const g=el('div','card list-card');candidates.forEach(rec=>{const b=btn('','card-button',()=>chooseHistory(rec,S.chat.agent));const t=el('div','grow');t.append(el('div','card-title',rec.title),el('div','card-meta',relative(rec.modified)+' · '+String(rec.thread).slice(0,8)));b.append(t,icon('chevron'));g.append(b);});list.append(g);}
   if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));list.append(el('pre','agent-terminal compact',tail(S.terminalText,14)));}
   slashRest(list);queueTimeline(list);return;}
- const more=btn(S.more?'加载更早消息':'已到记录起点','link-btn',()=>fetchHistory(true));more.disabled=!S.more;list.append(more);cacheChatNote(list);
+ // Until the first fresh read arrives (cache shown, or still loading) paging is unknown: no button.
+ const c=S.chat,settling=!!(c.cached||c.waiting||c.historyLoading);
+ // The same node across repaints, so a tap is never lost to a redraw.
+ if(!settling&&(S.more||S.messages.length)){const label=S.more?'加载更早消息':'已到记录起点';let more=TL_KEEP.more;if(!more||more.textContent!==label){more=btn(label,'link-btn',()=>fetchHistory(true));TL_KEEP.more=more;}more.disabled=!S.more;list.append(more);}
+ cacheChatNote(list);
  if(S.chat.historyError){const n=el('div','note error');n.append(el('span','grow',S.chat.historyError),btn('重试','secondary small',()=>{S.paused=false;fetchHistory(false,true);}));list.append(n);}
  if(S.historyNote)list.append(el('p','note',S.historyNote));
  const commandsOnly=S.chatMode==='commands';const who=providerName(S.chat.provider);let day='';let count=0;
  const dayMark=ts=>{const d=dayLabel(ts);if(d&&d!==day){day=d;list.append(el('div','date-separator',d));}};
  if(commandsOnly){const items=buildItems(S.messages,true);count=items.length;for(const it of items){dayMark(it.entry.timestamp);list.append(toolRow(it.entry,true));}}
  else{// A just-sent prompt means the newest transcript turn is already finished.
-  const live=tlWorking()&&!S.outbox.some(o=>o.key===draftKey()&&o.state!=='failed');const turns=buildTurns(S.messages,live);count=turns.length;slashMatch(turns);for(const turn of turns){slashBefore(list,turn.start);dayMark(turn.start);list.append(turnView(turn,who,open));}}
+  const live=tlWorking()&&!S.outbox.some(o=>o.key===draftKey()&&o.state!=='failed');const turns=buildTurns(S.messages,live);count=turns.length;slashMatch(turns);const next=new Map();for(const turn of turns){slashBefore(list,turn.start);dayMark(turn.start);list.append(keptTurn(turn,who,open,next));}TL_KEEP.nodes=next;}
  if(!commandsOnly){count+=slashCards().length;slashRest(list);}
  for(const o of S.outbox.filter(o=>o.key===draftKey())){const row=el('article','message user pending'+(o.state==='failed'||o.state==='rejected'?' failed':''));const meta=el('div','message-label');meta.append(el('span','',o.state==='rejected'?'没发出去':o.state==='failed'?'发送未确认':o.state==='sending'?o.stage||'发送中…':'已送达 Agent'));row.append(meta);if(o.text.trim()){const b=el('div','bubble');b.append(userText(o.text));row.append(b);}if(o.images?.length)row.append(imgStrip(o.images));if(o.files?.length)row.append(fileList(o.files));list.append(row);}
   queueTimeline(list);

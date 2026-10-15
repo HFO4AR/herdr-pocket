@@ -51,7 +51,8 @@ object ImagePrep {
 
     fun prepare(resolver: ContentResolver, uri: Uri): Prepared {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: error("读不到这张图片")
+        // A bounds-only decode always returns null; only a missing stream means the picture is unreadable.
+        (resolver.openInputStream(uri) ?: error("读不到这张图片")).use { BitmapFactory.decodeStream(it, null, bounds) }
         val w = bounds.outWidth; val h = bounds.outHeight
         check(w > 0 && h > 0) { "这不是能识别的图片" }
         check(w.toLong() * h <= MAX_SOURCE_PIXELS) { "图片太大了" }

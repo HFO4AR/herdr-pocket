@@ -1,0 +1,101 @@
+/* List screens (会话 / 历史 / 终端): toolbar, freshness line, filter chips, group headers,
+ * swipe actions, pull to refresh, terminal rows and the terminal key bar. Tokens only. */
+.list-actions{min-height:44px;margin-bottom:2px;gap:6px}
+.list-actions .grow:empty{min-width:0}
+.list-actions .list-facts{font-size:13px;color:var(--muted)}
+.session-pill{max-width:62%;min-height:40px;padding:0 10px 0 12px;font-weight:600;color:var(--ink-2)}
+.session-pill .truncate{min-width:0}
+.session-pill svg:last-child{width:14px;height:14px;color:var(--faint);margin-left:-2px}
+
+.list-status{display:flex;align-items:center;gap:10px;margin:0 4px 10px;font-size:12.5px;color:var(--muted);min-height:20px;min-width:0}
+.list-status:empty{display:none}
+.list-facts{display:flex;flex-wrap:wrap;align-items:center;column-gap:6px;row-gap:2px;min-width:0}
+.list-facts .sep:before{content:'·';margin-right:6px;color:var(--faint)}
+.fact-alert{color:var(--danger);font-weight:600}
+.fact-new{color:var(--accent);font-weight:600}
+.list-fresh{flex-shrink:0;color:var(--faint);white-space:nowrap;font-variant-numeric:tabular-nums}
+.list-fresh.cache-note{white-space:normal;text-align:right;max-width:58%}
+.spinner.small-spin{width:13px;height:13px;border-width:1.5px}
+
+/* Filter chips: one scrolling row; counts are visual only (aria-hidden). */
+.chips{margin:0 -16px 8px;padding:0 16px 2px;scroll-padding:16px}
+.chips .pill{flex-shrink:0;min-height:36px}
+.chip-count{margin-left:1px;font-size:11.5px;font-weight:500;color:var(--faint);font-variant-numeric:tabular-nums}
+.pill.active .chip-count{color:var(--accent)}
+
+/* Group and day headers */
+.group-label{display:flex;align-items:center;gap:6px}
+.group-count{min-width:18px;height:18px;padding:0 6px;border-radius:9px;background:var(--sunken);color:var(--muted);font-size:11px;line-height:18px;text-align:center;font-variant-numeric:tabular-nums}
+.group-label.g-alert{color:var(--danger)}
+.group-label.g-alert .group-count{background:var(--danger-soft);color:var(--danger)}
+.group-label.g-work .group-count{background:var(--warn-soft);color:var(--warn)}
+.day-label{position:sticky;top:-4px;z-index:3;margin:0 -4px;padding:14px 8px 8px;background:var(--bg)}
+.history-list .day-label:first-child{padding-top:6px}
+.history-list .list-card{margin-bottom:6px}
+
+/* Small tags inside a row's meta line */
+.card-meta .tag{flex-shrink:0;font-size:10.5px;font-weight:600;line-height:16px;padding:0 6px;border-radius:6px;background:var(--sunken);color:var(--ink-2)}
+.card-meta .remote-tag{background:var(--soft);color:var(--accent)}
+.card-meta .project{min-width:0}
+.history-row .row-side{justify-content:center}
+
+/* Swipe actions: the row slides left over its action buttons. */
+.swipe{position:relative;overflow:hidden}
+.list-card .swipe+.swipe{border-top:1px solid var(--line)}
+.swipe-acts{position:absolute;top:0;right:0;bottom:0;display:flex}
+.swipe-act{width:72px;min-height:0;border-radius:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:12px;font-weight:600;background:var(--sunken);color:var(--ink)}
+.swipe-act svg{width:19px;height:19px}
+.swipe-act.danger{background:var(--danger);color:var(--surface)}
+.swipe-act:active{transform:none;opacity:.85}
+.swipe-row{position:relative;z-index:1;touch-action:pan-y;transition:transform .22s var(--ease),background .15s var(--ease)}
+.swipe.dragging .swipe-row{transition:none}
+.swipe.open .swipe-row{box-shadow:1px 0 0 var(--line)}
+
+/* Pull to refresh */
+.pull-tip{height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--muted);font-size:12px;transition:height .2s var(--ease)}
+.pull-tip.ready{color:var(--accent)}
+.pull-tip.busy{height:40px}
+.pull-icon{display:inline-flex}
+.pull-icon svg{width:17px;height:17px}
+.pull-tip.busy .pull-icon{animation:connection-spin .9s linear infinite}
+
+/* Search: our clear button instead of the engine's */
+.search{position:relative}
+.search-row .search{flex:1;margin-bottom:0;min-width:0}
+.search-row{margin-bottom:10px}
+.search input::-webkit-search-cancel-button{display:none;-webkit-appearance:none}
+.search-clear{min-width:40px;min-height:40px;margin-right:-8px;color:var(--faint)}
+.search-clear svg{width:18px;height:18px}
+
+.load-more{margin-top:10px}
+.list-end{margin-top:14px;color:var(--faint)}
+.menu-item.current{background:var(--sunken)}
+.menu-item.current .menu-label{font-weight:600}
+
+/* 终端 list */
+.term-av{background:var(--terminal);color:var(--terminal-ink)}
+.term-av.ssh{background:var(--soft);color:var(--accent)}
+.term-av.idle{background:var(--sunken);color:var(--muted)}
+.term-cmd{font-family:var(--mono);font-size:13.5px;font-weight:600;-webkit-line-clamp:1;word-break:break-all}
+.term-cmd.idle{font-family:inherit;font-size:15px;font-weight:500;color:var(--muted)}
+.term-row .mono,.mono{font-family:var(--mono);font-size:11px}
+.ssh-row .badge.plain{background:var(--primary);color:var(--on-primary);padding:5px 12px;font-size:12px}
+.ws-label{font-size:12px;color:var(--faint);margin:12px 6px 6px;font-weight:600}
+
+/* Terminal screen */
+.term-head .avatar{width:34px;height:34px;border-radius:10px}
+.term-head .avatar svg{width:18px;height:18px}
+.terminal-keys .key{min-width:44px;min-height:40px;padding:0 10px;font-size:13px;font-family:var(--mono);border-radius:9px}
+.terminal-keys .arrow-key{font-size:16px;padding:0 8px}
+.terminal-keys .ctrl-key.on{background:var(--soft);border-color:var(--accent-raw);color:var(--accent);font-weight:700}
+.terminal-keys .enter-key{font-weight:600}
+.terminal-keys{scrollbar-width:none}
+.terminal-keys::-webkit-scrollbar{display:none}
+.term-size{display:flex;align-items:center;gap:8px;min-height:52px;padding:4px 10px;font-size:15px}
+.term-size .secondary{min-width:52px;font-family:var(--mono)}
+
+@media (max-width:359px){
+ .session-pill{max-width:50%}
+ .swipe-act{width:64px}
+ .list-status{font-size:12px}
+}

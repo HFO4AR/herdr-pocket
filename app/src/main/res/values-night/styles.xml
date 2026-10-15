@@ -1,0 +1,13 @@
+<resources>
+    <!-- Dark launch window: matches the dark page background and bars, so a dark system never flashes light. -->
+    <style name="PocketBase" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#F39A72</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#151514</item>
+        <item name="android:navigationBarColor">#1F1E1C</item>
+        <item name="android:statusBarColor">#151514</item>
+    </style>
+    <style name="AppTheme" parent="PocketBase" />
+</resources>

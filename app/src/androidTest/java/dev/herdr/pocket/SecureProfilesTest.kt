@@ -13,8 +13,11 @@ class SecureProfilesTest : Instrumentation() {
             testPasswordSurvivesReloadWithoutPlaintextOrCrossHostReuse()
             testUncheckingRememberErasesPassword()
             testTerminalBuffer()
+            testImagePrep()
+            testConnectErrors()
+            testShareIn()
             if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect() }
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS" else "ssh-pty: SKIPPED") })
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nconnect-errors: PASS\nshare-in: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS" else "ssh-pty: SKIPPED") })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
@@ -47,6 +50,56 @@ class SecureProfilesTest : Instrumentation() {
             vault.save(value)
             assertEquals("", SecureProfiles(targetContext).get(id).getString("password"))
         } finally { vault.delete(id) }
+    }
+    /** Picked pictures (file:// here, content:// from the picker) decode, shrink and re-encode. */
+    private fun testImagePrep() {
+        for ((name, format) in listOf("pick.png" to android.graphics.Bitmap.CompressFormat.PNG, "pick.jpg" to android.graphics.Bitmap.CompressFormat.JPEG)) {
+            val file = java.io.File(targetContext.cacheDir, name)
+            val bitmap = android.graphics.Bitmap.createBitmap(3000, 1800, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(200, 120, 80)) }
+            file.outputStream().use { bitmap.compress(format, 90, it) }
+            try {
+                val p = ImagePrep.prepare(targetContext.contentResolver, android.net.Uri.fromFile(file))
+                check(p.width == 2048 && p.height in 1228..1229) { "image-prep size ${p.width}x${p.height}" }
+                check(p.bytes.isNotEmpty() && p.bytes.size <= ImagePrep.MAX_BYTES && p.thumb.isNotEmpty()) { "image-prep bytes" }
+                ImagePrep.drop(p.id)
+            } finally { file.delete() }
+        }
+        val missing = java.io.File(targetContext.cacheDir, "missing.png")
+        try { ImagePrep.prepare(targetContext.contentResolver, android.net.Uri.fromFile(missing)); fail("missing picture accepted") } catch (_: java.io.FileNotFoundException) { } catch (_: IllegalStateException) { }
+    }
+    /** Raw JSch / socket / shell failures become short Chinese errors with a stable code. */
+    private fun testConnectErrors() {
+        val lan = Endpoint("192.168.1.20", 22, "yuki")
+        fun code(e: Throwable, at: Endpoint = lan) = ConnectErrors.connect(e, at).code
+        fun jsch(message: String, cause: Throwable? = null) = com.jcraft.jsch.JSchException(message, cause)
+        check(code(jsch("Auth fail for methods 'publickey,password'")) == "auth") { "auth" }
+        check(code(jsch("Auth fail for methods 'publickey'")) == "auth_method") { "auth_method" }
+        check(code(jsch("java.net.UnknownHostException: nope.invalid", java.net.UnknownHostException("nope.invalid"))) == "dns") { "dns" }
+        check(code(jsch("java.net.ConnectException: Connection refused", java.net.ConnectException("Connection refused"))) == "refused") { "refused" }
+        val timeout = ConnectErrors.connect(jsch("timeout: socket is not established"), lan)
+        check(timeout.code == "timeout" && timeout.message!!.contains("Wi-Fi")) { "timeout lan hint" }
+        check(ConnectErrors.connect(jsch("timeout: socket is not established"), Endpoint("100.101.1.2", 22, "y")).message!!.contains("Tailscale")) { "tailscale hint" }
+        check(code(jsch("Session.connect: java.io.IOException: End of IO Stream Read")) == "tunnel") { "tunnel" }
+        check(code(jsch("x", java.net.NoRouteToHostException("No route to host"))) == "unreachable") { "unreachable" }
+        check((ConnectErrors.command(127, "bash: line 1: python3: command not found") as Friendly).code == "python_missing") { "python" }
+        check((ConnectErrors.command(2, "python3: can't open file '/home/y/.herdr-pocket/bridge-ab.py': [Errno 2] No such file or directory") as Friendly).code == "bridge_missing") { "bridge" }
+        check((ConnectErrors.command(1, "Herdr Pocket needs Python 3.9 or newer; this is 3.8.10") as Friendly).code == "python_old") { "python_old" }
+        check(ConnectErrors.command(1, "Traceback: boom") !is Friendly) { "generic" }
+        check(sshKeyType(java.util.Base64.getDecoder().decode("AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl")) == "ssh-ed25519") { "key type" }
+    }
+    /** Shared text keeps a link's title; only other apps' content URIs are read (never file:// or ours). */
+    private fun testShareIn() {
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(android.content.Intent.EXTRA_SUBJECT, "Issue 42").putExtra(android.content.Intent.EXTRA_TEXT, "https://example.com/42")
+        check(ShareIn.isShare(send))
+        check(ShareIn.text(send) == "Issue 42\nhttps://example.com/42") { "Subject not kept" }
+        check(ShareIn.text(send.putExtra(android.content.Intent.EXTRA_SUBJECT, "https://example.com/42")) == "https://example.com/42") { "Subject repeated" }
+        check(ShareIn.allowed(android.net.Uri.parse("content://com.example.files/doc/1")))
+        check(!ShareIn.allowed(android.net.Uri.parse("file:///data/data/dev.herdr.pocket/shared_prefs/secure_devices.xml"))) { "file:// accepted" }
+        check(!ShareIn.allowed(android.net.Uri.parse("content://dev.herdr.pocket.camera/shot.jpg"))) { "Own provider accepted" }
+        val many = android.content.Intent(android.content.Intent.ACTION_SEND_MULTIPLE).setType("*/*")
+            .putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, arrayListOf(android.net.Uri.parse("content://a/1"), android.net.Uri.parse("file:///sdcard/x"), android.net.Uri.parse("content://a/1")))
+        check(ShareIn.uris(many) == listOf(android.net.Uri.parse("content://a/1"))) { "Unexpected share URIs" }
     }
     private fun testTerminalBuffer() {
         val buffer = TerminalBuffer(8)
@@ -145,7 +198,7 @@ class SecureProfilesTest : Instrumentation() {
             PocketCore.pins.edit().putString(pinKey, "AAAAC3NzaC1lZDI1NTE5AAAAIChangedChangedChangedChangedChangedChange").commit()
             PocketCore.transport.simulateDrop()
             var refused = false
-            try { PocketCore.request(JSONObject().put("op", "hello")) } catch (e: IllegalStateException) { refused = e.message?.contains("主机密钥") == true }
+            try { PocketCore.request(JSONObject().put("op", "hello")) } catch (e: Friendly) { refused = e.code == "hostkey_changed" }
             check(refused) { "Reconnected despite a changed host key" }
         } finally {
             PocketCore.disconnect(); PocketCore.listener = null

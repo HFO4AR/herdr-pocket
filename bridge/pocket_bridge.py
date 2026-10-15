@@ -56,7 +56,7 @@ def call(args, timeout=20):
     except subprocess.TimeoutExpired as exc:
         raise BridgeError("Herdr timeout; mutation outcome may be unknown. Do not resend blindly.") from exc
     except OSError as exc:
-        raise BridgeError("Herdr executable unavailable. Install Herdr for this SSH user.") from exc
+        raise BridgeError("电脑上没找到 Herdr（这个 SSH 用户的 PATH 和 ~/.local/bin 里都没有）。装好 Herdr 再刷新。") from exc
     if result.returncode:
         raise herdr_error(result.stdout) or herdr_error(result.stderr) or BridgeError((result.stderr or result.stdout or "Herdr command failed")[:2000])
     # Herdr 0.8.x agent read emits plain text, while list/control emit JSON.
@@ -76,6 +76,23 @@ def identity(agent):
     # 绑定具体终端及 Agent 会话，避免面板换人后把消息发错。
     fields = {k: agent.get(k) for k in ("terminal_id", "agent", "agent_session")}
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
+
+
+def herdr_binary():
+    found = shutil.which("herdr")
+    if found: return found
+    fallback = Path.home() / ".local/bin/herdr"
+    return str(fallback) if fallback.is_file() and os.access(fallback, os.X_OK) else None
+
+
+def doctor():
+    """Read-only first-run check: is Herdr installed for this user, and is any session running?"""
+    import platform
+    result = {"python": platform.python_version(), "herdr": herdr_binary() is not None, "running": None}
+    if result["herdr"]:
+        try: result["running"] = sum(1 for s in sessions() if s.get("running"))
+        except BridgeError as exc: result["error"] = str(exc)[:300]
+    return result
 
 
 def sessions():
@@ -2139,7 +2156,9 @@ def handle(request, state_dir=None):
         raise BridgeError("Expected protocol version 1")
     op = request.get("op")
     if op == "hello":
-        return {"version": VERSION, "protocol": 1}
+        return {"version": VERSION, "protocol": 1, "python": "%d.%d" % sys.version_info[:2]}
+    if op == "doctor":
+        return doctor()
     if op == "account":
         return ssh_info()
     if op == "image":
@@ -2213,6 +2232,9 @@ def handle(request, state_dir=None):
 
 
 def main():
+    # The app maps this stderr line to "Python 太旧" (ConnectErrors.kt); keep the wording.
+    if sys.version_info < (3, 9):
+        sys.exit("Herdr Pocket needs Python 3.9 or newer; this is %d.%d" % sys.version_info[:2])
     os.umask(0o077)
     try:
         raw = sys.stdin.buffer.readline(LIMIT + 1)

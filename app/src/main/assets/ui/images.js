@@ -72,8 +72,11 @@ function imgLoad(spec,variant='thumb'){
    e=>{imgFailed.set(key,e.message||String(e));throw e;}).finally(()=>imgWaiting.delete(key));
  imgWaiting.set(key,p);return p;}
 // Two at a time: thumbnails share the SSH link with status polls.
-function imgPump(){while(imgActive<2&&imgQueue.length){const job=imgQueue.shift();imgActive++;Promise.resolve().then(job.run).then(job.resolve,job.reject).finally(()=>{imgActive--;imgPump();});}}
-function imgReason(msg){msg=String(msg||'');return /清理/.test(msg)?'已清理':/太大/.test(msg)?'太大，在电脑上看':/找不到|不存在/.test(msg)?'找不到了':'加载失败';}
+// A reply that never comes must not block the queue: give up after 45 s (tap the tile to retry).
+function imgPump(){while(imgActive<2&&imgQueue.length){const job=imgQueue.shift();imgActive++;let timer;
+ Promise.race([Promise.resolve().then(job.run),new Promise((_,no)=>{timer=setTimeout(()=>no(new Error('图片加载超时')),45000);})])
+  .then(job.resolve,job.reject).finally(()=>{clearTimeout(timer);imgActive--;imgPump();});}}
+function imgReason(msg){msg=String(msg||'');return /超时/.test(msg)?'超时，点一下重试':/清理/.test(msg)?'已清理':/太大/.test(msg)?'太大，在电脑上看':/找不到|不存在/.test(msg)?'找不到了':'加载失败';}
 // Thumbnails load when they come within a screen of the visible part of the chat.
 let imgObs=null;
 function imgObserver(){if(typeof IntersectionObserver==='undefined')return null;const root=document.getElementById('chat-scroll');if(!root)return null;

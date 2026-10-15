@@ -1,14 +1,15 @@
 /* 设置 page. Cards hold rows separated by hairlines; segmented controls for small choices. */
 .settings .card.set-card{padding:4px 16px;margin-bottom:6px}
 .set-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:8px 0;border-bottom:1px solid var(--line)}
-.set-card>:last-child,.set-card>.update-status:last-child .set-row:last-child{border-bottom:0}
+.set-card>:last-child:not(button),.set-card>.update-status:last-child .set-row:last-child{border-bottom:0}
 .set-label{font-size:14.5px;color:var(--ink);flex-shrink:0}
 .set-value{font-size:13.5px;color:var(--muted);text-align:right;min-width:0;overflow-wrap:anywhere}
 .set-value.accent{color:var(--accent);font-weight:600}
 .set-value.mono{font-family:var(--mono);font-size:12.5px}
 .set-seg-row{flex-wrap:wrap}
 .seg{display:inline-flex;padding:3px;gap:2px;border-radius:11px;background:var(--sunken);border:1px solid var(--line);max-width:100%}
-.seg-opt{min-height:34px;min-width:52px;padding:0 12px;border-radius:8px;font-size:13px;color:var(--ink-2);white-space:nowrap}
+.seg-opt{min-height:36px;min-width:52px;padding:0 12px;border-radius:8px;font-size:13px;color:var(--muted);white-space:nowrap}
+.seg-opt:active{transform:none;color:var(--ink)}
 .seg-opt.on{background:var(--seg-on);color:var(--ink);font-weight:600;box-shadow:var(--shadow),0 0 0 1px var(--line)}
 .set-card .switch-row.set-switch{margin:0;padding:12px 0;border-top:0;border-bottom:1px solid var(--line)}
 .set-card .switch-row.set-switch:last-child{border-bottom:0}
@@ -22,12 +23,13 @@
 .set-link>svg{width:18px;height:18px;color:var(--faint);flex-shrink:0}
 .set-link:active{background:var(--press)}
 .update-status{border-bottom:1px solid var(--line)}
-.progress{height:6px;border-radius:3px;background:var(--sunken);overflow:hidden;margin:2px 0 10px}
+/* Scoped: .message.progress (timeline) shares the class name. */
+.progress:not(.message){height:6px;border-radius:3px;background:var(--sunken);overflow:hidden;margin:2px 0 10px}
 .progress-bar{height:100%;background:var(--accent-raw);border-radius:3px;transition:width .2s linear}
 .update-banner{display:flex;align-items:center;gap:12px;padding:12px 12px 12px 14px;margin:8px 0 4px;border:1px solid var(--soft-line);background:var(--soft);border-radius:var(--radius-card)}
 .update-banner strong{display:block;font-size:14.5px;color:var(--ink)}
 .update-banner small{display:block;margin-top:2px;font-size:12px;color:var(--muted)}
 .update-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:var(--surface);color:var(--accent);flex-shrink:0}
 .update-icon svg{width:18px;height:18px}
-.nav-dot{position:absolute;top:8px;left:calc(50% + 8px);width:8px;height:8px;border-radius:50%;background:var(--accent-raw);box-shadow:0 0 0 2px var(--surface)}
+.nav-dot{position:absolute;top:5px;left:calc(50% + 12px);width:8px;height:8px;border-radius:50%;background:var(--accent-raw);box-shadow:0 0 0 2px var(--surface)}
 @media (max-width:359px){.set-seg-row .seg{width:100%}.seg-opt{flex:1;min-width:0;padding:0 6px}}

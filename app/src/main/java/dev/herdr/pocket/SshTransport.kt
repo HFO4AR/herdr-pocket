@@ -9,8 +9,20 @@ import java.util.Base64
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 
 data class Endpoint(val host: String, val port: Int, val user: String)
-class UntrustedHost(val key: String, val fingerprint: String) : Exception("请核对服务器指纹")
-class HostKeyChanged : Exception("服务器主机密钥和之前信任的不一致，已拒绝连接；请先在电脑上核对")
+class UntrustedHost(val key: String, val fingerprint: String, val type: String = "") : Exception("请核对服务器指纹")
+/** The server shows a different key than the pinned one; never accepted automatically. */
+class HostKeyChanged(val fingerprint: String = "", val previous: String = "", val type: String = "") :
+    Exception("电脑的 SSH 指纹和上次信任的不一样，已拒绝连接。先在电脑上核对，确认没问题再重新信任。")
+
+/** "SHA256:…" as printed by `ssh-keygen -lf`, for a base64 public-key blob. */
+fun sshFingerprint(blob: ByteArray): String =
+    "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(blob))
+/** The algorithm name at the start of an SSH public-key blob, e.g. "ssh-ed25519". */
+fun sshKeyType(blob: ByteArray): String {
+    if (blob.size < 4) return ""
+    val n = ((blob[0].toInt() and 255) shl 24) or ((blob[1].toInt() and 255) shl 16) or ((blob[2].toInt() and 255) shl 8) or (blob[3].toInt() and 255)
+    return if (n in 1..64 && blob.size >= 4 + n) String(blob, 4, n, Charsets.US_ASCII) else ""
+}
 /**
  * The request never reached the host (no exec channel was started), so it is safe to send again.
  * [generation] identifies the SSH session it failed on, so concurrent failures trigger one reconnect.
@@ -47,9 +59,12 @@ class SshTransport : AutoCloseable {
             override fun check(host: String, key: ByteArray): Int {
                 val encoded = Base64.getEncoder().encodeToString(key)
                 if (pinnedKey == encoded) return HostKeyRepository.OK
-                if (pinnedKey != null) { pending = HostKeyChanged(); return HostKeyRepository.CHANGED }
-                val hash = Base64.getEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(key))
-                pending = UntrustedHost(encoded, "SHA256:$hash")
+                if (pinnedKey != null) {
+                    val before = try { sshFingerprint(Base64.getDecoder().decode(pinnedKey)) } catch (_: Exception) { "" }
+                    pending = HostKeyChanged(sshFingerprint(key), before, sshKeyType(key))
+                    return HostKeyRepository.CHANGED
+                }
+                pending = UntrustedHost(encoded, sshFingerprint(key), sshKeyType(key))
                 return HostKeyRepository.NOT_INCLUDED
             }
             override fun add(hostkey: HostKey, ui: UserInfo?) = Unit
@@ -210,6 +225,16 @@ class SshTransport : AutoCloseable {
         }
         return path
     }
+    /** True when ~/.herdr-pocket already holds some other bridge version (the app was updated). */
+    fun hasOtherBridge(bytes: ByteArray): Boolean {
+        val ssh = session ?: return false
+        val sftp = ssh.openChannel("sftp") as ChannelSftp
+        return try {
+            sftp.connect(10000)
+            val mine = bridgeName(bytes)
+            sftp.ls("$home/.herdr-pocket").any { val n = (it as ChannelSftp.LsEntry).filename; n.startsWith("bridge-") && n.endsWith(".py") && n != mine }
+        } catch (_: Exception) { false } finally { sftp.disconnect() }
+    }
     fun useBundled(bytes: ByteArray) { bridgePath = "$home/.herdr-pocket/${bridgeName(bytes)}" }
     private fun bridgeName(bytes: ByteArray) = "bridge-" + MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } + ".py"
     fun isConnected() = session?.isConnected == true
@@ -271,7 +296,7 @@ class SshTransport : AutoCloseable {
             }
             // Closed without an exit status: the connection died after the request was sent.
             check(channel.exitStatus != -1 || ssh.isConnected) { "请求发出后连接断了，结果未知。先刷新看看，别直接重发。" }
-            check(channel.exitStatus == 0) { "服务器命令失败：" + err.toString("UTF-8").take(1500) }
+            if (channel.exitStatus != 0) throw ConnectErrors.command(channel.exitStatus, err.toString("UTF-8"))
             val result = JSONObject(buffer.toString("UTF-8"))
             check(result.optBoolean("ok")) { result.optString("error", "请求失败") }
             return result.getJSONObject("data")

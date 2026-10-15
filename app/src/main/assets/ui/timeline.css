@@ -107,3 +107,38 @@
 .sub-chip>svg{width:14px;height:14px;color:var(--accent)}
 .sub-chip>svg:last-child{color:var(--faint)}
 .sub-chip .truncate{max-width:220px}
+/* Tool summaries: file name first (the folder is secondary), diff stats and test outcomes as chips */
+.tool-text.has-file{font-family:inherit;display:flex;align-items:baseline;gap:6px}
+.tool-file{font-family:var(--mono);font-size:12px;color:var(--ink-2);flex:0 0 auto;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tool-dir{font-size:11px;color:var(--faint);flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tl-stat{display:inline-flex;gap:4px;flex-shrink:0;font:600 11px/1 var(--mono);font-variant-numeric:tabular-nums}
+.tl-stat .plus{color:var(--diff-add)}.tl-stat .minus{color:var(--diff-del)}
+.tl-stat:empty{display:none}
+.tl-test{flex-shrink:0;font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px}
+.tl-test.good{color:var(--success);background:var(--success-soft)}
+.tl-test.bad{color:var(--danger);background:var(--danger-soft)}
+.tl-files{font-size:12px;color:var(--muted)}
+.work-facts{display:flex;align-items:center;gap:8px;min-width:0;white-space:nowrap;overflow:hidden}
+.work[open] .work-facts{display:none}
+/* Edits as a diff */
+.tl-diff{margin:0 0 8px;font:11.5px/1.55 var(--mono);font-variant-ligatures:none;white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;background:var(--code-block);border:1px solid var(--line);border-radius:8px;padding:6px 0}
+.tl-diff span{display:block;padding:0 10px;min-height:1.55em}
+.tl-diff .d-add{color:var(--diff-add);background:var(--diff-add-bg)}
+.tl-diff .d-del{color:var(--diff-del);background:var(--diff-del-bg)}
+.tl-diff .d-ctx{color:var(--muted)}
+.tl-diff .d-hunk{color:var(--faint);font-size:10.5px}
+.tool-caption{gap:8px;min-height:32px}
+.tool-cap-file{font-family:var(--mono);color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.tool-cap-side{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.tool-raw{display:flex;justify-content:flex-end;margin-top:-4px}
+/* Reply actions: quiet until needed */
+.message-label{align-items:center}
+.msg-acts{margin-left:auto;display:flex;gap:2px}
+.msg-act{display:inline-flex;align-items:center;gap:4px;min-height:32px;padding:0 8px;border-radius:8px;font-size:12px;color:var(--muted)}
+.msg-act svg{width:14px;height:14px}
+.msg-act:active{background:var(--sunken)}
+/* Sheets opened from a message or a path */
+.select-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.7;max-height:60vh;overflow:auto;padding:12px 14px;border:1px solid var(--line);border-radius:var(--radius-control);background:var(--bg);-webkit-user-select:text;user-select:text}
+.file-sheet-path{font:12px/1.6 var(--mono);color:var(--muted);overflow-wrap:anywhere;margin:0 0 8px;-webkit-user-select:text;user-select:text}
+.file-sheet .section-label{display:flex;align-items:center;gap:8px;margin-top:14px}
+.file-sheet .tool-caption{font-size:11px;color:var(--muted)}

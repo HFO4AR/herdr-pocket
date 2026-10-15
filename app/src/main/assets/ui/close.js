@@ -23,11 +23,36 @@ function closeHold(n,open){
  n.addEventListener('contextmenu',e=>{e.preventDefault();if(Date.now()-fired>800)fire();});
  n.addEventListener('click',e=>{if(Date.now()-fired<800){e.preventDefault();e.stopImmediatePropagation();}},true);
  n.classList.add('holdable');n.setAttribute('aria-haspopup','dialog');}
-function closeHint(list){list.append(el('p','fine center close-hint','长按一行可以关闭会话'));}
+// Swipe a row left to reveal its actions (the same ones long press offers). Only one row stays
+// open; a tap on an open row or anywhere else closes it. The revealed buttons are hidden from
+// assistive tech while closed, so they never shadow the sheet's own 「关闭」.
+const SWIPE={open:null};
+function swipeShut(except){const w=SWIPE.open;if(!w||w===except)return;SWIPE.open=null;w.classList.remove('open');w.querySelector('.swipe-acts')?.setAttribute('aria-hidden','true');w.querySelectorAll('.swipe-act').forEach(b=>{b.tabIndex=-1;});const row=w.querySelector('.swipe-row');if(row)row.style.transform='';}
+document.addEventListener('pointerdown',e=>{if(SWIPE.open&&!SWIPE.open.contains(e.target))swipeShut();},true);
+function closeSwipe(row,actions){
+ const wrap=el('div','swipe');const acts=el('div','swipe-acts');acts.setAttribute('aria-hidden','true');
+ for(const [label,name,tone,fn] of actions){const b=btn(label,'swipe-act'+(tone?' '+tone:''),e=>{e.stopPropagation();swipeShut();fn();},name);b.tabIndex=-1;acts.append(b);}
+ row.classList.add('swipe-row');wrap.append(acts,row);
+ const width=()=>acts.offsetWidth||actions.length*72;
+ let x0=0,y0=0,dx=0,mode='',moved=0,base=0;
+ row.addEventListener('pointerdown',e=>{if(e.button||e.pointerType==='mouse')return;x0=e.clientX;y0=e.clientY;dx=0;mode='';base=wrap.classList.contains('open')?-width():0;});
+ row.addEventListener('pointermove',e=>{if(!x0&&!y0)return;const mx=e.clientX-x0,my=e.clientY-y0;
+  if(!mode){if(Math.abs(mx)>12&&Math.abs(mx)>Math.abs(my)*1.4){mode='swipe';swipeShut(wrap);wrap.classList.add('dragging');try{row.setPointerCapture(e.pointerId);}catch(_){}}else if(Math.abs(my)>12)mode='scroll';}
+  if(mode!=='swipe')return;dx=Math.max(-width()-24,Math.min(0,base+mx));row.style.transform='translateX('+dx+'px)';});
+ const end=()=>{if(mode==='swipe'){moved=Date.now();wrap.classList.remove('dragging');const open=dx<-width()/2;wrap.classList.toggle('open',open);row.style.transform=open?'translateX('+-width()+'px)':'';
+   if(open){SWIPE.open=wrap;acts.removeAttribute('aria-hidden');acts.querySelectorAll('.swipe-act').forEach(b=>{b.tabIndex=0;});}else if(SWIPE.open===wrap)swipeShut();}
+  x0=y0=0;mode='';};
+ row.addEventListener('pointerup',end);row.addEventListener('pointercancel',end);
+ // The click that ends a swipe, or a tap on an open row, only closes it.
+ row.addEventListener('click',e=>{if(Date.now()-moved<400||wrap.classList.contains('open')){e.preventDefault();e.stopImmediatePropagation();if(Date.now()-moved>=400)swipeShut();}},true);
+ return wrap;}
+function closeHint(list){list.append(el('p','fine center close-hint','左滑或长按一行：关闭会话、更多操作'));}
 function agentActions(a){
  const box=sheet(titleOf(a));
- box.append(el('p','fine close-sub',[providerName(a.agent),projectOf(a),stateLabel(a)].filter(Boolean).join(' · ')));
+ box.append(el('p','fine close-sub',[stateLabel(a),providerName(a.agent),projectOf(a),closeIsCh(a)?'通过 ch 连到远端':''].filter(Boolean).join(' · ')));
  menuItem(box,'打开对话',()=>openAgent(a),'chat');
+ if(a.history_ref?.record)menuItem(box,'只读查看历史',()=>openRecord(a.history_ref.record),'history','不连在线窗格，只看记录');
+ menuItem(box,'复制窗格位置',()=>copyText(S.session+' / '+a.pane_id),'copy',S.session+' / '+a.pane_id);
  menuItem(box,'关闭会话',()=>closeSession(a),'x','结束 Agent，或者关掉整个窗格');}
 
 // ─── Close sheet ───────────────────────────────────────────────────────────

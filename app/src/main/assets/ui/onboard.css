@@ -1,0 +1,80 @@
+/* First run, device form, host-key trust, connection banners (onboard.js). Tokens only. */
+
+/* First-run guide */
+.ob-guide{padding:22px 20px 20px}
+.ob-guide-icon{width:48px;height:48px;border-radius:14px;background:var(--soft);color:var(--accent);display:grid;place-items:center;margin-bottom:14px}
+.ob-guide h2{font-size:19px;margin-bottom:4px}
+.ob-guide>.muted{font-size:13px}
+.ob-steps{list-style:none;counter-reset:ob;padding:0;margin:18px 0 4px}
+.ob-steps li{counter-increment:ob;display:flex;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.ob-steps li:first-child{border-top:0}
+.ob-steps li:before{content:counter(ob);flex:0 0 24px;height:24px;border-radius:50%;background:var(--sunken);color:var(--ink-2);font-size:12px;font-weight:650;display:grid;place-items:center;margin-top:1px}
+.ob-steps li>div{min-width:0;flex:1}
+.ob-steps strong{display:block;font-size:14px;font-weight:600;line-height:1.5}
+.ob-steps span{display:block;color:var(--muted);font-size:12px;line-height:1.55}
+.ob-net{margin-top:6px}
+.ob-net summary,.ob-how summary{display:inline-flex;align-items:center;min-height:36px;color:var(--accent);font-size:13px;font-weight:600;cursor:pointer;list-style:none}
+.ob-net summary::-webkit-details-marker,.ob-how summary::-webkit-details-marker{display:none}
+.ob-net summary:after,.ob-how summary:after{content:'';width:6px;height:6px;margin-left:8px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:rotate(45deg) translateY(-2px);transition:transform .15s var(--ease)}
+.ob-net[open] summary:after,.ob-how[open] summary:after{transform:rotate(225deg) translateY(-1px)}
+.ob-net-row{background:var(--sunken);border-radius:var(--radius-control);padding:9px 12px;margin-top:6px}
+.ob-net-row strong{font-size:12px;color:var(--ink)}
+.ob-net-row span{margin-top:1px}
+.ob-guide .wide{margin-top:12px}
+.ob-guide .primary.wide{margin-top:18px}
+
+/* Form */
+.ob-form label,.sheet .ob-label{margin-top:12px}
+.field.invalid{border-color:var(--danger);background:var(--danger-soft)}
+.field-error{color:var(--danger);font-size:12px;font-weight:500;line-height:1.4;margin:5px 2px 0}
+.field-error:empty{display:none}
+.field-hint{display:block;color:var(--muted);font-size:12px;font-weight:400;margin:5px 2px 0}
+.pw-wrap{position:relative}
+.pw-wrap .field{padding-right:50px}
+.pw-toggle{position:absolute;right:2px;top:6px;height:46px;color:var(--muted)}
+.pw-toggle svg{width:19px;height:19px}
+.ob-sub{margin:-2px 0 2px;overflow-wrap:anywhere}
+
+/* Host key */
+.ob-lead{display:flex;gap:10px;align-items:flex-start;background:var(--soft);border:1px solid var(--soft-line);color:var(--ink);border-radius:var(--radius-card);padding:12px 14px;font-size:13px}
+.ob-lead p{line-height:1.6}
+.ob-lead svg{width:20px;height:20px;color:var(--accent);margin-top:1px}
+.ob-lead.danger{background:var(--danger-soft);border-color:var(--danger-line)}
+.ob-lead.danger svg{color:var(--danger)}
+.ob-fp{border:1px solid var(--line-strong);border-radius:var(--radius-card);padding:4px 6px 12px 14px;margin-top:12px;background:var(--surface)}
+.ob-fp-head{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted);font-weight:600}
+.ob-fp-head .icon-btn svg{width:18px;height:18px}
+.ob-fp-value{display:block;font-family:var(--mono);font-size:15px;line-height:1.55;letter-spacing:.2px;color:var(--ink);word-break:break-all;padding-right:8px;user-select:all}
+.ob-how{margin-top:10px}
+.ob-how p{margin:2px 0 8px}
+.ob-cmd{display:flex;align-items:center;gap:6px;background:var(--code-bg);border-radius:var(--radius-control);padding:4px 4px 4px 12px}
+.ob-cmd code{flex:1;min-width:0;font-family:var(--mono);font-size:12px;overflow-wrap:anywhere}
+.ob-cmd .icon-btn svg{width:18px;height:18px}
+
+/* Bridge facts */
+.ob-facts{list-style:none;padding:0;margin:14px 0 0}
+.ob-facts li{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.55;padding:6px 0;color:var(--ink-2)}
+.ob-facts svg{width:17px;height:17px;color:var(--success);margin-top:2px}
+
+/* Banner under the top bar */
+.connection-status>svg{align-self:flex-start;margin-top:1px;width:20px;height:20px}
+.connection-status>.icon-btn{align-self:flex-start;margin:-10px -10px 0 0;color:inherit;opacity:.7}
+.connection-status>.icon-btn svg{width:17px;height:17px}
+.connection-status.warn{color:var(--warn);border-color:var(--warn-line);background:var(--warn-soft)}
+.connection-status .grow>div{color:var(--ink-2);line-height:1.55}
+.ob-banner-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.ob-banner-actions:empty{display:none}
+.ob-banner-actions .secondary{color:var(--ink);min-height:38px}
+
+/* Reconnect pill (outside #app) */
+.net-banner{position:fixed;left:50%;top:calc(62px + env(safe-area-inset-top));transform:translateX(-50%);z-index:18;display:flex;align-items:center;gap:9px;
+ max-width:calc(100% - 32px);width:max-content;min-height:40px;padding:4px 6px 4px 14px;border-radius:999px;background:var(--surface);color:var(--ink);
+ border:1px solid var(--line-strong);box-shadow:var(--shadow-lift);font-size:13px;animation:ob-drop .22s var(--ease)}
+.net-banner.reconnecting,.net-banner.ok{padding-right:16px}
+.net-banner .spinner{width:15px;height:15px}
+.net-banner svg{width:17px;height:17px}
+.net-banner.ok svg{color:var(--success)}
+.net-banner.failed svg,.net-banner.hostkey svg{color:var(--danger)}
+.net-banner .grow{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.net-action{min-height:32px;padding:0 12px;border-radius:999px;background:var(--primary);color:var(--on-primary);font-size:12px;font-weight:600;flex-shrink:0}
+@keyframes ob-drop{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}
