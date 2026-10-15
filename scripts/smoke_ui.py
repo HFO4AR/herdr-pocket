@@ -39,7 +39,7 @@ def find(text, editable=False):
             if text == node.get('text',''):
                 for following in nodes[i+1:]:
                     if 'EditText' in following.get('class',''): return following
-        if text == '消息输入框' and len(candidates)==1: return candidates[0]
+        if text in ('消息输入框', '终端输入') and len(candidates)==1: return candidates[0]
     return None
 
 
