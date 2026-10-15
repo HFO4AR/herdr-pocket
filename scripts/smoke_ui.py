@@ -76,6 +76,12 @@ def main():
     assert len(live)==1 and live[0].startswith('emulator-'),'Require sole emulator, never phone'
     os.environ['ANDROID_SERIAL']=live[0]
     fixture=['-e','fixturePin',os.environ['POCKET_FIXTURE_PIN']] if os.environ.get('POCKET_FIXTURE_PIN') else []
+    if fixture:
+        # A freshly booted emulator may not route to the host yet; wait instead of failing the SSH tests.
+        for _ in range(60):
+            if subprocess.run(['adb','shell','nc','-z','-w','2','10.0.2.2','22222'],capture_output=True,timeout=10).returncode==0: break
+            time.sleep(2)
+        else: raise AssertionError('SSH fixture unreachable from emulator')
     vault=run('shell','am','instrument','-w',*fixture,'dev.herdr.pocket.test/dev.herdr.pocket.SecureProfilesTest').decode()
     if fixture: assert 'ssh-pty: PASS' in vault and 'ssh-reconnect: PASS' in vault,vault
     assert 'terminal-buffer: PASS' in vault,vault

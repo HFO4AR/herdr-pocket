@@ -49,7 +49,13 @@ const STATUS={working:['执行中','work'],blocked:['等你确认','alert'],idle
 function stateLabel(a){return (STATUS[a?.agent_status]||['状态未知','muted'])[0];}
 function stateTone(a){return (STATUS[a?.agent_status]||['','muted'])[1];}
 function providerName(p){return p==='claude'?'Claude':p==='codex'?'Codex':'Agent';}
-function titleOf(a){return (a.terminal_title_stripped||a.terminal_title||a.title||a.agent||'Agent').replace(/^[✳⠀-⣿·•*]+\s*/,'').replace(/\s*\|\s*[^|]+$/,'')||'Agent';}
+// Prefer names that tell agents apart: Herdr's agent title, a meaningful terminal
+// title (not the generic "<dir>: ch" / "<dir>: claude"), then the first prompt.
+function cleanTitle(t){return String(t||'').replace(/^[\s✳✻✽✶⠀-⣿·•*]+/,'').replace(/\s*\|\s*[^|]+$/,'').trim();}
+function genericTitle(t,a){return !t||/^[^:]{1,60}:\s*(ch|claude|codex|bash|zsh|sh|ssh)$/i.test(t)||t===a.agent||/^(claude|codex)( code)?$/i.test(t);}
+function titleOf(a){for(const raw of [a.title,a.terminal_title_stripped,a.terminal_title]){const t=cleanTitle(raw);if(!genericTitle(t,a))return t;}
+ const first=cleanTitle(a.history_ref?.record?.title);if(first&&!/^This session is being continued/.test(first))return first.slice(0,60);
+ return providerName(a.agent)+(projectOf(a)?' · '+projectOf(a):'');}
 function projectOf(a){const p=a.foreground_cwd||a.cwd||'';return p.split('/').filter(Boolean).pop()||'';}
 function toDate(v){if(!v)return null;const d=new Date(typeof v==='number'?v*1000:v);return isNaN(d)?null:d;}
 function time(v){const d=toDate(v);return d?d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'';}

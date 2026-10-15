@@ -89,11 +89,16 @@ class WatchService : Service() {
         handler.postDelayed(::poll, POLL_MS)
     }
 
+    // Same naming as the app: Herdr's agent title first, skipping generic "<dir>: ch" titles.
     private fun displayTitle(a: JSONObject): String {
-        val raw = a.optString("terminal_title_stripped").ifEmpty { a.optString("terminal_title") }.ifEmpty { a.optString("title") }
-        val clean = raw.replace(Regex("^[✳⠀-⣿·•*]+\\s*"), "").replace(Regex("\\s*\\|\\s*[^|]+$"), "").trim()
         val name = if (a.optString("agent") == "claude") "Claude" else if (a.optString("agent") == "codex") "Codex" else "Agent"
-        return if (clean.isEmpty() || clean.endsWith(": ch")) name else "$name · ${clean.take(40)}"
+        val generic = Regex("^[^:]{1,60}:\\s*(ch|claude|codex|bash|zsh|sh|ssh)$", RegexOption.IGNORE_CASE)
+        for (raw in listOf(a.optString("title"), a.optString("terminal_title_stripped"), a.optString("terminal_title"))) {
+            val clean = raw.replace(Regex("^[\\s✳✻✽✶⠀-⣿·•*]+"), "").replace(Regex("\\s*\\|\\s*[^|]+$"), "").trim()
+            if (clean.isNotEmpty() && !generic.matches(clean) && !clean.equals(name, true)) return "$name · ${clean.take(40)}"
+        }
+        val project = a.optString("foreground_cwd").ifEmpty { a.optString("cwd") }.trimEnd('/').substringAfterLast('/')
+        return if (project.isEmpty()) name else "$name · $project"
     }
 
     private fun notify(key: String, title: String, text: String, pane: String, urgent: Boolean) {
