@@ -39,7 +39,8 @@ function terminalsPage(main){
  if(!requireDevice(main))return;
  const head=el('div','row list-actions');
  if(S.sessions.length>1){const s=btn('','pill session-pill',chooseSession,'folder');s.append(el('span','truncate',S.session||'选择会话'),icon('down'));s.setAttribute('aria-label','切换 Herdr 会话 · 当前 '+(S.session||'未选'));head.append(s);}
- head.append(el('span','grow'),ib('refresh','刷新分屏',loadPanes));main.append(head);
+ const facts=el('div','grow live-status');const f=el('span','list-facts');f.append(el('span','fact-count',T.loading&&!T.panes.length?'正在读取窗格…':T.panes.length+' 个普通窗格'));facts.append(f);
+ head.append(facts,ib('refresh','刷新窗格',loadPanes));main.append(head);
  // 1. The phone's own SSH shell: separate from Herdr, survives leaving this screen.
  main.append(el('div','section-label','独立 SSH'));
  const live=T.shell&&!T.shell.ended;
@@ -49,8 +50,8 @@ function terminalsPage(main){
  const side=el('div','row-side');side.append(el('span','badge '+(live?'ok':T.shell?'muted':'plain'),live?'已打开':T.shell?'已结束':'打开'));
  open.append(av,info,side);sshCard.append(open);main.append(sshCard);
  // 2. Herdr's plain panes (not agents), grouped by workspace.
- const label=el('div','section-label group-label');label.append(el('span','','电脑上的 Herdr 分屏'),el('span','group-count',T.loading&&!T.panes.length?'…':String(T.panes.length)));main.append(label);
- if(!T.panes.length){if(T.loading)skeleton(main,2);else{const n=el('div','empty small');n.append(el('h2','','没有普通终端分屏'),el('p','','Agent 在「会话」里；这里只列出 Herdr 里没跑 Agent 的终端。'));main.append(n);}}
+ const label=el('div','section-label group-label');label.append(el('span','','电脑上的 Herdr 窗格'),el('span','group-count',T.loading&&!T.panes.length?'…':String(T.panes.length)));main.append(label);
+ if(!T.panes.length){if(T.loading)skeleton(main,2);else{const n=el('div','empty small');n.append(el('h2','','没有普通窗格'),el('p','','Agent 在「会话」里；这里只列出 Herdr 里没跑 Agent 的终端。'));main.append(n);}}
  const groups=new Map();for(const p of T.panes){const k=p.workspace_label||'工作区';if(!groups.has(k))groups.set(k,[]);groups.get(k).push(p);}
  for(const [ws,list] of groups){if(groups.size>1)main.append(el('div','ws-label','工作区 · '+ws));const card=el('div','card list-card');
   for(const pane of list){const i=paneInfo(pane);const b=btn('','card-button term-row',()=>openPane(pane));const a=el('div','avatar term-av'+(i.idle?' idle':''));a.append(icon('terminal'));
@@ -58,7 +59,7 @@ function terminalsPage(main){
    const meta=el('div','card-meta');meta.append(el('span','',shortPath(pane.foreground_cwd||pane.cwd||'')||i.dir));if(groups.size<=1&&pane.workspace_label)meta.append(el('span','sep',pane.workspace_label));t.append(meta);
    b.append(a,t);card.append(b);}
   main.append(card);}
- main.append(el('p','fine','SSH 终端是手机自己开的 shell，不影响 Herdr。分屏是电脑上的原终端：在手机上输入，等于在电脑上敲键盘。'));
+ main.append(el('p','fine','SSH 终端是手机自己开的 shell，不影响 Herdr。窗格是电脑上的原终端：在手机上输入，等于在电脑上敲键盘。'));
  pullRefresh(main,loadPanes);
 }
 async function loadPanes(){
@@ -102,7 +103,7 @@ function termTouchScroll(entry){
   v=.8*(d/dt)+.2*v;if(Math.abs(d)>0)moved=true;step(d);if(moved&&e.cancelable)e.preventDefault();},{passive:false});
  host.addEventListener('touchend',()=>{y=null;if(!moved||Math.abs(v)<.3||!termMotion())return;let last=performance.now();
   const end=last+1500,run=now=>{const dt=now-last;last=now;v*=Math.pow(.994,dt);if(Math.abs(v)<.05||now>end)return;step(v*dt);entry.glide=requestAnimationFrame(run);};entry.glide=requestAnimationFrame(run);},{passive:true});}
-function openPane(pane){termPrefs();termFontVar();T.view={kind:'pane',pane,session:S.session,title:paneTitle(pane),text:S.demo?'$ pwd\n~/projects/pocket\n$ npm test\nPASS: 离线普通分屏演示\n$ ':'正在读取终端…',draft:'',paused:false,busy:false,demo:S.demo,stick:true};renderTerminal();pollTerminal();}
+function openPane(pane){termPrefs();termFontVar();T.view={kind:'pane',pane,session:S.session,title:paneTitle(pane),text:S.demo?'$ pwd\n~/projects/pocket\n$ npm test\nPASS: 离线普通窗格演示\n$ ':'正在读取终端…',draft:'',paused:false,busy:false,demo:S.demo,stick:true};renderTerminal();pollTerminal();}
 // Live state in words, for the header: connected, read-only, paused or ended.
 function termState(entry){
  if(entry.ended)return ['off','已结束'];if(entry.paused)return ['warn','已暂停'];if(entry.demo)return ['demo','演示'];
@@ -113,13 +114,13 @@ function renderTerminal(){
  const [st,stLabel]=termState(entry);
  const av=el('div','avatar term-av'+(entry.kind==='ssh'?' ssh':''));av.append(icon(entry.kind==='ssh'?'globe':'terminal'),el('span','status-dot '+(st==='ok'?'ok':st==='warn'?'work':'')));head.append(av);
  const name=el('div','grow chat-id');const sub=el('small','term-sub');const chip=el('span','term-state '+st,stLabel);chip.id='term-state';
- sub.append(chip,el('span','',entry.kind==='ssh'?'独立 SSH · '+S.device.user+'@'+S.device.host:'Herdr 分屏 · '+(entry.pane.workspace_label?entry.pane.workspace_label+' · ':'')+entry.pane.pane_id));
+ sub.append(chip,el('span','',entry.kind==='ssh'?'独立 SSH · '+S.device.user+'@'+S.device.host:'Herdr 窗格 · '+(entry.pane.workspace_label?entry.pane.workspace_label+' · ':'')+entry.pane.pane_id));
  name.append(el('h2','',entry.title),sub);
  head.append(name,ib('copy','复制屏幕内容',()=>terminalCopy(entry)),ib('more','终端选项',terminalMenu));root.append(head);
  // The screen: a dark card on the warm page in light theme, a deeper well in dark theme.
  const stage=el('div','term-stage');const surface=el('div','term-surface');surface.id='term-surface';surface.classList.toggle('is-off',!!entry.ended);
  if(entry.kind==='ssh'){surface.append(entry.host);requestAnimationFrame(()=>{if(!entry.disposed){entry.fit.fit();termJump(entry);}});}
- else{const output=el('pre','pane-screen',paneText(entry.text));output.id='pane-screen';output.tabIndex=0;output.setAttribute('aria-label','Herdr 分屏输出');
+ else{const output=el('pre','pane-screen',paneText(entry.text));output.id='pane-screen';output.tabIndex=0;output.setAttribute('aria-label','Herdr 窗格输出');
   output.addEventListener('scroll',()=>{entry.stick=output.scrollHeight-output.scrollTop-output.clientHeight<24;termJump(entry);},{passive:true});
   surface.append(output);requestAnimationFrame(()=>{output.scrollTop=output.scrollHeight;});}
  const jump=btn('','jump-btn term-jump',()=>termBottom(entry),'down');jump.id='term-jump';jump.setAttribute('aria-label','跳到最新输出');jump.hidden=true;surface.append(jump);
@@ -248,8 +249,8 @@ function terminalMenu(){const entry=T.view;const box=sheet('终端选项');
  menuItem(box,'选择文字',()=>terminalSelect(entry),'textCursor','长按选择任意一段，含往上的历史');
  menuItem(box,'刷新 / 恢复读取',()=>{if(entry.kind==='pane'){entry.paused=false;entry.notice='';paintStatus(entry);}else if(entry.paused){toast('SSH 输入异常后需关闭并重新打开；不自动恢复输入');return;}pollTerminal();},'refresh');
  menuItem(box,'回到底部',()=>termBottom(entry),'down');
- if(entry.kind==='ssh')menuItem(box,'关闭 SSH shell',()=>confirmAction('关闭 SSH shell？','这会关闭独立 SSH 通道，里面运行的程序可能随之结束。Herdr 分屏不受影响。','关闭 shell',async()=>{try{if(!entry.demo)await rpc('shellClose',{terminalId:entry.id});entry.disposed=true;entry.observer.disconnect();entry.term.dispose();if(T.shell===entry)T.shell=null;leaveTerminal();render();}catch(e){error(e);}},true),'x','里面运行的程序可能随之结束');
- else box.append(el('p','fine','返回列表只退出手机查看，不关闭电脑上的分屏。'));
+ if(entry.kind==='ssh')menuItem(box,'关闭 SSH shell',()=>confirmAction('关闭 SSH shell？','这会关闭独立 SSH 通道，里面运行的程序可能随之结束。Herdr 窗格不受影响。','关闭 shell',async()=>{try{if(!entry.demo)await rpc('shellClose',{terminalId:entry.id});entry.disposed=true;entry.observer.disconnect();entry.term.dispose();if(T.shell===entry)T.shell=null;leaveTerminal();render();}catch(e){error(e);}},true),'x','里面运行的程序可能随之结束');
+ else box.append(el('p','fine','返回列表只退出手机查看，不关闭电脑上的窗格。'));
 }
 // Read-only agent screen (chat 「终端」 tab): a terminal card that keeps the latest lines in view
 // while you are at the bottom, and offers a way back when you scrolled up to read.

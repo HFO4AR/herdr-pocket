@@ -48,3 +48,11 @@
 
 /* Short landscape screens: keep the bar slim beside the keyboard. */
 @media (max-height:500px){.mode-bar{margin-bottom:2px}}
+
+/* Footer stacking (design QA): the bar is one slim line that borrows the footer's top padding, and it
+   steps aside while something in the footer needs the person (a question / approval card, the slash
+   list or a command card) — 「切换模式」 is disabled then anyway — and while the mode is still unknown. */
+.composer-wrap .mode-bar{margin:-6px 0 -2px}
+.composer-wrap .mode-bar.mode-unknown,
+.composer-wrap:has(.confirm-panel,.qa-card,.slash-pop,.slash-card) .mode-bar{display:none}
+@media (max-height:560px){.composer-wrap .mode-bar{margin:-6px 0 -4px}}

@@ -120,8 +120,11 @@ await page.evaluate(()=>{fx.keyError=null;});
 
 // Blocked on a question, or a message being sent: no Shift+Tab (it could approve a dialog).
 await page.evaluate(()=>{fx.agents[0]={...fx.agents[0],agent_status:'blocked'};S.chat.agent=fx.agents[0];S.agents=fx.agents;renderComposer();});
-assert.ok(await switchBtn(page).isDisabled(),'disabled while blocked');
-assert.match(await switchBtn(page).getAttribute('title'),/可能直接批准/);
+// The confirm panel owns the footer then: the bar steps aside (design QA), the switch stays disabled underneath.
+const hiddenSwitch=page.locator('#mode-bar .mode-switch');
+assert.ok(await hiddenSwitch.isDisabled(),'disabled while blocked');
+assert.match(await hiddenSwitch.getAttribute('title'),/可能直接批准/);
+assert.equal(await page.locator('#mode-bar').isVisible(),false,'bar steps aside for the confirm panel');
 await page.evaluate(()=>{fx.agents[0]={...fx.agents[0],agent_status:'idle'};S.chat.agent=fx.agents[0];S.outbox.push({key:draftKey(),text:'x',state:'sending',at:Date.now()});renderComposer();});
 assert.ok(await switchBtn(page).isDisabled(),'disabled while a send is in flight');
 await page.evaluate(()=>{S.outbox=[];renderComposer();});

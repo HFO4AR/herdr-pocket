@@ -79,6 +79,7 @@ function modePaintBar(bar,a){
  if(box.dataset.sig!==sig){const changed=box.dataset.sig!==undefined&&box.dataset.sig!=='';box.dataset.sig=sig;
   box.replaceChildren(...(chips.length?chips.map(c=>modeChip(...c)):[modeChip(m?.known?'模式看不到':'正在读取模式…','m-quiet')]));
   if(changed&&chips.length){box.classList.remove('mode-flip');void box.offsetWidth;box.classList.add('mode-flip');}}
+ bar.classList.toggle('mode-unknown',!chips.length&&!m?.known);
  info.setAttribute('aria-label','模式详情：'+(chips.map(c=>c[0]).join('，')||'还没读到'));
  const why=modeBlockedWhy(a);sw.disabled=!!why;sw.title=why||'按一次 Shift+Tab，切到下一个模式';
  sw.classList.toggle('busy',!!MD.busy);sw.lastChild.textContent=MD.busy?'切换中…':'切换模式';}

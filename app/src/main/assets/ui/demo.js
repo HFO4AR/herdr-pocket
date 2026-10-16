@@ -30,9 +30,9 @@ async function demoRequest(op,r){
  if(op==='sessions')return{sessions:[{name:'demo',running:true}]};
  if(op==='agents'||op==='status')return{agents:demoAgents};
  if(op==='panes')return{panes:[{pane_id:'w1:p3',terminal_id:'demo-term',identity:'demo-pane',workspace_label:'演示项目',tab_id:'w1:t1',cwd:'~/projects/pocket',terminal_title:'开发终端'}]};
- if(op==='paneRead')return{text:'$ pwd\n~/projects/pocket\n$ npm test\nPASS: 离线普通分屏演示\n$ '};
+ if(op==='paneRead')return{text:'$ pwd\n~/projects/pocket\n$ npm test\nPASS: 离线普通窗格演示\n$ '};
  if(op==='account')return{ssh_user:'demo',hostname:'workstation'};
- if(op==='catalog'){let rows=demoRecords;if(r.thread)rows=rows.filter(x=>x.thread===r.thread);if(r.query)rows=rows.filter(x=>JSON.stringify(x).includes(r.query));return{records:rows,total:rows.length,next:null};}
+ if(op==='catalog'){let rows=demoRecords.slice().sort((a,b)=>b.modified-a.modified);if(r.thread)rows=rows.filter(x=>x.thread===r.thread);if(r.query)rows=rows.filter(x=>JSON.stringify(x).includes(r.query));return{records:rows,total:rows.length,next:null};}
  if(op==='history'){const rec=demoRecords.find(x=>x.id===r.record_id);let messages;
   messages=demoHistory(rec.id,r.before!==undefined);
   return{record:rec,messages,children:demoRecords.filter(x=>x.parent===rec.thread),before:r.before!==undefined?0:10,has_more:r.before===undefined&&rec.id==='demo-root'};}

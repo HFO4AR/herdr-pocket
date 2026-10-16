@@ -85,3 +85,5 @@
  .qa-mini{padding:4px 6px 4px 8px}
  .qa-mini small{display:none}
 }
+/* Landscape / keyboard open: the card scrolls inside so a strip of the conversation stays visible above it. */
+@media(max-height:500px){.composer-wrap .qa-card{max-height:44vh}}

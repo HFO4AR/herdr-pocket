@@ -37,7 +37,7 @@ const app=document.getElementById('app'),overlay=document.getElementById('overla
 
 // ─── Feedback ───────────────────────────────────────────────────────────────
 let toastTimer;
-function toast(text){const n=document.getElementById('toast');const c=document.getElementById('composer');n.style.bottom=c?c.offsetHeight+14+'px':'';n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.classList.remove('show'),4200);}
+function toast(text){const n=document.getElementById('toast');const c=document.getElementById('composer');n.style.bottom=c?Math.min(c.offsetHeight+14,Math.round(innerHeight*.42))+'px':'';n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.classList.remove('show'),4200);}
 function error(e){toast(e.message||String(e));}
 async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const t=el('textarea');t.value=text;document.body.append(t);t.select();document.execCommand('copy');t.remove();}toast('已复制');}
 function sheet(title){dropGhost();overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);back.onclick=e=>{if(e.target===back)closeSheet();};overlay.append(back);return body;}
@@ -142,7 +142,7 @@ function pullRefresh(main,fn){
 
 // ─── Devices & connection ───────────────────────────────────────────────────
 // Devices, device form, connecting, host-key trust, bridge install and disconnect live in onboard.js.
-async function startDemo(){if(S.loading){toast('正在连接，请稍候');return;}S.connectError='';if(S.device&&!S.demo){confirmAction('断开并体验演示？','演示不连接任何电脑，也不会给 Agent 发消息。','进入演示',async()=>{await disconnect(false);startDemo();});return;}try{await rpc('demo');S.demo=true;S.device={id:'demo',name:'演示工作站',user:'demo',host:'workstation.local',port:22};S.account={ssh_user:'demo',hostname:'workstation'};S.session='demo';S.sessions=['demo'];S.agents=demoAgents;S.records=demoRecords;S.tab='live';S.chat=null;render();}catch(e){error(e);}}
+async function startDemo(){if(S.loading){toast('正在连接，请稍候');return;}S.connectError='';if(S.device&&!S.demo){confirmAction('断开并体验演示？','演示不连接任何电脑，也不会给 Agent 发消息。','进入演示',async()=>{await disconnect(false);startDemo();});return;}try{await rpc('demo');S.demo=true;S.device={id:'demo',name:'演示工作站',user:'demo',host:'workstation.local',port:22};S.account={ssh_user:'demo',hostname:'workstation'};S.session='demo';S.sessions=['demo'];S.agents=demoAgents;S.records=demoRecords.slice().sort((a,b)=>b.modified-a.modified);S.tab='live';S.chat=null;render();}catch(e){error(e);}}
 async function loadAccount(){const epoch=S.epoch;try{const a=await remote('account');if(epoch!==S.epoch)return;S.account=a;if(S.tab==='devices'&&!S.chat)render();}catch(e){if(epoch===S.epoch)error(e);}}
 
 // ─── Live agents ────────────────────────────────────────────────────────────
@@ -194,7 +194,9 @@ function livePage(main){
  const actions=el('div','row list-actions');
  if(S.sessions.length>1){const s=btn('','pill session-pill',chooseSession,'folder');s.append(el('span','truncate',S.session||'选择会话'),icon('down'));s.setAttribute('aria-label','切换 Herdr 会话 · 当前 '+(S.session||'未选'));actions.append(s);}
  const counts=S.agents.length&&!S.liveError&&!(S.liveLoading&&!S.agents.length);
- actions.append(counts?liveStatus():el('span','grow'),ib('refresh','刷新会话',loadLive));if(S.device&&S.session)actions.append(createButton());
+ actions.append(counts?liveStatus():el('span','grow'),ib('refresh','刷新会话',loadLive));
+ // With no sessions the empty state carries the one 新建 button.
+ if(S.device&&S.session&&S.agents.length)actions.append(createButton());
  main.append(actions);
  if(S.liveLoading&&!S.agents.length){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并关联历史记录…');skeleton(main,3);return;}
  if(S.liveError){empty(main,'会话读取失败',S.liveError,btn('重新读取','primary',loadLive));return;}

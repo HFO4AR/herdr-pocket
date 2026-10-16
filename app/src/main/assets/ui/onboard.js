@@ -74,7 +74,7 @@ function deviceCard(d){
  const line=el('div','device-line');line.append(icon(d.auth==='key'?'key':'lock'),document.createTextNode(d.auth==='key'?'用这台手机的密钥登录':d.remember?'密码已加密保存':'连接时输入密码'));card.append(line);
  const actions=el('div','device-actions');const busy=S.loading&&S.connecting?.id===d.id;
  const connect=btn(busy?'正在连接…':current?'已连接':'连接设备',current?'secondary':'primary',()=>connectDevice(d));connect.disabled=S.loading;
- actions.append(connect,btn('删除','secondary danger',()=>confirmAction('删除设备？','会移除这台设备及其保存的密码。','删除',async()=>{try{S.devices=(await rpc('deleteDevice',{id:d.id})).devices;if(S.connectFail?.device===d.id)S.connectFail=null;render();}catch(e){error(e);}},true)));
+ actions.append(connect,btn('删除','link-btn danger device-delete',()=>confirmAction('删除设备？','会移除这台设备及其保存的密码。','删除',async()=>{try{S.devices=(await rpc('deleteDevice',{id:d.id})).devices;if(S.connectFail?.device===d.id)S.connectFail=null;render();}catch(e){error(e);}},true)));
  card.append(actions);return card;}
 
 function connectionCard(){

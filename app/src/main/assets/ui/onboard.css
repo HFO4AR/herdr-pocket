@@ -78,3 +78,6 @@
 .net-banner .grow{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .net-action{min-height:32px;padding:0 12px;border-radius:999px;background:var(--primary);color:var(--on-primary);font-size:12px;font-weight:600;flex-shrink:0}
 @keyframes ob-drop{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}
+
+/* 删除 stays available but quieter than 连接设备 (a destructive action is not the primary one). */
+.device-actions .device-delete{flex:0 0 auto;min-height:44px;padding:0 12px;color:var(--danger);font-weight:600}
