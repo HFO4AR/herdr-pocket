@@ -2669,7 +2669,11 @@ def parse_menu(text, provider=""):
     # A live menu sits at the bottom: only a submit row, hints and blank lines may follow.
     if sum(1 for x in lines[last_line + 1:] if x.strip()) > 14: return None
     submit, cursor = None, None
-    for index in range(last_line + 1, min(len(lines), last_line + 12)):
+    # Claude's multi-select puts Submit under the last option but above the rule and the
+    # trailing "Chat about this" row, so look right after the last real option.
+    after = run[-1]["line"]
+    if len(run) > 1 and re.match(r"(?i)chat about this", run[-1]["rest"].strip()): after = run[-2]["line"]
+    for index in range(after + 1, min(len(lines), last_line + 12)):
         match = MENU_SUBMIT.match(lines[index].strip())
         if match:
             submit = {"label": match["label"], "line": index}
@@ -2727,11 +2731,12 @@ def parse_menu(text, provider=""):
     else: kind = "question"
     chat = next((r["n"] for r in run if r["label"].lower().startswith("chat about this")), None)
     multi = any(r["checked"] is not None for r in run)
+    last_real = next((r for r in reversed(run) if r["n"] != chat), None)
     for row in run:
         row["chat"] = row["n"] == chat
         # Only Claude question dialogs have a text row; elsewhere typed letters may be shortcuts (y/n/p).
         row["input"] = provider == "claude" and kind == "question" and (
-            bool(MENU_INPUT.match(row["label"])) or row["n"] == (chat or 0) - 1 or bool(multi and submit and row is run[-1]))
+            bool(MENU_INPUT.match(row["label"])) or row["n"] == (chat or 0) - 1 or bool(multi and submit and row is last_real))
     stable = [kind, multi, context, [(r["n"], r["label"]) for r in run if not r["input"]]]
     return {"kind": kind, "multi": multi, "cursor": cursor, "question": question, "context": context, "esc": menu_esc(lines, run, last_line),
             "tabs": [t for t in tabs if t["label"].lower() != "submit"],

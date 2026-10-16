@@ -51,6 +51,27 @@ CLAUDE_MULTI = "\n".join([
     "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
 ])
 
+# Captured from Claude Code 2.1.268: in a multi-select the Submit row sits under the last option,
+# above the rule and the trailing "Chat about this" row.
+CLAUDE_MULTI_CHAT = "\n".join([
+    RULE,
+    "←  ☒ Q1  ☒ Q2  ☐ Q3  ✔ Submit  →",
+    "Which of the following options should be enabled (multiple",
+    "choices allowed)?",
+    "❯ 1. [ ] 选项一",
+    "  这是一个较长的中文描述句子，用来说明该选项的具体含义与适用",
+    "  场景，方便理解。",
+    "  2. [ ] 选项二",
+    "  这个选项的描述同样采用较长的中文句子。",
+    "  3. [ ] 选项三",
+    "  第三个选项也配有一段中文说明。",
+    "  4. [ ] Type something",
+    "     Submit",
+    RULE,
+    "  5. Chat about this",
+    "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+])
+
 CLAUDE_BASH = "\n".join([
     "● 我先清掉旧的构建结果。",
     "",
@@ -138,6 +159,17 @@ class ParseMenuTests(unittest.TestCase):
         focused = CLAUDE_MULTI.replace("❯ 1.", "  1.").replace("     Next", "❯    Next")
         self.assertEqual(bridge.parse_menu(focused, "claude")["cursor"], "submit")
 
+    def test_claude_multi_select_submit_above_chat_row(self):
+        menu = bridge.parse_menu(CLAUDE_MULTI_CHAT, "claude")
+        self.assertTrue(menu["multi"])
+        self.assertEqual(menu["submit"], "Submit")
+        self.assertEqual([(r["n"], r["input"], r["chat"]) for r in menu["options"]],
+                         [(1, False, False), (2, False, False), (3, False, False), (4, True, False), (5, False, True)])
+        self.assertEqual(menu["options"][0]["description"], "这是一个较长的中文描述句子，用来说明该选项的具体含义与适用 场景，方便理解。")
+        self.assertEqual(menu["options"][3]["description"], "")
+        focused = CLAUDE_MULTI_CHAT.replace("❯ 1.", "  1.").replace("     Submit", "❯    Submit")
+        self.assertEqual(bridge.parse_menu(focused, "claude")["cursor"], "submit")
+
     def test_claude_permission_dialog_is_an_approval_with_command_context(self):
         menu = bridge.parse_menu(CLAUDE_BASH, "claude")
         self.assertEqual(menu["kind"], "approval")
@@ -223,11 +255,14 @@ class FakeMenu:
     def screen(self):
         lines = [RULE, self.question, ""]
         for n, label in enumerate(self.labels, 1):
+            if self.multi and n == self.chat_row: continue
             if self.window and not self.top <= n < self.top + self.window: continue
             if n == self.input_row and self.typed and not self.swallow_text: label = self.typed
             box = ("[✔] " if n in self.checked else "[ ] ") if self.multi and n != self.chat_row else ""
             lines.append(("❯ " if self.cursor == n else "  ") + "%d. %s%s" % (n, box, label))
         if self.multi: lines.append(("❯" if self.cursor == "submit" else " ") + "    Submit")
+        if self.multi and self.chat_row:
+            lines += [RULE, ("❯ " if self.cursor == self.chat_row else "  ") + "%d. %s" % (self.chat_row, self.labels[self.chat_row - 1])]
         lines += ["", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
         return "\n".join(lines)
 
@@ -235,11 +270,13 @@ class FakeMenu:
         last = len(self.labels)
         if self.after_key: self.after_key(self)
         if self.stuck: return
+        if self.multi and self.chat_row: last -= 1
         if name == "down":
-            if self.cursor == last and self.multi: self.cursor = "submit"
+            if self.cursor == "submit" and self.chat_row: self.cursor = self.chat_row
+            elif self.cursor == last and self.multi: self.cursor = "submit"
             elif self.cursor != "submit": self.cursor = min(last, self.cursor + self.jump)
         elif name == "up":
-            self.cursor = last if self.cursor == "submit" else max(1, self.cursor - self.jump)
+            self.cursor = last if self.cursor == "submit" else "submit" if self.multi and self.cursor == self.chat_row else max(1, self.cursor - self.jump)
         elif name == "enter":
             if self.multi and self.cursor != "submit": self.checked ^= {self.cursor}
             else: self.submitted = self.cursor
@@ -276,6 +313,7 @@ class AnswerTests(unittest.TestCase):
         if command[:2] == ["pane", "send-text"]:
             self.writes.append(("text", command[3]))
             self.fake.typed += command[3]
+            if getattr(self.fake, "auto_check", False): self.fake.checked.add(self.fake.input_row)
             return {}
         raise AssertionError(args)
 
@@ -375,6 +413,15 @@ class AnswerTests(unittest.TestCase):
         self.assertEqual(self.fake.checked, {2, 3})
         self.assertEqual(self.fake.submitted, "submit")
         self.assertIn(("text", "还有 tmp/"), self.writes)
+
+    def test_multi_select_with_chat_row_below_submit(self):
+        # The layout Claude Code really draws; typing into the input row checks it by itself.
+        self.fake = FakeMenu(["选项一", "选项二", "选项三", "Type something", "Chat about this"], multi=True, input_row=4, chat_row=5)
+        self.fake.auto_check = True
+        self.answer(action="multi", options=[], option=4, text="全都不要")
+        self.assertEqual(self.fake.checked, {4})
+        self.assertEqual(self.fake.submitted, "submit")
+        self.assertEqual(self.keys(), ["down", "down", "down", "down", "enter"])
 
     def test_option_scrolled_out_of_view_is_reached_and_verified(self):
         labels = ["选项一", "选项二", "选项三", "选项四", "Type something.", "Chat about this"]
