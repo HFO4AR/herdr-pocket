@@ -18,8 +18,9 @@ class SecureProfilesTest : Instrumentation() {
             testConnectErrors()
             testShareIn()
             testIdentity()
+            testWatchRules()
             if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeepAlive(); testKeyLogin() }
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS" else "ssh-pty: SKIPPED") })
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\nwatch-rules: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS" else "ssh-pty: SKIPPED") })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
@@ -117,6 +118,52 @@ class SecureProfilesTest : Instrumentation() {
         return "PASS"
     }
     /** Raw JSch / socket / shell failures become short Chinese errors with a stable code. */
+    /** Background alerts: Codex questions (在问你), sub-agents and pacing — the watcher's pure rules. */
+    private fun testWatchRules() {
+        val r = WatchRules
+        val ask = WatchRules.Ask("call_1", "先修哪个？\n细节", 1)
+        check(r.effective("idle", ask, false, null, false, "working") == "ask") { "idle + question = ask" }
+        check(r.effective("done", ask, true, null, false, "working") == "done") { "put aside: not waiting" }
+        check(r.effective("working", ask, false, null, false, "ask") == "working") { "moved on" }
+        check(r.effective("idle", ask, false, 2, true, "working") == "ask") { "question wins over sub-agents" }
+        check(r.effective("idle", null, false, 2, true, "working") == "kids") { "sub-agents run" }
+        check(r.effective("idle", null, false, null, true, "kids") == "kids") { "unknown keeps the hold" }
+        check(r.effective("idle", null, false, null, false, "kids") == "idle") { "not asked: Herdr's state" }
+        val none = emptySet<String>()
+        fun alert(was: String?, now: String, id: String? = null, seen: Set<String> = none) = r.step(was, now, id, seen).alert
+        check(alert("working", "ask", "call_1") == WatchRules.Alert.ASK) { "ask notifies" }
+        check(alert("kids", "ask", "call_1") == WatchRules.Alert.ASK) { "ask after sub-agents" }
+        check(alert("idle", "ask", "call_1") == WatchRules.Alert.ASK) { "late transcript: re-check finds it" }
+        check(alert("working", "ask", "call_1", setOf("call_1")) == WatchRules.Alert.NONE) { "once per question" }
+        check(alert(null, "ask", "call_1") == WatchRules.Alert.NONE) { "first sight is silent" }
+        check(alert("ask", "ask", "call_1") == WatchRules.Alert.NONE) { "no change" }
+        check(r.step("ask", "working", null, none).let { it.withdraw && it.alert == WatchRules.Alert.NONE }) { "answered: withdraw" }
+        check(r.step("blocked", "idle", null, none).let { it.withdraw && it.alert == WatchRules.Alert.NONE }) { "approved: withdraw" }
+        check(!r.step("working", "idle", null, none).withdraw) { "done withdraws nothing" }
+        check(alert("working", "blocked") == WatchRules.Alert.BLOCKED) { "blocked" }
+        // A parent whose sub-agents run: 做完了 exactly once, after the last one finished.
+        var was: String? = "working"
+        val alerts = ArrayList<WatchRules.Alert>()
+        for (running in listOf(2, 1, 1, null, 0, 0)) {
+            val now = r.effective("idle", null, false, running, was in WatchRules.BUSY, was)
+            r.step(was, now, null, none).alert.takeIf { it != WatchRules.Alert.NONE }?.let { alerts.add(it) }
+            was = now
+        }
+        check(alerts == listOf(WatchRules.Alert.DONE)) { "kids: one 做完了, got $alerts" }
+        // Questions are looked for only after a stop (plus one re-check), and only for Codex.
+        check(r.wantsAsk("idle", "working", "codex", 0) && r.wantsAsk("done", "kids", "codex", 0)) { "after a stop" }
+        check(!r.wantsAsk("idle", "working", "claude", 0)) { "Claude asks by blocking" }
+        check(!r.wantsAsk("idle", "idle", "codex", 0) && r.wantsAsk("idle", "idle", "codex", 1)) { "re-check only when due" }
+        check(!r.wantsAsk("working", "working", "codex", 1)) { "busy: no" }
+        check(r.retriesAfter(true, 0, false) == WatchRules.ASK_RETRIES && r.retriesAfter(false, 1, false) == 0 && r.retriesAfter(true, 0, true) == 0) { "retries" }
+        check(r.interval(listOf("idle", "blocked", "ask"), false) == WatchRules.IDLE_POLL_MS) { "all waiting: slow" }
+        check(r.interval(listOf("idle", "kids"), false) == WatchRules.POLL_MS && r.interval(listOf("idle"), true) == WatchRules.POLL_MS) { "busy or re-check: quick" }
+        check(r.askText(ask.text, 1) == "在问你：先修哪个？") { r.askText(ask.text, 1) }
+        check(r.askText("选哪个？", 3) == "在问你：选哪个？（共 3 个问题）") { "count" }
+        check(r.askText("", 1) == "在问你，等你回答") { "empty" }
+        check(r.askText("长".repeat(200), 1).length == "在问你：".length + 80) { "clipped" }
+        check(r.counts(1, 2, 3, "做完了") == "1 个等你确认 · 2 个在问你 · 3 个做完了" && r.counts(0, 0, 0, "x") == "") { "counts" }
+    }
     private fun testConnectErrors() {
         val lan = Endpoint("192.168.1.20", 22, "yuki")
         fun code(e: Throwable, at: Endpoint = lan) = ConnectErrors.connect(e, at).code

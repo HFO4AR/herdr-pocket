@@ -53,7 +53,7 @@ const QA_ASIDE={ids:new Set(),dev:null};
 function qaAsideLoad(){const dev=cacheDevice();if(QA_ASIDE.dev===dev)return;QA_ASIDE.dev=dev;QA_ASIDE.ids=new Set();
  if(dev)cacheGet('qa-aside',dev).then(v=>{if(QA_ASIDE.dev!==dev||!Array.isArray(v?.ids))return;const before=QA_ASIDE.ids.size;v.ids.forEach(x=>QA_ASIDE.ids.add(String(x)));if(QA_ASIDE.ids.size!==before&&S.chat){paintTimeline();renderComposer();}});}
 function qaAside(key){qaAsideLoad();return QA_ASIDE.ids.has(key);}
-function qaSetAside(key,on){qaAsideLoad();if(on)QA_ASIDE.ids.add(key);else QA_ASIDE.ids.delete(key);cachePut('qa-aside',{ids:[...QA_ASIDE.ids].slice(-100)});}
+function qaSetAside(key,on){qaAsideLoad();if(on)QA_ASIDE.ids.add(key);else QA_ASIDE.ids.delete(key);cachePut('qa-aside',{ids:[...QA_ASIDE.ids].slice(-100)});syncWatch();}
 // "Answered" holds for a few seconds; if the same menu is still there afterwards, it can be retried.
 function qaSent(st){return !!st.sent&&Date.now()-st.sent<8000;}
 function qaLine(t){return String(t||'').replace(/[\r\n\t]+/g,' ').replace(/[\x00-\x1f\x7f]/g,'').trim();}

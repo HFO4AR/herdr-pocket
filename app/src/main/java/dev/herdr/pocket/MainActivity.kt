@@ -60,6 +60,7 @@ class MainActivity : Activity() {
     @Volatile private var watchSession = ""
     @Volatile private var watchStates = "{}"
     @Volatile private var watchKids = "{}"
+    @Volatile private var watchAsks = "{}"
     private var watched = false
     // One picker at a time: the request waiting for it, how many pictures it may add, the camera target.
     private var pickId: String? = null
@@ -380,6 +381,7 @@ class MainActivity : Activity() {
                             watchSession = req.optString("session")
                             watchStates = req.optJSONObject("states")?.toString() ?: "{}"
                             watchKids = req.optJSONObject("kids")?.toString() ?: "{}"
+                            watchAsks = req.optJSONObject("asks")?.toString() ?: "{}"
                             success(id, JSONObject())
                         }
                         "setAlerts" -> {
@@ -603,7 +605,7 @@ class MainActivity : Activity() {
             val alerts = core.alertsEnabled && watchSession.isNotEmpty() && notificationsAllowed()
             val keep = core.keepAliveEnabled
             if (alerts || keep) {
-                try { WatchService.start(this, if (alerts) watchSession else "", watchStates, watchKids, keep, core.keepAliveMinutes); watched = true } catch (_: Exception) {}
+                try { WatchService.start(this, if (alerts) watchSession else "", watchStates, watchKids, keep, core.keepAliveMinutes, watchAsks); watched = true } catch (_: Exception) {}
             }
         }
         core.enterBackground(kept = watched)
@@ -613,6 +615,7 @@ class MainActivity : Activity() {
         super.onResume()
         WatchService.stop(this)
         watched = false
+        WatchService.clearWaiting(this)
         // Reuse the session when it stayed warm; otherwise the next request checks it with one channel
         // open and reconnects only if that fails (PocketCore.enterForeground).
         core.enterForeground()

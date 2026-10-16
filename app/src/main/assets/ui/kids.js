@@ -29,14 +29,19 @@ function kidsRemoteItem(a){
  if(!remote||!record_id||!thread||!['claude','codex'].includes(a.agent))return null;
  const k=kidsKey(a),busy=kidsRunning(a)||['working','blocked'].includes(a.agent_status),last=K.ask.get(k)||0;
  if(Date.now()-last<(busy?10000:30000))return null;K.ask.set(k,Date.now());
- return kidsGlance(a,{key:k,provider:a.agent,thread,record_id,remote});}
+ const item=kidsGlance(a,{key:k,provider:a.agent,thread,record_id,remote});
+ // A stopped Codex: also whether its async question waits (a stat there while nothing changed).
+ if(a.agent==='codex'&&['idle','done'].includes(a.agent_status)){item.ask=true;const g=GL.map.get(k);if(g?.ask_stamp)item.ask_stamp=g.ask_stamp;}
+ return item;}
 // ch panes in their own request (a remote read takes ~1 s), so local previews never wait on it.
 let kidsRemoteBusy=false;
 async function kidsRemoteRefresh(){
  // An older bridge without `glance` is asked once (glance.js) and then left alone.
  if(kidsRemoteBusy||GL.unsupported||S.demo||!S.device||!S.session)return;const items=S.agents.map(kidsRemoteItem).filter(Boolean).slice(0,40);if(!items.length)return;
  kidsRemoteBusy=true;const session=S.session;
- try{const r=await remote('glance',{items});if(session!==S.session)return;for(const [k,v] of Object.entries(r?.previews||{}))if(v&&typeof v==='object')kidsTake(k,v.kids);}
+ try{const r=await remote('glance',{items});if(session!==S.session)return;let asked=false;const status=new Map(S.agents.map(a=>[agentKey(a),a.agent_status||'']));
+  for(const [k,v] of Object.entries(r?.previews||{}))if(v&&typeof v==='object'){kidsTake(k,v.kids);if(glanceTakeAsk(k,v,status.get(k)||''))asked=true;}
+  if(asked){glanceSave();if(!glanceRegroup())glancePaint();syncWatch();}}
  catch(e){if(/Unknown operation|不支持的操作|unsupported/i.test(e?.message||''))GL.unsupported=true;/* otherwise the next poll asks again */}
  finally{kidsRemoteBusy=false;}}
 // The list poll asks again for agents whose sub-agents run even when the parent itself is idle.

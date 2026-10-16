@@ -132,6 +132,34 @@ class GlanceTests(unittest.TestCase):
         self.write("codex", rel, [rows[0], codex({"type": "function_call", "name": "request_user_input", "call_id": "c", "arguments": json.dumps(args)})])
         self.assertNotIn("ask", self.ask(item)["s/q"])
 
+    def test_watcher_asks_for_the_question_only_and_cheaply(self):
+        """The background watcher: "preview": false with "ask" — no preview, the waiting question,
+        then a stat only while the transcript does not change."""
+        rel = "2026/10/15/rollout-2026-10-15T09-00-00-" + CODEX_THREAD + ".jsonl"
+        args = {"questions": [{"title": "先修哪个？\n细节", "options": ["A", "B"]}]}
+        rows = [codex_msg("user", "问我"),
+                codex({"type": "function_call", "name": "request_user_input_async", "call_id": "call_w", "arguments": json.dumps(args, ensure_ascii=False)}),
+                codex({"type": "function_call_output", "call_id": "call_w", "output": "{\"accepted\":true}"})]
+        self.write("codex", rel, rows)
+        item = {"key": "s/w", "provider": "codex", "thread": CODEX_THREAD, "record_id": self.key("codex", rel), "preview": False, "ask": True}
+        out = self.ask(item)["s/w"]
+        self.assertTrue(out["kids_only"]); self.assertNotIn("reply", out); self.assertNotIn("turn", out); self.assertNotIn("kids", out)
+        self.assertEqual(out["ask"]["call_id"], "call_w"); self.assertEqual(out["ask"]["text"], "先修哪个？"); self.assertEqual(out["ask"]["count"], 1)
+        with patch.object(bridge, "glance_tail", side_effect=AssertionError("read")):
+            same = self.ask(dict(item, ask_stamp=out["ask_stamp"]))["s/w"]
+        self.assertEqual(same, {"kids_only": True, "ask_same": True, "ask_stamp": out["ask_stamp"]})
+        # Answered (any later user message): no question, a new stamp.
+        self.write("codex", rel, rows + [codex_msg("user", "<send_user_message_question_reply>\n[]\n</send_user_message_question_reply>")])
+        after = self.ask(dict(item, ask_stamp=out["ask_stamp"]))["s/w"]
+        self.assertNotIn("ask", after); self.assertNotIn("ask_same", after); self.assertNotEqual(after["ask_stamp"], out["ask_stamp"])
+        # Without "ask" the watcher item stays as before; Claude is never read for it.
+        self.assertEqual(self.ask(dict(item, ask=False))["s/w"], {"kids_only": True})
+        crel = "-work-demo/" + CLAUDE_THREAD + ".jsonl"
+        self.write("claude", crel, [claude("user", "hi")])
+        with patch.object(bridge, "glance_tail", side_effect=AssertionError("read")):
+            c = self.ask(self.claude_item(crel, preview=False, ask=True))["default/a"]
+        self.assertEqual(set(c), {"kids_only", "ask_stamp"})
+
     def test_reads_only_the_tail(self):
         rel = "-work-demo/" + CLAUDE_THREAD + ".jsonl"
         filler = [claude("user", "旧消息 " + "x" * 2000) for _ in range(800)]

@@ -88,6 +88,11 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
+          # The action's default GPU mode (-gpu swiftshader_indirect) froze the whole VM about a second
+          # after the real SSH walk's 信任并连接 and the emulator then exited (adb: device not found),
+          # reproducibly on emulator 37.2.12 / API 35. SwANGLE (ANGLE over SwiftShader Vulkan) is the
+          # emulator's other software renderer and runs the same walk to the end.
+          emulator-options: -no-window -gpu swangle_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
             adb install app/build/outputs/apk/debug/app-debug.apk
             adb install app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk

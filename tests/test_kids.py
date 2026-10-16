@@ -272,6 +272,25 @@ class RemoteKidsTests(KidsBase):
         self.assertTrue((self.far / ".local/state/herdr-pocket/kids-v1.json").is_file())
         self.assertFalse((self.home / ".local/state/herdr-pocket/kids-v1.json").exists())
 
+    def test_remote_codex_question_for_the_watcher(self):
+        """ch panes: the same remote read answers whether a Codex question waits, with or without kids."""
+        rel = "2026/10/15/rollout-2026-10-15T09-00-00-" + CODEX_PARENT + ".jsonl"
+        args = {"questions": [{"title": "Synthetic question?", "options": ["A"]}, {"title": "Second?"}]}
+        self.write(self.far / ".codex/sessions" / rel, [
+            codex_row("session_meta", {"id": CODEX_PARENT, "cwd": "/work/demo"}),
+            codex_row("response_item", {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "synthetic"}]}),
+            codex_row("response_item", {"type": "function_call", "name": "request_user_input_async", "call_id": "call_r", "arguments": json.dumps(args)})])
+        context = {"session": "default", "target": "w1:p3", "identity": "y", "provider": "codex"}
+        item = {"key": "s/c", "provider": "codex", "thread": CODEX_PARENT, "record_id": "remote:" + self.route["key"] + ":" + self.record_id("codex", rel),
+                "remote": context, "preview": False, "ask": True}
+        with patch.object(bridge, "route_for_context", return_value=self.route):
+            out = bridge.handle({"v": 1, "op": "glance", "items": [item]})["previews"]["s/c"]
+            self.assertNotIn("kids", out)
+            self.assertEqual((out["ask"]["call_id"], out["ask"]["count"]), ("call_r", 2))
+            same = bridge.handle({"v": 1, "op": "glance", "items": [dict(item, ask_stamp=out["ask_stamp"], kids=True)]})["previews"]["s/c"]
+        self.assertTrue(same["ask_same"]); self.assertNotIn("ask", same)
+        self.assertEqual(same["kids"]["total"], 0)
+
     def test_remote_failure_is_reported_per_item(self):
         with patch.object(bridge, "route_for_context", side_effect=bridge.BridgeError("远端窗格已改变，请刷新会话列表")):
             out = bridge.handle({"v": 1, "op": "glance", "items": [{"key": "s/a", "provider": "claude", "thread": PARENT, "record_id": "remote:x:" + self.record,

@@ -21,8 +21,9 @@ window.openFromNotification=pane=>{S.pendingPane=pane;if(!S.device)return;const 
 function openPending(){const pane=S.pendingPane;if(!pane||!S.device)return;S.pendingPane=null;const a=S.agents.find(x=>x.pane_id===pane);if(!a){toast('那个 Agent 已经不在这个会话里了');return;}if(typeof T!=='undefined')leaveTerminal();closeSheet();openAgent(a);}
 // The background watcher only notifies about changes after what the UI already showed.
 // "kids" counts as working there too; `kids` names each agent's record so the watcher can check
-// its sub-agents (read-only glance) before saying 做完了.
-function syncWatch(){if(S.demo||!S.device||!S.session)return;const states={},kids={};S.agents.forEach(a=>{const k=a.pane_id+'/'+a.identity;states[k]=agentState(a);const it=kidsWatchItem(a);if(it)kids[k]=it;});rpc('watchState',{session:S.session,states,kids}).catch(()=>{});}
+// its sub-agents (read-only glance) before saying 做完了. `asks` are the Codex questions the app
+// already shows or that were put aside (暂不回答): the watcher never notifies those (glance.js).
+function syncWatch(){if(S.demo||!S.device||!S.session)return;const states={},kids={};S.agents.forEach(a=>{const k=a.pane_id+'/'+a.identity;states[k]=agentState(a);const it=kidsWatchItem(a);if(it)kids[k]=it;});rpc('watchState',{session:S.session,states,kids,asks:glanceWatchAsks()}).catch(()=>{});}
 // Reassignable on purpose: offline tests wrap it to observe requests.
 let remote=(op,args={})=>S.demo?demoRequest(op,args):rpc('remote',{op,...args});
 

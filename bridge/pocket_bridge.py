@@ -1366,6 +1366,22 @@ def glance_path(item):
     return None
 
 
+def ask_state(path, item, stamp=None):
+    """Whether a Codex async question still waits (glance "ask"), for the background watcher and
+    ch panes: {"ask_stamp"} plus "ask" when one waits, or "ask_same" when the transcript did not
+    change since the caller's "ask_stamp" (a stat, nothing read). Claude never asks this way."""
+    if stamp is None:
+        stat = path.stat(); stamp = "%d:%d" % (stat.st_mtime_ns, stat.st_size)
+    if item.get("ask_stamp") == stamp: return {"ask_same": True, "ask_stamp": stamp}
+    out = {"ask_stamp": stamp}
+    if item.get("provider") != "codex": return out
+    # The question is the newest turn's: the newest window holds it (or no user message at all).
+    messages, _ = glance_tail(path, "codex", GLANCE_WINDOWS[0])
+    ask = glance_summary(messages).get("ask")
+    if ask: out["ask"] = ask
+    return out
+
+
 def glance(request):
     items = request.get("items")
     if not isinstance(items, list) or len(items) > GLANCE_ITEMS: raise BridgeError("Invalid glance items")
@@ -1373,16 +1389,20 @@ def glance(request):
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("key"), str) or len(item["key"]) > 200: continue
         key = item["key"]
-        # A ch pane's transcript is on the other computer: only its sub-agents are read there.
+        # A ch pane's transcript is on the other computer: only its sub-agents (and, asked for,
+        # a waiting Codex question) are read there.
         if isinstance(item.get("remote"), dict):
-            if item.get("kids"): far.append(item)
+            if item.get("kids") or item.get("ask"): far.append(item)
             continue
         try:
             path = glance_path(item)
             if not path: out[key] = {"missing": True}; continue
             stat = path.stat(); stamp = "%d:%d" % (stat.st_mtime_ns, stat.st_size)
-            # The background watcher asks about sub-agents only ("preview": false).
-            if item.get("preview") is False: out[key] = {"kids_only": True}
+            # The background watcher asks about sub-agents only ("preview": false), and with "ask"
+            # whether a Codex async question waits.
+            if item.get("preview") is False:
+                out[key] = {"kids_only": True}
+                if item.get("ask"): out[key].update(ask_state(path, item, stamp))
             elif item.get("stamp") == stamp: out[key] = {"same": True, "stamp": stamp}
             else:
                 for window in GLANCE_WINDOWS:
@@ -1752,9 +1772,9 @@ def kids_report(path, provider, thread, now=None):
     return {"total": len(rows) + len(starting), "running": running, "items": items, "stamp": stamp}
 
 
-def kids_for_item(item):
+def kids_for_item(item, path=None):
     """Glance / remote entry: the report for one record named by provider, thread and record id."""
-    path = glance_path(item)
+    path = path or glance_path(item)
     if not path: return None
     report = kids_report(path, item["provider"], item["thread"])
     if item.get("kids_stamp") == report["stamp"] and not report["running"]: return {"same": True}
@@ -1791,7 +1811,8 @@ def remote_kids(items):
             out[key] = {"kids_error": "Invalid remote history record"}; continue
         group = groups.setdefault(json.dumps(route["ssh"]), {"route": route, "items": [], "places": {}})
         group["items"].append({"key": key, "provider": item.get("provider"), "thread": item.get("thread"), "record_id": record[len(prefix):],
-                               "kids_stamp": item.get("kids_stamp")})
+                               "kids_stamp": item.get("kids_stamp"), "kids": bool(item.get("kids")), "ask": bool(item.get("ask")),
+                               "ask_stamp": item.get("ask_stamp")})
         group["places"][key] = (route, context)
     def run(group):
         try: return remote_read(group["route"], {"op": "kids", "items": group["items"]}, 12).get("kids", {})
@@ -1805,9 +1826,13 @@ def remote_kids(items):
             report = data.get(x["key"]) if isinstance(data, dict) else None
             if not isinstance(report, dict): out[x["key"]] = {"kids_error": "远端没有返回子 Agent"}; continue
             route, context = group["places"][x["key"]]
+            check = report.pop("ask_check", None)
             if isinstance(report.get("items"), list):
                 report["items"] = [wrap_remote_record(r, route, context) if r.get("id") else r for r in report["items"] if isinstance(r, dict)]
-            out[x["key"]] = {"kids": report}
+            entry = {"kids": report} if x["kids"] else {}
+            if isinstance(check, dict):
+                entry.update({k: check[k] for k in ("ask", "ask_stamp", "ask_same") if k in check})
+            out[x["key"]] = entry
     return out
 
 
@@ -1816,7 +1841,12 @@ def remote_kids_main(items):
     out = {}
     for item in items[:GLANCE_ITEMS] if isinstance(items, list) else []:
         if not isinstance(item, dict) or not isinstance(item.get("key"), str): continue
-        try: out[item["key"]] = kids_for_item(item) or {"missing": True}
+        try:
+            path = glance_path(item)
+            if not path: out[item["key"]] = {"missing": True}; continue
+            report = kids_for_item(item, path) if item.get("kids", True) else {}
+            if item.get("ask"): report["ask_check"] = ask_state(path, item)
+            out[item["key"]] = report
         except OSError: out[item["key"]] = {"missing": True}
     kids_save()
     return {"kids": out}

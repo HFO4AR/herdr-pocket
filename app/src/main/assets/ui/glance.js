@@ -2,7 +2,8 @@
 // One-line previews on the 会话 list: what each agent is doing now, what it is asking,
 // or how its last reply began. The bridge `glance` op reads only the tail of each local
 // transcript and answers "same" for files that did not change. Remote (ch) panes have
-// no local transcript and simply show no preview. Text nodes only.
+// no local transcript: they show only a waiting Codex question, which the remote sub-agent read
+// (kids.js) reports. Text nodes only.
 const GL={map:new Map(),dev:'',busy:false,unsupported:false,at:0,restored:''};
 const GLANCE_VERBS={run:'运行',edit:'修改',read:'查看',search:'搜索',web:'查资料',agent:'子 Agent',plan:'更新计划',wait:'等输出',ask:'提问',tool:'调用'};
 
@@ -29,7 +30,7 @@ async function glanceRefresh(all=false){
    // Nothing to show (yet): remember that too, so an idle agent is not asked every poll.
    if(v.missing){if(old&&!old.missing)changed=true;GL.map.set(k,{missing:true,status:status.get(k)||''});continue;}
    GL.map.set(k,{...v,status:status.get(k)||''});changed=true;}
-  if(changed){glanceSave();if(!glanceRegroup())glancePaint();}}
+  if(changed){glanceSave();if(!glanceRegroup())glancePaint();syncWatch();}}
  catch(e){if(/Unknown operation|不支持的操作/.test(e?.message||''))GL.unsupported=true;}
  finally{GL.busy=false;}}
 // The list opened: show what we had, then refresh if it is not fresh.
@@ -44,6 +45,20 @@ async function glanceRestore(){
 // An idle Codex that asked with request_user_input_async (bridge: preview.ask) waits for you like a
 // blocked agent does, unless that question was put aside with 「暂不回答」 (answer.js).
 function glanceAsks(a){if(!['idle','done'].includes(a?.agent_status))return null;const ask=glanceOf(a)?.ask;return ask&&!qaAside('async:'+ask.call_id)?ask:null;}
+// For the background watcher (syncWatch): Codex questions the app already knows, by the watcher's
+// pane/identity key, and whether each was put aside. Known ones never notify; shown ones count as
+// waiting. The open chat knows its question from history even before the list's glance does.
+function glanceWatchAsks(){const out={},key=a=>a.pane_id+'/'+a.identity;
+ S.agents.forEach(a=>{const g=glanceAsksRaw(a);if(g)out[key(a)]={call_id:g.call_id,aside:qaAside('async:'+g.call_id)};});
+ const c=S.chat?.agent;const q=c&&!S.chat.stale?qaAsyncPending():null;
+ if(q?.p.call_id)out[key(c)]={call_id:q.p.call_id,aside:q.aside};
+ return out;}
+function glanceAsksRaw(a){if(!['idle','done'].includes(a?.agent_status))return null;const ask=glanceOf(a)?.ask;return ask?.call_id?ask:null;}
+// ch panes: the remote sub-agent read also says whether a Codex question waits (kids.js).
+function glanceTakeAsk(key,v,status){
+ if(!v||!v.ask_stamp||v.ask_same)return false;const old=GL.map.get(key);const ask=v.ask&&typeof v.ask==='object'?v.ask:null;
+ if(old&&(old.ask?.call_id||'')===(ask?.call_id||'')){old.ask_stamp=v.ask_stamp;return false;}
+ GL.map.set(key,{...(old&&!old.missing?old:{}),ask,ask_stamp:v.ask_stamp,status});return true;}
 // Who asks decides the list's groups: when that changes, the list is drawn again, not just patched.
 function glanceAskSig(){return S.agents.filter(glanceAsks).map(agentKey).join('|');}
 function glanceRegroup(){const sig=glanceAskSig();if(sig===GL.askSig)return false;GL.askSig=sig;

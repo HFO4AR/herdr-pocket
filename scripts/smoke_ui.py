@@ -149,6 +149,7 @@ def main():
     assert 'terminal-buffer: PASS' in vault,vault
     assert 'vault-tests: PASS (2 tests)' in vault,vault
     assert 'image-prep: PASS' in vault,vault
+    assert 'watch-rules: PASS' in vault,vault
     assert 'image-prep-mediastore: PASS' in vault,vault
     print('PASS: picked pictures (file:// and a MediaStore content:// JPEG with EXIF rotation) prepared upright; shared gallery picture read',flush=True)
     if fixture: print('PASS: SSH fixture PTY, UTF-8, persistent cwd, resize, Ctrl+C, stale target and duplicate input',flush=True)
@@ -508,16 +509,10 @@ if __name__=='__main__':
         theme_walk(constants)
         notification_channels(constants)
         share_in(constants)
-        # The real-SSH walk is new: uiautomator can hang while the connection screen is busy. A hung
-        # screen reader is an emulator/tooling problem, not an app failure: keep the evidence, warn,
-        # and do not block the release on it. Real assertion failures still fail the run.
-        try: real_ssh(constants)
-        except (subprocess.SubprocessError, ET.ParseError, OSError) as exc:
-            # Seen on CI: the emulator itself disappeared mid-walk ("device not found"), or its screen
-            # reader hung. Device/tooling trouble, not an app assertion: warn and keep the evidence.
-            try: save_failure()
-            except Exception: pass
-            print('WARN: real SSH UI walk did not finish (device/tooling: %s); see ui-artifacts/failure-*'%exc,flush=True)
+        # Blocking like every other walk. It used to end with the whole emulator vanishing right after
+        # 信任并连接: the emulator's swiftshader_indirect GPU path hangs the VM and the emulator exits.
+        # CI runs the emulator with -gpu swangle_indirect (see .github/workflows/build.yml).
+        real_ssh(constants)
     except Exception:
         save_failure()
         raise
