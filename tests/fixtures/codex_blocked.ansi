@@ -1,0 +1,13 @@
+[0m[2m• [0m这会删除构建产物，先让你确认一下。
+ 
+  [0m[1mWould you like to run the following command?[0m
+ 
+  Reason: 清理构建产物
+ 
+  [0m[38;2;137;180;250m$ [0m[38;2;205;214;244mrm -rf dist .cache[0m
+ 
+[0m[1m[38;2;137;180;250m› 1. Yes, proceed [0m[2m(y)[0m
+  2. Yes, and don't ask again for commands that start with `rm -rf` [2m(p)[0m
+  3. No, and tell Codex what to do differently [2m(esc)[0m
+ 
+  [0m[2mPress [0m[1menter[0m[2m to confirm or [0m[1mesc[0m[2m to cancel[0m

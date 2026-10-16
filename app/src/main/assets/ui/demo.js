@@ -36,7 +36,11 @@ async function demoRequest(op,r){
  if(op==='history'){const rec=demoRecords.find(x=>x.id===r.record_id);let messages;
   messages=demoHistory(rec.id,r.before!==undefined);
   return{record:rec,messages,children:demoRecords.filter(x=>x.parent===rec.thread),before:r.before!==undefined?0:10,has_more:r.before===undefined&&rec.id==='demo-root'};}
- if(op==='read')return{menu:r.target==='demo:3'?demoMenu:undefined,text:r.target==='demo:3'?'  Would you like to run the following command?\n\n  $ rm -rf dist .cache\n\n› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n\n  Press enter to confirm or esc to cancel':'$ python3 -m unittest discover -s tests -v\nRan 24 tests\nOK\n\n离线演示，不是真实终端。'};
+ if(op==='read'){const E='\x1b[',ask=r.target==='demo:3';
+  // `ansi` only when asked, like the bridge: the same screen with Codex-style colors.
+  const ansi=!r.ansi?undefined:ask?'  '+E+'1mWould you like to run the following command?'+E+'0m\n\n  '+E+'38;2;137;180;250m$ '+E+'38;2;205;214;244mrm -rf dist .cache'+E+'0m\n\n'+E+'1;38;2;137;180;250m› 1. Yes, proceed'+E+'0m\n  2. No, and tell Codex what to do differently\n\n  '+E+'2mPress '+E+'0;1menter'+E+'0;2m to confirm or '+E+'0;1mesc'+E+'0;2m to cancel'+E+'0m'
+   :E+'1;38;5;2m•'+E+'0m '+E+'1mRan'+E+'0m '+E+'38;2;137;180;250mpython3'+E+'38;2;205;214;244m -m unittest discover -s tests'+E+'38;2;148;226;213m -v'+E+'0m\n'+E+'2m  └ '+E+'0mRan 24 tests\n    '+E+'38;2;166;227;161mOK'+E+'0m\n\n'+E+'2m离线演示，不是真实终端。'+E+'0m';
+  return{menu:ask?demoMenu:undefined,ansi,text:ask?'  Would you like to run the following command?\n\n  $ rm -rf dist .cache\n\n› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n\n  Press enter to confirm or esc to cancel':'$ python3 -m unittest discover -s tests -v\nRan 24 tests\nOK\n\n离线演示，不是真实终端。'};}
  if(op==='prompt'||op==='key'||op==='answer')return{sent:false};
  if(op==='glance'){const at=new Date(Date.now()-4*60000).toISOString(),p={
   'demo-codex':{reply:{text:'移动端聊天改好了：历史、子 Agent 和命令都能看到，测试全过。',current:true,at},turn:{tools:12,files:5,failed:0},at},

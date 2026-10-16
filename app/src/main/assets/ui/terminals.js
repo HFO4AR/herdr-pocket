@@ -254,13 +254,14 @@ function terminalMenu(){const entry=T.view;const box=sheet('终端选项');
 }
 // Read-only agent screen (chat 「终端」 tab): a terminal card that keeps the latest lines in view
 // while you are at the bottom, and offers a way back when you scrolled up to read.
-function termAgentView(text,refresh){
+function termAgentView(text,refresh,ansi){
  termPrefs();termFontVar();
  const card=el('section','term-card');card.setAttribute('aria-label','终端画面');
  const head=el('div','term-card-head');const live=!!S.chat?.agent;
  head.append(el('span','term-led'+(live?' on':'')),el('span','term-card-title','终端画面'),el('span','term-card-note grow',live?'只读 · 自动刷新':'只读'));
- if(refresh){refresh.classList.add('term-card-refresh');head.append(refresh);}card.append(head);
- const pre=el('pre','agent-terminal',text);pre.id='terminal-output';pre.tabIndex=0;card.append(pre);
+ const pre=el('pre','agent-terminal');pre.id='terminal-output';pre.tabIndex=0;screenPaint(pre,text,ansi);
+ if(live)head.append(ansiRawToggle(()=>pre));
+ if(refresh){refresh.classList.add('term-card-refresh');head.append(refresh);}card.append(head,pre);
  const jump=btn('','jump-btn term-jump',()=>{termGlideBottom(pre);},'down');jump.setAttribute('aria-label','跳到最新输出');jump.hidden=true;card.append(jump);
  let stick=true;const check=()=>{const bottom=pre.scrollHeight-pre.scrollTop-pre.clientHeight<24;stick=bottom;jump.hidden=bottom;};
  pre.addEventListener('scroll',check,{passive:true});

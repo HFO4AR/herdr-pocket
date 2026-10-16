@@ -2,7 +2,7 @@
  * The screen itself is dark in both themes (--terminal): a dark card on the warm page in light
  * theme, a deeper well in dark theme. Text sizes follow --term-fs (A−/A+ in 终端选项). */
 :root{
- --term-font:'JetBrains Mono','Cascadia Mono','SF Mono',Menlo,'Roboto Mono','DejaVu Sans Mono','Droid Sans Mono','Noto Sans Mono','Noto Sans Mono CJK SC','Noto Sans CJK SC',monospace;
+ --term-font:'Pocket Term Glyphs','JetBrains Mono','Cascadia Mono','SF Mono',Menlo,'Roboto Mono','DejaVu Sans Mono','Droid Sans Mono','Noto Sans Mono','Noto Sans Mono CJK SC','Noto Sans CJK SC',monospace;
  --term-fs:13px}
 
 /* ── Full terminal view ── */

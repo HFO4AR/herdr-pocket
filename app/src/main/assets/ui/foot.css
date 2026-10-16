@@ -1,0 +1,57 @@
+/* The chat footer as one panel (foot.js): the rail (one thin line: what leads, expanded, and compact
+   chips for the rest), at most one block, the composer. Tokens from app.css / mode.css. */
+.foot-rail{display:flex;align-items:center;gap:6px;min-height:44px;margin:-8px 0 2px;min-width:0;overflow:hidden}
+/* The expanded line: a tinted pill with the state in words; the detail ellipsizes first. */
+.foot-lead{position:relative;flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:7px;min-height:36px;padding:0 12px;border-radius:999px;
+ font-size:var(--fs-sm);line-height:1.3;white-space:nowrap;text-align:left;background:var(--sunken);color:var(--ink-2)}
+button.foot-lead:active{transform:none;filter:brightness(.97)}
+button.foot-lead::after{content:'';position:absolute;inset:-4px 0}
+.foot-lead strong{flex-shrink:0;font-weight:650}
+.foot-lead svg{width:16px;height:16px;flex-shrink:0}
+.foot-detail{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--ink-2);font-size:12.5px}
+.foot-detail.mono{font:11.5px/1.5 var(--mono)}
+.foot-lead .since{font-weight:500}
+.foot-lead.t-work{background:var(--warn-soft);color:var(--warn)}
+.foot-lead.t-done{background:var(--success-soft);color:var(--success)}
+.foot-lead.t-done .link-btn{margin-left:auto;color:var(--success);font-weight:600;min-height:32px}
+.foot-lead.t-queue,.foot-lead.t-ask{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1px var(--soft-line)}
+.foot-lead.t-ask.approval{background:var(--danger-soft);color:var(--danger);box-shadow:inset 0 0 0 1px var(--danger-line)}
+.foot-lead.t-ask .foot-detail{margin-left:auto;color:inherit;font-weight:600;font-size:var(--fs-sm)}
+/* Compact chips: small pills with a 44 px hit area above and below. */
+.foot-chips{display:flex;align-items:center;gap:6px;flex:0 0 auto;padding:7px 1px}
+.foot-rail.compact .foot-chips{flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none}
+.foot-chip{position:relative;flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;min-height:30px;max-width:100%;padding:0 10px;border-radius:999px;
+ font-size:var(--fs-xs);font-weight:600;line-height:1;white-space:nowrap;background:var(--sunken);color:var(--ink-2);box-shadow:inset 0 0 0 1px var(--line)}
+.foot-chip::after{content:'';position:absolute;inset:-7px 0}
+.foot-chip:active{transform:none;filter:brightness(.96)}
+.foot-chip svg{width:14px;height:14px}
+.foot-chip .pulse{width:7px;height:7px}
+.foot-chip .since{font-weight:500}
+.foot-chip.t-work{background:var(--warn-soft);color:var(--warn);box-shadow:inset 0 0 0 1px var(--warn-line)}
+.foot-chip.t-done{background:var(--success-soft);color:var(--success);box-shadow:none}
+.foot-chip.t-queue,.foot-chip.t-ask{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1px var(--soft-line)}
+.foot-chip.t-ask.approval{background:var(--danger-soft);color:var(--danger);box-shadow:inset 0 0 0 1px var(--danger-line)}
+.foot-chip.mode-chip{display:inline-flex;line-height:1;min-height:30px;overflow:visible}
+.foot-rail>.secondary.small{flex-shrink:0}
+/* Blocks: the question card and the slash list shrink with the panel and scroll inside. */
+.composer-wrap>.slash-pop,#live-state{flex:0 1 auto;min-height:0}
+/* Writing while a question waits: the card folds into the rail and the input stays. */
+.composer-wrap.writing #live-state{display:none}
+.foot-write{display:none}
+/* What leads changed: a short, light entrance (not on repaints of the same state). */
+.foot-swap{animation:foot-swap .2s var(--ease-out)}
+@keyframes foot-swap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.foot-swap{animation:none}}
+@media(max-width:360px){.foot-lead{padding:0 10px;gap:6px}.foot-chip{padding:0 8px}}
+/* Short screens (landscape, keyboard open): the question card may take the input's place, with 「写消息」. */
+@media(max-height:560px){
+ .composer-wrap{max-height:58vh;max-height:58dvh}
+ .foot-rail{margin:-6px 0 2px}
+ .composer-wrap.asking .composer:not(:focus-within){display:none}
+ .composer-wrap.asking .foot-write{display:inline-flex}
+ .composer-wrap.asking #live-state>*{margin-bottom:0}
+}
+@media(max-height:500px){.composer-wrap{max-height:54vh;max-height:54dvh}}
+/* Very short (landscape with the keyboard up): while typing, the rail steps aside unless a folded
+   question needs to stay in reach; the header still says what the agent is doing. */
+@media(max-height:300px){.composer-wrap:has(.composer:focus-within) .foot-rail:not(:has(.t-ask)){display:none}}

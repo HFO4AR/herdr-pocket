@@ -429,11 +429,11 @@ function tlFlipEnd(n,m){
   if(Math.abs(dy)>1&&Math.abs(dy)<400)r.animate([{transform:'translateY('+dy+'px)'},{transform:'none'}],{duration:220,easing:'cubic-bezier(.16,1,.3,1)'});}}
 function tlBuild(list,open){
  followMarker(list);
- if(S.chatMode==='terminal'){list.append(termAgentView(S.terminalText||(S.chat.agent?'正在读取终端…':'这条历史没有在线终端。'),S.chat.agent?btn('刷新终端','link-btn',()=>fetchTerminal(),'refresh'):null));return;}
+ if(S.chatMode==='terminal'){list.append(termAgentView(S.terminalText||(S.chat.agent?'正在读取终端…':'这条历史没有在线终端。'),S.chat.agent?btn('刷新终端','link-btn',()=>fetchTerminal(),'refresh'):null,S.terminalText&&S.terminalAnsi));return;}
  if(!S.chat.record){const box=el('div','unlinked');box.append(el('h2','','还没关联到对话记录'),el('p','muted',S.chat.historyIssue||'正在定位这个窗格对应的历史记录…'));
   if(S.chat.historyIssue)box.append(btn('选择历史记录','primary',pickHistory));list.append(box);
   const candidates=S.chat.agent?.history_ref?.candidates||[];if(candidates.length){list.append(el('div','section-label','候选历史 · 点击后确认'));const g=el('div','card list-card');candidates.forEach(rec=>{const b=btn('','card-button',()=>chooseHistory(rec,S.chat.agent));const t=el('div','grow');t.append(el('div','card-title',rec.title),el('div','card-meta',relative(rec.modified)+' · '+String(rec.thread).slice(0,8)));b.append(t,icon('chevron'));g.append(b);});list.append(g);}
-  if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));list.append(el('pre','agent-terminal compact',tail(S.terminalText,14)));}
+  if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));const pre=el('pre','agent-terminal compact');screenPaint(pre,S.terminalText,S.terminalAnsi,14);list.append(pre);}
   slashRest(list);queueTimeline(list);return;}
  // Until the first fresh read arrives (cache shown, or still loading) paging is unknown: no button.
  const c=S.chat,settling=!!(c.cached||c.waiting||c.historyLoading);

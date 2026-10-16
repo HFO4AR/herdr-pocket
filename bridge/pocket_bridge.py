@@ -154,18 +154,86 @@ def relay_pane(agent, prefix):
     return bool(probe["ok"] and probe["route"] and not probe.get("native"))
 
 
-def read_screen(prefix, agent, lines):
+def read_screen(prefix, agent, lines, ansi=False):
     """The agent's screen. A blocked full-screen agent (a ch pane's remote Claude, for one) cannot have
     its history scrolled back, and Herdr says so (agent_not_idle): the visible screen holds the menu
-    anyway. A ch pane that Herdr's agent commands refuse is read at the pane level."""
+    anyway. A ch pane that Herdr's agent commands refuse is read at the pane level.
+
+    `ansi` asks for the colored visible screen (Herdr 0.8.2 `--format ansi` returns the visible rows
+    only, whatever the source), through the same fallbacks."""
     target = agent["pane_id"]
-    try: return call(prefix + ["agent", "read", target, "--source", "recent-unwrapped", "--lines", str(lines)])
+    def read(kind, source):
+        args = prefix + [kind, "read", target, "--source", source]
+        if source != "visible": args += ["--lines", str(lines)]
+        return call(args + ["--format", "ansi"] if ansi else args)
+    first = "visible" if ansi else "recent-unwrapped"
+    try: return read("agent", first)
     except HerdrRejected as exc:
-        if exc.code == "agent_not_idle": return call(prefix + ["agent", "read", target, "--source", "visible"])
+        if exc.code == "agent_not_idle" and first != "visible": return read("agent", "visible")
         if exc.code == "agent_not_ready" and relay_pane(agent, prefix):
-            try: return call(prefix + ["pane", "read", target, "--source", "recent-unwrapped", "--lines", str(lines)])
-            except HerdrRejected: return call(prefix + ["pane", "read", target, "--source", "visible"])
+            try: return read("pane", first)
+            except HerdrRejected:
+                if first == "visible": raise
+                return read("pane", "visible")
         raise
+
+
+# Colored screens for the phone: only SGR (colors and text styles) survives; every other escape,
+# OSC title, cursor move and control character is dropped so nothing but styling reaches the UI.
+SGR = re.compile(r"\x1b\[[0-9;:]{0,80}m")
+TERMINAL_JUNK = re.compile(
+    r"(\x1b\[[0-9;:]{0,80}m)"                         # 1: SGR, kept
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?"           # OSC (titles, hyperlinks)
+    r"|\x1b[P^_X][^\x1b]*(?:\x1b\\)?"                 # DCS / PM / APC / SOS strings
+    r"|\x1b\[[0-?]*[ -/]*[@-~]?"                     # any other CSI
+    r"|\x1b[ -/]*[0-~]?"                              # two-byte escapes
+    r"|[\x00-\x08\x0b-\x1f\x7f-\x9f]")              # other control characters (keeps \t \n)
+ANSI_LIMIT = 200_000
+SCROLL_LINES = 200
+
+
+def clean_ansi(raw):
+    text = raw.replace("\r\n", "\n").replace("\r", "\n")
+    return TERMINAL_JUNK.sub(lambda m: m.group(1) or "", text)
+
+
+def strip_sgr(text):
+    return SGR.sub("", text)
+
+
+def ansi_with_scrollback(text, screen):
+    """The colored screen with the plain lines above it. Herdr colors only the visible rows; the
+    plain read (`text`, unwrapped) has the history. The screen is found inside it by its characters
+    with all whitespace ignored, so wrapped rows still match their unwrapped line, and the part of
+    `text` before that point (down to a partly visible line's head) goes on top, uncolored."""
+    rows = screen.split("\n")
+    while rows and not strip_sgr(rows[-1]).strip(): rows.pop()
+    visible = "".join("".join(strip_sgr(r).split()) for r in rows)
+    lines = text.split("\n")
+    if not visible: return "\n".join(rows)
+    chars, where = [], []
+    for i, line in enumerate(lines):
+        for j, ch in enumerate(line):
+            if not ch.isspace(): chars.append(ch); where.append((i, j))
+    joined = "".join(chars)
+    pos = joined.rfind(visible)
+    if pos < 0: pos = joined.rfind(visible[:200])
+    if pos < 0: return "\n".join(rows)
+    i, j = where[pos]
+    head = lines[:i] + ([lines[i][:j]] if lines[i][:j].strip() else [])
+    while head and not head[0].strip(): head.pop(0)
+    return "\n".join(head[-SCROLL_LINES:] + rows)
+
+
+def colored_screen(prefix, agent, text):
+    """`ansi` for a read that asked for color, or None when Herdr cannot give it (older Herdr, an
+    oversized screen): the phone then shows the plain text."""
+    try: raw = read_screen(prefix, agent, 0, ansi=True).get("text", "")
+    except (BridgeError, HerdrRejected): return None
+    screen = clean_ansi(raw)
+    if not strip_sgr(screen).strip() or len(screen) > ANSI_LIMIT: return None
+    merged = ansi_with_scrollback(text, screen)
+    return merged if len(merged) <= ANSI_LIMIT else screen
 
 
 def relay_prompt(prefix, pane_id, text):
@@ -3332,6 +3400,11 @@ def handle(request, state_dir=None):
         # `menu: true` (after a slash command) parses a picker even when Herdr does not call it blocked.
         screen = with_menu(read_screen(prefix, agent, 160), agent, request.get("menu") is True)
         screen["modes"] = screen_modes(screen.get("text", ""), agent.get("agent"))
+        # `ansi: true` (the 终端 tab and the confirm screen are open): add the colored screen. Menus
+        # and modes keep parsing the plain read above: Herdr's colored read is the visible rows only.
+        if request.get("ansi") is True:
+            colored = colored_screen(prefix, agent, screen.get("text", ""))
+            if colored is not None: screen["ansi"] = colored
         return screen
     return mutate(request, prefix, agent, state_dir or Path.home() / ".local/state/herdr-pocket")
 

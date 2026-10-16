@@ -249,7 +249,7 @@ async function refreshStatus(){
  finally{S.statusBusy=false;}}
 
 // ─── Chat ───────────────────────────────────────────────────────────────────
-function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.activity='';S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;}
+function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.terminalAnsi='';S.activity='';S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;}
 async function openAgent(a){
  S.unread.delete(agentKey(a));S.chatStack=[];resetChat({agent:a,record:null,title:titleOf(a),provider:a.agent});const epoch=++S.epoch;renderChat();
  const ref=a.history_ref;
@@ -337,6 +337,7 @@ function updateChatMeta(){
  const n=document.getElementById('chat-meta'),c=S.chat;
  if(n&&c){n.replaceChildren();const a=c.agent&&!c.stale?c.agent:null;
   if(!a)n.append(chatSubtitle());
+  else if(awaitingReply())n.append(el('span','meta-state work','正在读取回复…'),' · '+(projectOf(a)?projectOf(a)+' · ':'')+providerName(a.agent));
   else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=['working','blocked'].includes(agentState(a))?statusSince(a)||(a.agent_status==='working'&&c.sentAt)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}}
  const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(c?.agent&&!c.stale?stateTone(c.agent):'muted');
  const b=document.getElementById('child-count');if(b){b.textContent=String(S.children.length);b.classList.toggle('hidden',!S.children.length);}kidsPaintHead();}
@@ -359,7 +360,7 @@ function renderChat(){
  renderTimeline();renderComposer();updateChatMeta();
  const n=document.getElementById('chat-scroll');if(n&&S.stick)n.scrollTop=n.scrollHeight;}
 
-// Composer, live activity and confirmation panel. The input itself survives
+// Composer, live state (question card / confirmation) and the footer rail (foot.js). The input itself survives
 // status changes so typing (and the keyboard) is never interrupted.
 function renderComposer(){
  const footer=document.getElementById('composer');if(!footer||!S.chat)return;const a=S.chat.agent;
@@ -375,7 +376,7 @@ function renderComposer(){
  // Busy agent: the button says it will queue, so sending never looks like it failed.
  send.classList.toggle('later',later);send.querySelector('.send-label').textContent=later?'排队':'';send.title=offline?'连上后才能发送':later?'先排队，它停下就发':'发送';
  compose.classList.toggle('offline',offline);imgTray(compose,key);fileTray(compose,key);send.disabled=offline||!input.value.trim()&&!attCount(key);
- modeBar(footer,a);}
+ footPaint(footer,a);}
 function buildComposer(key){
  const compose=el('div','composer');compose.dataset.key=key;const input=el('textarea');input.rows=1;input.setAttribute('aria-label','消息输入框');input.setAttribute('enterkeyhint','enter');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-expanded','false');input.value=S.drafts.get(key)||'';
  const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');send.append(el('span','send-label'));
@@ -389,11 +390,10 @@ function buildComposer(key){
  compose.append(attach,input,send);requestAnimationFrame(grow);return compose;}
 function renderLiveState(live,a){
  live.replaceChildren();const st=a.agent_status;S.qaShown='';S.qaBar='';
- if(st==='blocked'){if(qaLive(live,a))return;const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow','等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
-  const pre=el('pre','confirm-screen',S.terminalText?tail(S.terminalText,12):'正在读取终端画面…');pre.id='confirm-screen';panel.append(pre);
+ if(st==='blocked'){if(qaLive(live,a))return;const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow','等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('写消息','link-btn foot-write',footWrite,'pen'),btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
+  const pre=el('pre','confirm-screen');pre.id='confirm-screen';screenPaint(pre,S.terminalText||'正在读取终端画面…',S.terminalText&&S.terminalAnsi,12);panel.append(pre);
   const keys=el('div','confirm-keys');[['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);live.append(panel);requestAnimationFrame(()=>{pre.scrollTop=pre.scrollHeight;});}
- else if(st==='working'){const strip=el('div','activity');strip.append(el('span','pulse'));const t=el('div','grow');const label=el('strong','','执行中');const at=statusSince(a)||S.chat.sentAt;if(at)label.append(' ',since(at));t.append(label);const line=el('span','activity-line',S.activity||'正在读取终端…');line.id='activity-line';t.append(line);strip.append(t,interruptButton(a));live.append(strip);}
- else if(S.chat.doneAt&&Date.now()-S.chat.doneAt<8000){const strip=el('div','activity done');strip.setAttribute('role','status');strip.append(icon('check'));const t=el('strong','grow','做完了'+(S.chat.took>=5000?' · 用时 '+dur(S.chat.took):''));strip.append(t);if(!S.stick)strip.append(btn('看结果','link-btn',()=>{S.stick=true;S.unseen=0;scrollBottom();updateJump();}));live.append(strip);}
+ // Working and 「做完了」 are one line in the footer rail (foot.js), not a block here.
  // A Codex question put aside with 「暂不回答」 stays one tap away (answer.js).
  if(st==='idle'||st==='done')qaAsyncBar(live);}
 // 中断 sends Esc: both Claude Code and Codex stop the current turn on Esc and never quit on it,
@@ -475,13 +475,15 @@ async function fetchTerminal(quiet=false){
  // Polls skip while a read for this chat is still out: on a slow link they would pile up behind each other.
  // A read asked for while one is out (e.g. the agent just stopped on a menu) runs right after it.
  if(quiet&&S.reading===epoch){S.readAgain=epoch;return;}S.reading=epoch;S.readAgain=null;
- try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity});if(epoch!==S.epoch)return;S.terminalText=r.text;applyReadStatus(r.agent_status);qaScreen(r);modeScreen(r);
+ // Colors cost a second screen read on the computer: ask only while the 终端 tab or the confirm screen shows.
+  const color=S.chatMode==='terminal'||S.chat.agent.agent_status==='blocked';
+  try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity,...(color?{ansi:true}:{})});if(epoch!==S.epoch)return;S.terminalText=r.text;S.terminalAnsi=r.ansi||'';applyReadStatus(r.agent_status);qaScreen(r);modeScreen(r);
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
-  const n=document.getElementById('terminal-output');if(n)n.textContent=r.text;const c=document.getElementById('confirm-screen');if(c){c.textContent=tail(r.text,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
+  screenPaint(document.getElementById('terminal-output'),r.text,S.terminalAnsi);const c=document.getElementById('confirm-screen');if(c){screenPaint(c,r.text,S.terminalAnsi,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
   if(!S.chat.record&&S.chatMode==='conversation')paintTimeline();}
  catch(e){if(epoch!==S.epoch)return;if(!quiet)error(e);
   // Never leave 「正在读取…」 up after a failed read: say what happened and how to retry.
-  if(!S.terminalText){const msg='读取终端画面失败：'+(e.message||e)+'。点「刷新」再试';const n=document.getElementById('terminal-output');if(n)n.textContent=msg;const c=document.getElementById('confirm-screen');if(c)c.textContent=msg;const l=document.getElementById('activity-line');if(l)l.textContent='读取终端失败，稍后会自动再试';}}
+  if(!S.terminalText){const msg='读取终端画面失败：'+(e.message||e)+'。点「刷新」再试';screenPaint(document.getElementById('terminal-output'),msg,'');screenPaint(document.getElementById('confirm-screen'),msg,'');const l=document.getElementById('activity-line');if(l)l.textContent='读取终端失败，稍后会自动再试';}}
  finally{if(S.reading===epoch)S.reading=null;if(S.readAgain===epoch&&S.epoch===epoch){S.readAgain=null;setTimeout(()=>fetchTerminal(true),0);}}}
 
 // ─── Sheets ─────────────────────────────────────────────────────────────────
@@ -599,7 +601,17 @@ function historyDue(busy,n){return S.chat?.record?.remote?n%(busy?2:4)===0:busy|
 // while the open agent works or just changed state or got a message, so a stop (and a question
 // asked right before it) shows within about a second. The list polls every 2.5 s while anything
 // works or waits, else every 7.5 s.
-const POLL_BEAT=1250,POLL_HOT=15000;
+const POLL_BEAT=1250,POLL_HOT=15000,REPLY_WAIT=60000;
+// Herdr can report a stop before the reply reaches the transcript (it watches the screen; a ch pane's
+// transcript is a remote read away). While the newest prompt has no reply yet, say so and read fast
+// instead of showing 已完成 over a conversation that seems to have been ignored.
+function awaitingReply(){
+ const c=S.chat,a=c?.agent;if(!a||c.stale||!c.record||!['idle','done'].includes(a.agent_status))return false;
+ let user=null,reply=-1,last=-1;S.messages.forEach((m,i)=>{if(m.kind==='user'&&!/^\s*\//.test(m.text||'')){user=m;last=i;}else if(m.kind==='assistant')reply=i;});
+ const sent=S.outbox.some(o=>o.key===draftKey()&&o.state==='sent'&&!/^\s*\//.test(o.text));
+ if(!sent&&!(user&&last>reply))return false;
+ const at=Math.max(c.sentAt||0,sent?Math.max(...S.outbox.filter(o=>o.key===draftKey()).map(o=>o.at)):0,toDate(user?.timestamp)?.getTime()||0);
+ return Date.now()-at<REPLY_WAIT;}
 function pollHot(){const c=S.chat,a=c?.agent;if(!a||c.stale)return false;if(a.agent_status==='working')return true;
  const rec=S.since.get(agentKey(a));return Date.now()-Math.max(c.sentAt||0,rec?.at||0)<POLL_HOT;}
 function listHot(){return S.agents.some(a=>['working','blocked'].includes(a.agent_status)||Date.now()-(statusSince(a)||0)<POLL_HOT);}
@@ -607,7 +619,8 @@ let tick=0;
 function pollBeat(){
  if(!S.active||S.demo||!S.device)return;tick++;const beat=tick%2===0,n=tick>>1;
  const busy=S.chat?.agent&&!S.chat.stale&&['working','blocked'].includes(S.chat.agent.agent_status);
- if(S.chat){if(beat){if(!S.paused&&!S.polling&&S.chatMode!=='terminal'&&historyDue(busy,n))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);}
+ if(S.chat){const reply=awaitingReply();if(reply){if(!S.paused&&!S.polling&&S.chatMode!=='terminal')fetchHistory();updateChatMeta();}
+  if(beat){if(!reply&&!S.paused&&!S.polling&&S.chatMode!=='terminal'&&historyDue(busy,n))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);}
   if(beat||pollHot())refreshStatus();}
  else if(S.tab==='live'&&tick%(listHot()?2:6)===0)refreshStatus().then(()=>glanceRefresh());}
 setInterval(pollBeat,POLL_BEAT);

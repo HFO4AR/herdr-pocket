@@ -80,9 +80,11 @@ function slashSuggest(compose,input){
   const name=el('span','slash-name','/'+c.name);const desc=el('span','slash-desc',c.desc);b.append(name,desc);if(c.kind)b.append(el('span','slash-tag',SLASH_KIND[c.kind]||''));pop.append(b);});
  input.setAttribute('aria-expanded','true');input.setAttribute('aria-controls','slash-pop');
  if(items.length)input.setAttribute('aria-activedescendant','slash-opt-'+st.active);else input.removeAttribute('aria-activedescendant');
- pop.querySelector('.slash-item.active')?.scrollIntoView({block:'nearest'});}
+ pop.querySelector('.slash-item.active')?.scrollIntoView({block:'nearest'});
+ if(typeof footRefresh==='function')footRefresh();}
 function slashClose(compose){const pop=compose?.parentNode?.querySelector('.slash-pop');if(pop)pop.remove();if(compose)compose.slash=null;
- const input=compose?.querySelector('textarea');if(input){input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');}}
+ const input=compose?.querySelector('textarea');if(input){input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');}
+ if(pop&&typeof footRefresh==='function')footRefresh();}
 function slashRefresh(){const compose=document.querySelector('#composer .composer');const input=compose?.querySelector('textarea');if(compose?.slash&&input)slashSuggest(compose,input);}
 function slashPick(compose,input,c){
  input.value='/'+c.name+' ';input.focus();input.selectionStart=input.selectionEnd=input.value.length;

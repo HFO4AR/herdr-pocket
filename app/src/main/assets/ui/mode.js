@@ -64,7 +64,8 @@ function modeBlockedWhy(a){
  if(S.outbox?.some(o=>o.key===key&&o.state==='sending')||(typeof Q!=='undefined'&&Q.get(key)?.inflight))return '消息正在发送';
  return '';}
 
-// The bar above the composer: chips (tap for details) and 「切换模式」.
+// The mode line in the footer rail (foot.js): chips (tap for details) and 「切换模式」. When something
+// else leads the footer it is hidden and the rail shows a compact mode chip instead.
 function modeBar(footer,a){
  let bar=document.getElementById('mode-bar');
  if(!footer||!modeAgent(a)||S.chat?.stale||(!S.device&&!S.demo)){bar?.remove();return;}
@@ -83,7 +84,7 @@ function modePaintBar(bar,a){
  info.setAttribute('aria-label','模式详情：'+(chips.map(c=>c[0]).join('，')||'还没读到'));
  const why=modeBlockedWhy(a);sw.disabled=!!why;sw.title=why||'按一次 Shift+Tab，切到下一个模式';
  sw.classList.toggle('busy',!!MD.busy);sw.lastChild.textContent=MD.busy?'切换中…':'切换模式';}
-function modePaint(){const a=S.chat?.agent,bar=document.getElementById('mode-bar');if(bar&&a)modePaintBar(bar,a);}
+function modePaint(){const a=S.chat?.agent,bar=document.getElementById('mode-bar');if(bar&&a)modePaintBar(bar,a);if(typeof footRefresh==='function')footRefresh();}
 
 // Press Shift+Tab once (fresh request id; ch panes get it at the pane level in the bridge), then read
 // the screen until the footer shows a different mode, or give up quietly after a few reads.

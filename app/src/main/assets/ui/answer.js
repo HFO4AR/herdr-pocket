@@ -131,7 +131,8 @@ function qaCard(model){
  const close=model.onClose&&!st.busy&&!qaSent(st)?btn(model.closeText||'暂不回答','secondary qa-close',()=>model.onClose(st)):null;
  // While working or after answering, the button itself says what is happening.
  if(qaSent(st)||st.busy){submit.replaceChildren(el('span','spinner mini'),document.createTextNode(st.busy?'正在操作，先核对屏幕再确认…':model.kind==='approval'?'已确认，等它继续…':'已回答，等它继续…'));submit.classList.add('pending');}
- const row=el('div','qa-actions');if(close)row.append(close);row.append(submit);foot.append(row);card.append(foot);
+ // 「写消息」: on a short screen the card takes the input's place; this folds it (foot.js, CSS shows it there).
+ const row=el('div','qa-actions');if(model.onWrite)row.append(btn('写消息','secondary qa-write foot-write',model.onWrite,'pen'));if(close)row.append(close);row.append(submit);foot.append(row);card.append(foot);
  function sync(){submit.disabled=locked||!qaReady(model,st);}
  sync();return card;}
 function qaReady(model,st){return model.questions.some((q,i)=>(q.multi?st.multi[i]?.size>0:st.sel[i]!=null&&!st.other[i])||(st.other[i]&&qaLine(st.text[i]).length>0));}
@@ -191,7 +192,7 @@ function qaMenuModel(menu,a){
  return {key:'menu:'+agentKey(a)+':'+(statusSince(a)||0)+':'+menu.fingerprint,fp:menu.fingerprint,kind:menu.kind,title,step,context,
   questions:[{header:q?.header||'',question:menu.kind==='approval'?'':question,multi:!!menu.multi,options,textRow}],
   submitText:menu.kind==='approval'?'确认这个选择':menu.kind==='review'?'确定':'发送回答',closeText:'关闭',
-  onSubmit:st=>qaSendMenu(menu,st,options,textRow),onRaw:()=>{S.chat.qaRaw=true;renderComposer();},onClose:()=>qaCloseMenu(menu,a)};}
+  onSubmit:st=>qaSendMenu(menu,st,options,textRow),onWrite:footWrite,onRaw:()=>{S.chat.qaRaw=true;renderComposer();},onClose:()=>qaCloseMenu(menu,a)};}
 // 关闭 on a menu: put it aside (nothing reaches the agent) or cancel it with Esc after a confirmation.
 function qaCloseMenu(menu,a){
  const who=providerName(a.agent),approval=menu.kind==='approval';

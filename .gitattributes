@@ -1,3 +1,5 @@
 * text=auto
 *.bat text eol=crlf
 *.jar binary
+# Terminal screen fixtures keep Herdr's CRLF row ends byte for byte.
+tests/fixtures/*.ansi -text

@@ -1,0 +1,24 @@
+/* Colored read-only screens (ansi.js): the chat 「终端」 card and the confirm panel. Colors of the
+ * text come from the agent (inline, contrast-checked against the dark card); layout lives here. */
+.ansi{--ansi-pad:14px}
+.confirm-screen.ansi{--ansi-pad:12px}
+.ansi .ansi-line{white-space:pre-wrap;overflow-wrap:anywhere;min-height:1lh}
+.ansi .ansi-line:empty::before{content:'\200b'}
+/* A row that carried a background (an input box, a highlighted choice) is a band across the card. */
+.ansi .ansi-line.band{box-shadow:calc(-1 * var(--ansi-pad)) 0 0 0 var(--band-bg,transparent),var(--ansi-pad) 0 0 0 var(--band-bg,transparent)}
+/* ────── rows: one rule that fits the screen instead of several wrapped rows of dashes. */
+.ansi-rule{display:flex;align-items:center;gap:.7ch;height:1lh;overflow:hidden;white-space:nowrap}
+.ansi-rule:not(.labeled)::before{content:'';flex:1;border-top:1px solid currentColor;opacity:.7}
+.ansi-rule.heavy:not(.labeled)::before{border-top-width:2px}
+.ansi-rule.double:not(.labeled)::before{height:2px;border-top:1px solid currentColor;border-bottom:1px solid currentColor}
+.ansi-rule-seg{flex:1;min-width:2ch;border-top:1px solid currentColor;opacity:.7}
+.ansi-rule-seg:first-child{flex:0 0 2ch}
+.ansi-rule-label{min-width:0;overflow:hidden;text-overflow:ellipsis}
+/* 「原始宽度」: the desktop layout, no wrapping, scroll sideways; rows share the widest row's width. */
+.agent-terminal.raw{white-space:pre;overflow-wrap:normal;overflow-x:auto}
+.ansi.raw{display:grid;grid-template-columns:minmax(max-content,1fr);align-content:start}
+.ansi.raw .ansi-line{white-space:pre;overflow-wrap:normal;padding-left:0!important;text-indent:0!important}
+.term-card-wrap{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;color:var(--terminal-muted);flex-shrink:0;border-radius:var(--radius-control)}
+.term-card-wrap svg{width:18px;height:18px}
+.term-card-wrap.on{color:var(--term-accent)}
+.term-card-wrap:active{background:var(--term-rule)}

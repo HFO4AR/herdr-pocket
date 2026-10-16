@@ -36,6 +36,11 @@
 /* Composer, activity, confirmation */
 .composer-wrap{flex-shrink:0;background:var(--surface);border-top:1px solid var(--line);padding:8px 12px calc(10px + env(safe-area-inset-bottom))}
 .composer-wrap>*{max-width:780px;margin-left:auto;margin-right:auto}
+/* One panel (foot.js / foot.css): rail, at most one block, the composer. The block shrinks and scrolls
+   inside so the composer and some conversation stay on screen. */
+.composer-wrap{display:flex;flex-direction:column;max-height:60vh;max-height:60dvh}
+.composer-wrap>*{width:100%;flex-shrink:0}
+#live-state{display:flex;flex-direction:column;flex:0 1 auto}
 .live-state:empty{display:none}
 .composer{display:flex;align-items:flex-end;gap:8px;padding:4px 4px 4px 14px;border:1px solid var(--line-strong);border-radius:22px;background:var(--bg);transition:border-color .15s var(--ease),box-shadow .15s var(--ease),background-color .15s var(--ease)}
 .composer:focus-within{border-color:var(--accent);background:var(--surface);box-shadow:0 0 0 3px var(--focus-halo)}
@@ -53,15 +58,10 @@
 @keyframes send-arrow{0%{transform:translateY(6px);opacity:.15}100%{transform:none;opacity:1}}
 .send.later:not(:disabled){background:var(--muted)}
 .readonly{font-size:13px;color:var(--muted);text-align:center;padding:8px;line-height:1.6}
-.activity{display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:5px 5px 5px 12px;border-radius:var(--radius-control);background:var(--warn-soft);font-size:13px;min-height:46px}
-.activity strong{display:block;color:var(--warn);font-size:12px;line-height:1.4}
-.activity-line{display:block;font:11.5px/1.5 var(--mono);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.activity.done{background:var(--success-soft);color:var(--success);animation:arrive .2s ease-out}
-.activity.done strong{color:var(--success);font-size:13px}
-.activity.done>svg{width:18px;height:18px}
-.activity .link-btn{color:var(--success);font-weight:600}
 .pulse{width:9px;height:9px;border-radius:50%;background:var(--work);flex-shrink:0;animation:breathe 1.4s ease-in-out infinite}
-.confirm-panel{margin-bottom:8px;border:1px solid var(--danger-line);background:var(--danger-soft);border-radius:var(--radius-card);padding:4px 8px 8px 10px}
+.confirm-panel{display:flex;flex-direction:column;min-height:0;margin-bottom:8px;border:1px solid var(--danger-line);background:var(--danger-soft);border-radius:var(--radius-card);padding:4px 8px 8px 10px}
+.confirm-panel>*{flex-shrink:0}
+.confirm-panel>.confirm-screen{flex:0 1 auto;min-height:44px}
 .confirm-head{display:flex;align-items:center;gap:8px;color:var(--danger);font-size:14px}
 .confirm-head strong{font-weight:650}
 .confirm-head .since{font-weight:500;font-size:12px}
@@ -84,8 +84,6 @@
  .chat-tabs button{min-height:34px}
  #chat-head{padding-top:0}
  .composer-wrap{padding:6px 10px calc(6px + env(safe-area-inset-bottom))}
- .activity{margin-bottom:6px;min-height:40px;padding:3px 4px 3px 10px}
- .activity .secondary.small{min-height:34px}
  .confirm-screen{max-height:62px;margin-bottom:6px}
  .confirm-keys button{min-height:34px}
  .composer textarea{max-height:96px}

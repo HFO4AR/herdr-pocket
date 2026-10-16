@@ -132,6 +132,19 @@ assert.deepEqual(await page.evaluate(()=>{const h='a'.repeat(64);const t='<paste
  ['终端界面，没有颜色，不好看',true,1,false]);
 console.log('PASS: pasted-content wrappers are hidden and do not block settling');
 
+// Herdr says "stopped" before the reply reaches the transcript: the header says it is reading the
+// reply (not 已完成) and history is read fast until the reply arrives.
+await page.evaluate(async()=>{Q.clear();S.outbox=[];fx.list=fx.list.map(a=>({...a,agent_status:'done'}));S.statusBusy=false;await refreshStatus();
+ fx.H.r1.push({id:'97:0',kind:'user',text:'电压越高发热越小吗',title:'',call_id:'',timestamp:new Date().toISOString()});});
+await page.waitForFunction(()=>document.getElementById('chat-meta')?.textContent.includes('正在读取回复'),null,{timeout:15000});
+const reads=await page.evaluate(()=>fx.calls.filter(c=>c.op==='history').length);
+await page.waitForTimeout(3000);
+assert(await page.evaluate(()=>fx.calls.filter(c=>c.op==='history').length)-reads>=2,'history is read fast while the reply is missing');
+await page.evaluate(()=>{fx.H.r1.push({id:'98:0',kind:'assistant',text:'不会，绕组电流由扭矩决定。',title:'',call_id:'',timestamp:new Date().toISOString()});});
+await page.getByText('不会，绕组电流由扭矩决定。').first().waitFor({timeout:15000});
+await page.waitForFunction(()=>!document.getElementById('chat-meta')?.textContent.includes('正在读取回复'),null,{timeout:5000});
+console.log('PASS: a stop before the reply shows 正在读取回复 and reads fast until it arrives');
+
 const ids=await page.evaluate(()=>[...fx.attempts,...fx.keys].map(x=>x.id));
 assert.equal(new Set(ids).size,ids.length,'every request has its own id');
 assert.deepEqual(errors,[]);
