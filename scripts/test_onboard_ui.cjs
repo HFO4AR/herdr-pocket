@@ -88,6 +88,11 @@ await page.getByRole('dialog',{name:'核对电脑指纹'}).waitFor();
 // The banner keeps a way back to the sheet if it is dismissed.
 await page.getByRole('button',{name:'关闭'}).click();
 await page.getByText('等你核对指纹',{exact:true}).waitFor();
+// First trust is a normal step: a calm info banner (role status), not the red error one.
+assert.equal(await page.locator('.connection-status.info[role="status"]').count(),1,'first trust uses the info banner');
+assert.equal(await page.locator('.connection-status.failed').count(),0,'first trust is not shown as an error');
+assert(await page.locator('.connection-status.info').getByRole('button',{name:'核对指纹',exact:true}).evaluate(b=>b.classList.contains('primary')));
+assert.equal(await page.locator('.device-card .primary').count(),0,'the banner holds the one filled button');
 await page.getByRole('button',{name:'核对指纹',exact:true}).click();
 await page.getByRole('button',{name:'信任并连接',exact:true}).click();
 await page.getByRole('dialog',{name:'更新桥接程序'}).waitFor();
@@ -141,6 +146,8 @@ const OLD='SHA256:oldOLDoldOLDoldOLDoldOLDoldOLDoldOLDoldOL1';
 await page.evaluate(([fp,old])=>{fx.connect.push({ok:false,code:'hostkey_changed',error:'电脑的 SSH 指纹和上次信任的不一样，已拒绝连接。',info:{host:'box.lan',port:2222,fingerprint:fp,previous:old,type:'ssh-ed25519'}},
  {ok:false,code:'hostkey_new',error:'第一次连这台电脑，先核对一下 SSH 指纹。',info:{host:'box.lan',port:2222,fingerprint:fp,type:'ssh-ed25519'}});connectDevice(S.devices[0]);},[FP,OLD]);
 await page.getByRole('dialog',{name:'电脑指纹变了'}).waitFor();
+assert.equal(await page.locator('.connection-status.failed[role="alert"]').count(),1,'a changed key stays red');
+assert.equal(await page.locator('.connection-status.info').count(),0);
 await page.getByText(OLD,{exact:true}).waitFor();await page.getByText(FP,{exact:true}).waitFor();
 assert.equal((await calls('forgetHost')).length,0);
 await page.getByRole('button',{name:'重新核对',exact:true}).click();
@@ -181,6 +188,7 @@ if(out){fs.mkdirSync(out,{recursive:true});
  for(const theme of ['light','dark']){await page.evaluate(t=>{document.documentElement.dataset.theme=t;},theme);
   await fail('tunnel','连上了 box.lan:2222，但那头没有 SSH 回应。用 frp 的话，多半是电脑上的 SSH 没开，或者 frpc 转发的本地端口不对。');
   await page.getByText('转发通了，电脑没回应',{exact:true}).waitFor();await page.screenshot({path:out+'/'+theme+'-error.png'});
+  await page.evaluate(fp=>{S.connectError='第一次连这台电脑，先核对一下 SSH 指纹。';S.connectFail={device:S.devices[0].id,d:S.devices[0],code:'hostkey_new',info:{host:'box.lan',port:2222,fingerprint:fp,type:'ssh-ed25519'}};render();},FP);await page.waitForTimeout(350);await page.screenshot({path:out+'/'+theme+'-firsttrust.png'});
   await page.evaluate(fp=>{trustSheet({d:S.devices[0],info:{host:'box.lan',port:2222,fingerprint:fp,type:'ssh-ed25519'}});},FP);await page.waitForTimeout(350);await page.screenshot({path:out+'/'+theme+'-trust.png'});
   await page.evaluate(()=>{closeSheet();deviceForm();});await page.getByRole('button',{name:'保存并连接'}).click();await page.waitForTimeout(350);await page.screenshot({path:out+'/'+theme+'-form.png'});
   await page.evaluate(()=>{closeSheet();S.connectError='';S.device=S.devices[0];S.hostIssue={title:'Herdr 没在运行',text:'在电脑上打开 Herdr（至少开一个会话），再点「重新检查」。'};setTab('devices');nativeEvent({type:'reconnect_failed',detail:'x'});});await page.waitForTimeout(350);await page.screenshot({path:out+'/'+theme+'-banners.png'});

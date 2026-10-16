@@ -360,13 +360,13 @@ def mutate(request, prefix, agent, state_dir):
         db.execute("INSERT INTO receipts VALUES (?, ?, NULL)", (req_id, digest))
         db.commit()
         try:
-            try: value = answer_question(request, prefix, agent) if op == "answer" else call(prefix + args)
+            try: value = answer_question(request, herdr_answer_io(prefix, agent)) if op == "answer" else call(prefix + args)
             except HerdrRejected as exc:
                 # Herdr refused before writing anything. A ch pane (see relay_pane) takes the same
                 # input at the pane level instead: still the one and only write for this receipt.
                 if not (exc.code == "agent_not_ready" and op in ("prompt", "key", "answer", "exitAgent")
                         and relay_pane(agent, prefix)): raise
-                if op == "answer": value = answer_question(request, prefix, dict(agent, relay=True))
+                if op == "answer": value = answer_question(request, herdr_answer_io(prefix, dict(agent, relay=True)))
                 elif op == "key": value = call(prefix + ["pane", "send-keys", agent["pane_id"], key])
                 else: value = relay_prompt(prefix, agent["pane_id"], args[-1])
         except HerdrRejected as exc:
@@ -2802,22 +2802,37 @@ def menu_consistent(base, current):
                for r in current["options"])
 
 
-def answer_question(request, prefix, agent):
+class AnswerIO:
+    """What answer_question needs from a pane: read its screen, press one key ("up", "down",
+    "enter"), type one line of text. Herdr panes go through `herdr agent|pane …`, tmux panes
+    through `tmux send-keys` (tmux_answer_io); the walking and checking logic is shared."""
+
+    def __init__(self, provider, screen, key, text):
+        self.provider, self.screen, self.key, self.text = provider, screen, key, text
+
+
+def herdr_answer_io(prefix, agent):
+    target = agent["pane_id"]
+    return AnswerIO(agent.get("agent", ""),
+                    lambda: read_screen(prefix, agent, 80).get("text", ""),
+                    lambda name: call(prefix + (["pane", "send-keys", target, name] if agent.get("relay") else ["agent", "send-keys", target, name])),
+                    lambda text: call(prefix + ["pane", "send-text", target, text]))
+
+
+def answer_question(request, io):
     """Drive a blocked agent's menu to the chosen option(s); Enter only on a verified cursor.
 
     Every key is sent on its own and followed by a screen read: the cursor must move exactly
     one row in the expected direction inside the same dialog, otherwise we stop before Enter.
     """
-    target = agent["pane_id"]
     steps = []
 
     def screen():
-        text = read_screen(prefix, agent, 80).get("text", "")
-        return parse_menu(text, agent.get("agent", ""))
+        return parse_menu(io.screen(), io.provider)
 
     def press(name):
         if len(steps) >= ANSWER_KEYS_LIMIT * 2: raise BridgeError("按键太多，已停下")
-        call(prefix + (["pane", "send-keys", target, name] if agent.get("relay") else ["agent", "send-keys", target, name]))
+        io.key(name)
         steps.append(name)
 
     base = screen()
@@ -2884,7 +2899,7 @@ def answer_question(request, prefix, agent):
         precheck(n, True)
         menu = land(menu, n, True)
         text = request["text"]
-        call(prefix + ["pane", "send-text", target, text])
+        io.text(text)
         steps.append("text")
         probe = menu_norm(text)[:8]
         menu = wait(lambda m: m["cursor"] == n and row(m, n) and probe in menu_norm(row(m, n)["label"] + row(m, n)["description"]),
@@ -3865,7 +3880,10 @@ TMUX_NO_SERVER = re.compile(r"(?i)no server running|error connecting to|no such 
 TMUX_SHELLS = {"bash", "zsh", "sh", "fish", "dash", "ksh", "tcsh", "csh", "login", "tmux", "less", "man", "top", "htop", "vim", "nvim", "vi", "nano", "emacs"}
 TMUX_AGENTS = ("claude", "codex")
 TMUX_AGENT_SCREENS = 24        # agent panes whose screen is read for their state, per list
-TMUX_WORKING = re.compile(r"(?i)\besc to interrupt\b")
+# Working: Codex (and older Claude) print "esc to interrupt"; Claude Code 2.1.2xx shows only its
+# spinner line, a glyph and a gerund with an ellipsis ("✽ Ionizing…", "· Ionizing… (4s · ↓ 28 tokens)").
+# Its finished line has no ellipsis ("✻ Crunched for 7s · done 17:51").
+TMUX_WORKING = re.compile(r"(?i)\besc to interrupt\b|^\s*[·✢✳✶✻✽*]\s+[A-Za-z][a-z'-]{2,30}…")
 TMUX_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}")
 TMUX_SESSION_ID = re.compile(r"\$\d{1,9}")
 TMUX_NEW_KEYS = {"v", "op", "id", "name", "cwd"}
@@ -3955,14 +3973,100 @@ def tmux_agent_identity(pane, found):
 
 
 def tmux_screen_state(text, kind):
-    """blocked (a menu waits), working (the footer offers to interrupt) or idle, from the screen."""
+    """blocked (a menu waits), working (the footer offers to interrupt, or a spinner) or idle, from the screen."""
     if parse_menu(text, kind): return "blocked"
     tail = [x for x in str(text or "").split("\n") if x.strip()][-12:]
     return "working" if any(TMUX_WORKING.search(x) for x in tail) else "idle"
 
 
+# Claude Code 2.1.2xx shows no spinner while it streams the text of its reply. What the screen does
+# show: the prompt it is answering, echoed as "❯ <text>" above the input box, and once the turn is
+# over an end line under the reply ("✻ Churned for 4s · done 17:54", "⎿  Interrupted · …").
+CLAUDE_TURN_END = re.compile(r"^\s*(?:[·✢✳✶✻✽*]\s+[A-Za-z][a-z'-]+ for \d|⎿\s+Interrupted\b)")
+CLAUDE_PROMPT_ECHO = re.compile(r"^❯ (?!\d{1,2}\.\s)\S")
+
+
+def claude_turn_open(text):
+    """True when the newest prompt echoed above Claude's input box has no end line after it (still
+    answering), False when it ended or no prompt is on screen, None without Claude's input box."""
+    lines = [x.rstrip() for x in str(text or "").split("\n")]
+    rules = [i for i, x in enumerate(lines) if RULE_RE.match(x)]
+    box = None
+    for j in reversed(rules):
+        before = [i for i in rules if i < j]
+        if before and any(x.lstrip().startswith("❯") for x in lines[before[-1] + 1:j]): box = before[-1]; break
+    if box is None: return None
+    for line in reversed(lines[:box]):
+        if CLAUDE_TURN_END.match(line): return False
+        # Local commands (/model, /status…) and shell lines (!) never print an end line.
+        if CLAUDE_PROMPT_ECHO.match(line): return not line[2:].lstrip().startswith(("/", "!"))
+    return False
+
+
+def claude_transcript_turn_done(found):
+    """From Claude's own transcript: did its newest turn end (system/turn_duration, or an interrupt
+    after the last prompt)? None when the transcript cannot be found. Reads the file's tail only."""
+    snap, root = found["snap"], provider_root("claude")
+    paths = []
+    for thread in snap.get("active_threads", []):
+        entry = locate_thread("claude", thread, snap.get("cwd", ""))
+        if entry: paths.append(entry["_path"])
+    if root: paths += [Path(x) for x in snap.get("paths", []) if str(x).endswith(".jsonl") and Path(x).is_relative_to(root)]
+    for path in paths[:1]:
+        try:
+            with open(path, "rb") as stream:
+                stream.seek(max(0, os.fstat(stream.fileno()).st_size - 262144))
+                rows = stream.read().split(b"\n")
+        except OSError: return None
+        for raw in reversed(rows):
+            try: row = json.loads(raw)
+            except ValueError: continue
+            if not isinstance(row, dict): continue
+            if row.get("type") == "system" and row.get("subtype") == "turn_duration": return True
+            # Meta rows (local command output, caveats) and sub-agent rows are not the person's prompt.
+            if row.get("type") != "user" or row.get("isSidechain") or row.get("isMeta"): continue
+            content = (row.get("message") or {}).get("content")
+            if isinstance(content, list):
+                if any(isinstance(x, dict) and x.get("type") == "tool_result" for x in content): return False
+                content = " ".join(x.get("text", "") for x in content if isinstance(x, dict))
+            if isinstance(content, str): return content.lstrip().startswith("[Request interrupted")
+    return None
+
+
+def claude_draft(text, ansi):
+    """Text already in Claude's input box ("" when empty), or None without the box on screen.
+    Esc early in a turn puts the interrupted prompt back there; anything typed now would join it.
+    A suggestion shown in an empty box is drawn after the cursor (reverse video) in a dim colour."""
+    lines, colored = str(text or "").split("\n"), str(ansi or "").split("\n")
+    rules = [i for i, x in enumerate(lines) if RULE_RE.match(x)]
+    for j in reversed(rules):
+        before = [i for i in rules if i < j]
+        if not before: break
+        body = list(range(before[-1] + 1, j))
+        if not body or not lines[body[0]].lstrip().startswith("❯"): continue
+        draft = "\n".join([lines[body[0]].lstrip()[1:]] + [lines[i] for i in body[1:]]).strip(" \u00a0\n\t")
+        if not draft: return ""
+        first = colored[body[0]] if len(colored) == len(lines) else ""
+        after = first.split("❯", 1)[1] if "❯" in first else ""
+        hint = re.match(r"^[\s\u00a0]*(?:\x1b\[[0-9;]*m)*\x1b\[7m.(?:\x1b\[[0-9;]*m)*?\x1b\[(?:2|38;5;2[3-5]\d|90)m", after)
+        return "" if hint and len(body) == 1 else draft
+    return None
+
+
+def tmux_state(pane, found, text):
+    """The agent's state from its screen; a Claude reply streaming without a spinner counts as working.
+    When the screen alone cannot tell (an open prompt, no spinner) its transcript decides; without
+    one it stays working, so nothing is typed into a turn that may still run."""
+    state = tmux_screen_state(text, found["kind"])
+    if state != "idle" or found["kind"] != "claude" or not claude_turn_open(text): return state
+    try: done = claude_transcript_turn_done(found)
+    except (OSError, ValueError): done = None
+    return "idle" if done else "working"
+
+
 def tmux_visible(pane_id):
-    try: return tmux_run(["capture-pane", "-p", "-J", "-t", pane_id])
+    # Some scrollback: a long reply may have pushed its prompt above the visible rows.
+    try: return tmux_run(["capture-pane", "-p", "-J", "-t", pane_id, "-S", "-120"])
     except BridgeError: return None
 
 
@@ -4017,7 +4121,7 @@ def tmux_list(request):
             if screens < TMUX_AGENT_SCREENS:
                 screens += 1
                 text = tmux_visible(pane["pane_id"])
-                if text is not None: status = tmux_screen_state(text, found["kind"])
+                if text is not None: status = tmux_state(pane, found, text)
             ref = None
             if resolve:
                 try: ref = tmux_history(pane, found, cache)
@@ -4092,8 +4196,9 @@ def tmux_send(request, state_dir):
     if action == "run": steps.append((["send-keys", "-t", target, "Enter"], None))
     try:
         for index, (args, data) in enumerate(steps):
-            # An agent's input box may take a paste's end and the Enter as one burst: let it settle.
-            if args[-1] == "Enter" and index and steps[index - 1][0][0] == "paste-buffer": time.sleep(0.15)
+            # An agent's input box may take typed text (or a paste's end) and the Enter as one burst, and
+            # then keeps the Enter as part of the text (seen with Claude Code 2.1.268): let it settle.
+            if args[-1] == "Enter" and index: time.sleep(0.3)
             try: tmux_run(args, data=data)
             except TmuxFailed as exc:
                 # tmux refused the first command before writing anything (pane gone): not sent.
@@ -4108,6 +4213,9 @@ def tmux_send(request, state_dir):
     except BridgeError:
         db.close()
         raise
+    # A lone Esc followed quickly by typed text reads as Alt+<letter> to the program (seen live: the
+    # first letter of the next prompt vanished). Answer only once it stands on its own.
+    if action == "key" and key == "esc": time.sleep(0.3)
     result = {"sent": True, "receipt": req_id}
     receipt_save(db, req_id, result)
     db.close()
@@ -4214,7 +4322,95 @@ def tmux_kill(request, state_dir):
 
 
 # ─── Agent ops aimed at a tmux pane ─────────────────────────────────────────
-TMUX_AGENT_OPS = ("agents", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent")
+# A Claude / Codex in a tmux pane gets the same ops as one in Herdr, with tmux underneath:
+#  · read: the screen (state, modes, background work) plus the parsed menu while it waits on one.
+#  · status (target): the cheap poll of one open chat; `status` with `tmux: true` and no target
+#    lists every tmux agent next to Herdr's (the background watcher). Reads only.
+#  · prompt: refused unless the screen says it is idle (same rule as Herdr: the phone queues
+#    instead); pictures and files name the phone's uploads by local path (the pane runs here),
+#    re-hashed first. One receipt per request id, through tmux_send.
+#  · answer: answer_question with tmux keys (tmux_answer_io): every key is followed by a screen
+#    read, Enter only on a verified cursor; its receipt is written before the first key.
+#  · key: ↑ ↓ Enter Esc Ctrl+C and Shift+Tab (BTab, only while the agent's own input footer is on
+#    screen and nothing waits: on a permission dialog Claude would take it as "don't ask again").
+TMUX_AGENT_OPS = ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent")
+TMUX_ANSWER_KEYS = {"up": "Up", "down": "Down", "enter": "Enter"}
+
+
+def tmux_answer_io(pane, kind):
+    target = pane["pane_id"]
+    def key(name):
+        if name not in TMUX_ANSWER_KEYS: raise BridgeError("Unsupported key")
+        tmux_run(["send-keys", "-t", target, TMUX_ANSWER_KEYS[name]])
+    # Literal text (-l): one line, already checked for control characters by validate_answer.
+    return AnswerIO(kind, lambda: tmux_capture(target)[0], key,
+                    lambda text: tmux_run(["send-keys", "-t", target, "-l", "--", text]))
+
+
+def tmux_status_rows():
+    """Every tmux agent as a status row (state from its screen; no transcript work)."""
+    rows, screens = [], 0
+    for pane in tmux_panes() or []:
+        found = tmux_agent_in(pane)
+        if not found: continue
+        status = None
+        if screens < TMUX_AGENT_SCREENS:
+            screens += 1
+            text = tmux_visible(pane["pane_id"])
+            if text is not None: status = tmux_state(pane, found, text)
+        rows.append(tmux_agent_row(pane, found, status))
+    return rows
+
+
+def tmux_one_status(request):
+    target = request.get("target")
+    pane = next((p for p in tmux_panes() or [] if p["pane_id"] == target), None)
+    found = tmux_agent_in(pane) if pane else None
+    if not found: return {"tmux": True, "agents": []}
+    text = tmux_visible(pane["pane_id"])
+    return {"tmux": True, "agents": [tmux_agent_row(pane, found, tmux_state(pane, found, text) if text is not None else None)]}
+
+
+def tmux_attachments(request):
+    """[(kind, path)] for the prompt's pictures and files: the phone's uploads on this computer,
+    re-hashed. Any refusal raises "没发出去…" before anything reaches the pane."""
+    if request.get("remote"): raise BridgeError("没发出去：tmux 里的 Agent 在这台电脑上，不该走远端")
+    refs = []
+    images, files = request.get("images"), request.get("files")
+    if images is not None:
+        if not isinstance(images, list) or not 1 <= len(images) <= 4: raise BridgeError("一条消息最多带 4 张图片")
+        try: prune_uploads()
+        except OSError: pass
+        for item in images:
+            if not isinstance(item, dict): raise BridgeError("Invalid image")
+            path, match = upload_path(item.get("name"))
+            if not path: raise BridgeError("没发出去：图片还没传到电脑上，删掉重新选一下")
+            if item.get("sha256") != match.group(2) or hashlib.sha256(path.read_bytes()).hexdigest() != match.group(2):
+                raise BridgeError("没发出去：电脑上的图片和手机上的不一致，删掉重新选一下")
+            refs.append(("local", str(path)))
+    if files is not None:
+        if not isinstance(files, list) or not 1 <= len(files) <= FILE_MAX: raise BridgeError("一条消息最多带 4 个文件")
+        refs += [("file", str(uploaded_file(item)[0])) for item in files]
+    return refs
+
+
+def tmux_answer(request, state_dir, pane, found):
+    req_id = request.get("id")
+    if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
+    validate_answer(request)
+    if parse_menu(tmux_capture(pane["pane_id"])[0], found["kind"]) is None:
+        raise BridgeError("Agent is not waiting on a menu; refresh and inspect it first")
+    digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    db, previous = receipt_open(state_dir, req_id, digest, "上次回答的结果未知：先看一眼终端，别直接重发")
+    if previous is not None: return previous
+    try:
+        # From here on keys may reach the pane: a failure leaves the receipt "unknown" (never replayed).
+        value = answer_question(request, tmux_answer_io(pane, found["kind"]))
+        result = {"sent": True, "receipt": req_id, "result": value}
+        receipt_save(db, req_id, result)
+        return result
+    finally:
+        db.close()
 
 
 def tmux_agent_request(request, state_dir):
@@ -4227,32 +4423,58 @@ def tmux_agent_request(request, state_dir):
         found = tmux_agent_in(pane)
         if not found: return {"follow": True, "state": "exited", "agents": [], "pane": dict(tmux_public(pane), tmux=True)}
         text = tmux_visible(pane["pane_id"])
-        row = tmux_agent_row(pane, found, tmux_screen_state(text, found["kind"]) if text is not None else None, tmux_history(pane, found, {}))
+        row = tmux_agent_row(pane, found, tmux_state(pane, found, text) if text is not None else None, tmux_history(pane, found, {}))
         row["tmux_pane"] = tmux_public(pane)
         return {"follow": True, "state": "same" if row["identity"] == request.get("identity") else "changed", "agents": [row], "pane": None}
-    if op == "answer": raise BridgeError("没发出去：tmux 里的提问先在「终端」里用按键回答")
-    if op == "stageFile": raise BridgeError("没发出去：tmux 里的 Agent 暂时不能带文件")
+    if op == "status": return tmux_one_status(request)
     if op == "exitAgent": raise BridgeError("没关：tmux 里的 Agent 用「关闭」关掉窗格")
     pane, found = tmux_target(request, agent=True)
     if op == "commands": return custom_commands(tmux_agent_row(pane, found))
+    if op == "stageFile":
+        # Before a prompt: the upload must be there and hash right. Local pane: nothing to copy.
+        return {"remote": False, "path": str(uploaded_file(request)[0])}
     if op == "read":
         text, screen = tmux_capture(pane["pane_id"])
-        result = {"text": text, "agent_status": tmux_screen_state(text, found["kind"]),
-                  "modes": screen_modes(text, found["kind"]), "bg": screen_bg(text)}
+        state = tmux_state(pane, found, text)
+        result = {"text": text, "agent_status": state, "modes": screen_modes(text, found["kind"]), "bg": screen_bg(text)}
+        # `menu: true` (after a slash command) parses a picker even when the state is not blocked.
+        if state == "blocked" or request.get("menu") is True: result["menu"] = parse_menu(text, found["kind"])
         if request.get("ansi") is True: result["ansi"] = screen
         return result
+    if op == "answer": return tmux_answer(request, state_dir, pane, found)
     base = {"v": 1, "op": "tmuxSend", "id": request.get("id"), "target": pane["pane_id"], "identity": pane["identity"]}
     if op == "key":
-        if request.get("key") not in AGENT_KEYS: raise BridgeError("Unsupported key")
-        return tmux_send(dict(base, action="key", key=request["key"]), state_dir)
+        key = request.get("key")
+        if key not in AGENT_KEYS: raise BridgeError("Unsupported key")
+        if key == "shift+tab":
+            # Shift+Tab cycles the mode only while the agent's input footer is up; on a dialog it may approve.
+            screen = tmux_visible(pane["pane_id"])
+            if screen is None or tmux_screen_state(screen, found["kind"]) == "blocked":
+                raise BridgeError("没发出去：Agent 正等你确认，这时按 Shift+Tab 可能直接批准；先处理完再切换")
+            if screen_modes(screen, found["kind"]) is None:
+                raise BridgeError("没发出去：屏幕上没看到它的输入框和模式栏，不确定 Shift+Tab 会做什么")
+        return tmux_send(dict(base, action="key", key=key), state_dir)
     # prompt
-    if request.get("images") is not None or request.get("files") is not None:
-        raise BridgeError("没发出去：tmux 里的 Agent 暂时不能带图片或文件")
     text = request.get("text")
-    if not isinstance(text, str) or not text.strip(): raise BridgeError("Prompt must not be empty")
+    attached = request.get("images") is not None or request.get("files") is not None
+    if not isinstance(text, str) or (not text.strip() and not attached) or "\x00" in text: raise BridgeError("Prompt must not be empty")
+    if len(text.encode()) > 15000: raise BridgeError("没发出去：消息太长了，最多 15000 字节")
     screen = tmux_visible(pane["pane_id"])
-    if screen is not None and tmux_screen_state(screen, found["kind"]) == "blocked": raise BridgeError(NOT_SENT["agent_blocked"])
-    return tmux_send(dict(base, action="run", text=text), state_dir)
+    state = tmux_state(pane, found, screen) if screen is not None else None
+    if state == "blocked": raise BridgeError(NOT_SENT["agent_blocked"])
+    # Same rule as a Herdr agent: only an idle agent gets a prompt; the phone queues it meanwhile.
+    if state != "idle": raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
+    if found["kind"] == "claude":
+        plain, colored = tmux_capture(pane["pane_id"])
+        if claude_draft(plain, colored):
+            raise BridgeError("没发出去：它的输入框里已经有字了（可能是刚被中断、退回来的那条），发出去会连在一起。先在「终端」里看一眼")
+    if attached:
+        # Checked before the receipt: a refusal here sent nothing.
+        text = compose_prompt(text, tmux_attachments(request))
+        if len(text.encode()) > TMUX_TEXT: raise BridgeError("没发出去：消息加上附件路径太长了")
+    result = tmux_send(dict(base, action="run", text=text), state_dir)
+    if attached and result.get("sent"): result = dict(result, text=text)
+    return result
 
 
 def tmux_request(request, state_dir):
@@ -4290,6 +4512,13 @@ def hidden_records(request, state_dir):
     os.chmod(temp, 0o600)
     os.replace(temp, path)
     return {"ids": ids}
+
+
+def herdr_status(prefix):
+    """Cheap poll: Herdr state only, no process walk or history resolution."""
+    fields = ("pane_id", "agent", "agent_status", "agent_session", "terminal_id", "terminal_title",
+              "terminal_title_stripped", "title", "cwd", "foreground_cwd", "workspace_id", "tab_id", "identity")
+    return [{k: a.get(k) for k in fields} for a in agents(prefix)]
 
 
 def ssh_info():
@@ -4363,12 +4592,16 @@ def handle(request, state_dir=None):
         return close_pane(request, prefix, state_dir or Path.home() / ".local/state/herdr-pocket")
     if op not in ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent"):
         raise BridgeError("Unknown operation")
+    if op == "status" and request.get("tmux") is True:
+        # The background watcher: Herdr's agents (when a session is named and Herdr is there) and
+        # every agent in a tmux pane, in one read-only poll.
+        found = []
+        if request.get("session"):
+            try: found = herdr_status(select_session(request))
+            except HerdrMissing: found = []
+        return {"agents": found + tmux_status_rows(), "tmux": True}
     prefix = select_session(request)
-    if op == "status":
-        # Cheap poll: Herdr state only, no process walk or history resolution.
-        fields = ("pane_id", "agent", "agent_status", "agent_session", "terminal_id", "terminal_title",
-                  "terminal_title_stripped", "title", "cwd", "foreground_cwd", "workspace_id", "tab_id", "identity")
-        return {"agents": [{k: a.get(k) for k in fields} for a in agents(prefix)]}
+    if op == "status": return {"agents": herdr_status(prefix)}
     if op == "agents" and request.get("target") is not None:
         return follow_pane(request, prefix)
     found = agents(prefix, include_history=op == "agents")

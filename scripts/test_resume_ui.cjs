@@ -172,6 +172,7 @@ assert.equal(await page.locator('.connection-status.failed').count(),0,'told on 
 await card(page,'家里的电脑').getByText(/连不上，超时了 · 网络变了会自动再试/).waitFor();
 await card(page,'公司工作站').getByRole('button',{name:/电脑指纹变了，已停止自动重连/}).waitFor();
 await card(page,'树莓派').getByRole('button',{name:/要先核对指纹/}).waitFor();
+assert.equal(await page.locator('.device-card .device-actions .primary').count(),1,'one filled 连接设备 among the cards, the rest quiet');
 assert.deepEqual(await connects(page),['A','B'],'E (untrusted key) was never tried');
 await shots2(page,'failed');
 await page.evaluate(()=>nativeEvent({type:'online',detail:'',device:''}));

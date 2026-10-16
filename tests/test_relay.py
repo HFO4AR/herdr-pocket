@@ -104,13 +104,14 @@ class RelayTests(unittest.TestCase):
 
     def test_relay_answer_presses_keys_in_the_pane(self):
         sent = []
-        def answer(request, prefix, agent): sent.append(agent.get("relay")); 
         self.agent["agent_status"] = "blocked"
-        def first_refused(request, prefix, agent):
+        # The answer's key transport is built from the agent; a relay pane gets the pane-level one.
+        def first_refused(request, agent):
             sent.append(bool(agent.get("relay")))
             if not agent.get("relay"): raise bridge.HerdrRejected("agent_not_ready", "agent w1:p1 is no longer the pane foreground process")
             return {"answered": True}
-        with patch.object(bridge, "answer_question", side_effect=first_refused), patch.object(bridge, "validate_answer", return_value=None):
+        with patch.object(bridge, "herdr_answer_io", side_effect=lambda prefix, agent: agent), \
+                patch.object(bridge, "answer_question", side_effect=first_refused), patch.object(bridge, "validate_answer", return_value=None):
             self.send(op="answer", action="select", option=1, label="x", fingerprint="f")
         self.assertEqual(sent, [False, True])
 

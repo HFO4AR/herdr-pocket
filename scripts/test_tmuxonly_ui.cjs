@@ -43,6 +43,9 @@ await page.addInitScript(()=>{
     else if(a.op==='history')data={record:rec,messages:fx.history,before:0,has_more:false,children:[]};
     else if(a.op==='catalog')data={records:[rec],total:1,next:null};
     else if(a.op==='read'){if(a.target!=='%1'||a.identity!=='ag-1')throw Error('Agent changed or disappeared; reload the agent list');data={text:'✻ Working… (esc to interrupt)',agent_status:fx.status,modes:null,bg:null};}
+    // The open tmux chat's own status read (pane as target); Herdr's status never goes to A.
+    else if(a.op==='status'&&a.target){if(!A)throw Error('tmux status on B');data={tmux:true,agents:a.target==='%1'?[claude()]:[]};}
+    else if(A&&a.op==='glance')data={previews:{}};
     else if(a.op==='agents'&&a.target)data={follow:true,state:'same',agents:[{...claude(),history_ref:{status:'matched',source:'open-file',record_id:'rec1',thread:'T1',record:rec}}],pane:null};
     else if(a.op==='prompt'){data={sent:true,receipt:a.id};}
     else if(a.op==='account')data={ssh_user:'pi',hostname:'pi'};
@@ -83,7 +86,7 @@ assert.match(await agent.locator('.card-meta').textContent(),/tmux/);
 assert.equal(await page.locator('.tmux-row').count(),2);
 assert.equal(await page.locator('.tmux-label').textContent().then(t=>t.replace(/\s+/g,'')),'tmux会话3');
 assert.ok((await calls('tmux','A')).some(c=>c.resolve),'transcripts are looked up for agents in panes');
-for(const op of ['agents','status','glance','createInfo','panes','catalog'])assert.equal((await calls(op,'A')).length,0,'no Herdr op on a computer without Herdr: '+op);
+for(const op of ['agents','status','createInfo','panes','catalog'])assert.equal((await calls(op,'A')).filter(c=>!c.target).length,0,'no Herdr op on a computer without Herdr: '+op);
 assert.equal(await page.locator('#toast.show').count(),0,'no error toast');
 assert.equal(await overflow(),false);
 await shot('list');await dark('list');
@@ -101,13 +104,14 @@ await page.waitForFunction(()=>fx.calls.some(c=>c.op==='prompt'));
 const sent=(await calls('prompt','A'))[0];
 assert.deepEqual([sent.target,sent.identity,sent.text],['%1','ag-1','顺便看看 nginx 的']);
 assert.match(sent.id,/^[0-9a-f-]{36}$/);
-// Its state follows the pane (tmux list poll), not Herdr's status.
+// Its state follows the pane (its own status read, pane as target), not Herdr's status.
 await page.evaluate(()=>{fx.status='working';});
 await page.waitForFunction(()=>S.chat?.agent?.agent_status==='working',null,{timeout:12000});
 await shot('chat');
 await role('button','终端').first().click();
 await page.waitForFunction(()=>fx.calls.some(c=>c.op==='read'&&c.target==='%1'&&c.identity==='ag-1'));
-assert.equal((await calls('status','A')).length,0);
+assert.equal((await calls('status','A')).filter(c=>c.target!=='%1').length,0);
+await page.waitForFunction(()=>fx.calls.some(c=>c.op==='status'&&c.target==='%1'&&c.identity==='ag-1'),null,{timeout:12000});
 await page.evaluate(()=>{fx.status='idle';});
 await role('button','返回列表').click();
 await page.locator('.tmux-only-note').waitFor();

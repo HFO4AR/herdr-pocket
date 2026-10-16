@@ -3,7 +3,8 @@
 // or how its last reply began. The bridge `glance` op reads only the tail of each local
 // transcript and answers "same" for files that did not change. Remote (ch) panes have
 // no local transcript: they show only a waiting Codex question, which the remote sub-agent read
-// (kids.js) reports. Text nodes only.
+// (kids.js) reports. Agents in tmux panes (tmux.js) are local: their rows get the same line.
+// Text nodes only.
 const GL={map:new Map(),dev:'',busy:false,unsupported:false,at:0,restored:''};
 const GLANCE_VERBS={run:'运行',edit:'修改',read:'查看',search:'搜索',web:'查资料',agent:'子 Agent',plan:'更新计划',wait:'等输出',ask:'提问',tool:'调用'};
 
@@ -20,9 +21,9 @@ function glanceItem(a){
  if(g?.stamp)item.stamp=g.stamp;return kidsGlance(a,item);}
 // all=false (status poll): only agents that are busy, changed state or have nothing yet.
 async function glanceRefresh(all=false){
- const dev=glanceDevice();if(!S.demo&&dev&&S.device&&S.session)setTimeout(kidsRemoteRefresh,0);if(GL.busy||GL.unsupported||!dev||!(S.device||S.demo)||!S.agents.length||!S.session)return;
- const items=S.agents.filter(a=>{if(all)return true;const g=GL.map.get(agentKey(a));return !g||g.status!==(a.agent_status||'')||['working','blocked'].includes(a.agent_status)||kidsWanted(a);}).map(glanceItem).filter(Boolean).slice(0,40);
- if(!items.length)return;GL.busy=true;GL.at=Date.now();const session=S.session,status=new Map(S.agents.map(a=>[agentKey(a),a.agent_status||'']));
+ const dev=glanceDevice();if(!S.demo&&dev&&S.device&&S.session)setTimeout(kidsRemoteRefresh,0);const list=liveAgents();if(GL.busy||GL.unsupported||!dev||!(S.device||S.demo)||!list.length)return;
+ const items=list.filter(a=>{if(all)return true;const g=GL.map.get(agentKey(a));return !g||g.status!==(a.agent_status||'')||['working','blocked'].includes(a.agent_status)||kidsWanted(a);}).map(glanceItem).filter(Boolean).slice(0,40);
+ if(!items.length)return;GL.busy=true;GL.at=Date.now();const session=S.session,status=new Map(list.map(a=>[agentKey(a),a.agent_status||'']));
  try{const r=await remote('glance',{items});if(session!==S.session||dev!==GL.dev)return;let changed=false;
   for(const [k,v] of Object.entries(r?.previews||{})){
    if(!v||typeof v!=='object')continue;kidsTake(k,v.kids);bgTake(k,v.bg);if(v.kids_only)continue;const old=GL.map.get(k);
@@ -35,7 +36,7 @@ async function glanceRefresh(all=false){
  finally{GL.busy=false;}}
 // The list opened: show what we had, then refresh if it is not fresh.
 function glanceKick(){glanceRestore();if(Date.now()-GL.at>4000)setTimeout(()=>glanceRefresh(!GL.map.size),0);}
-function glanceSave(){if(S.demo)return;const keep=new Set(S.agents.map(agentKey));cachePut('glance',{session:S.session,items:[...GL.map].filter(([k,g])=>keep.has(k)&&!g.missing).slice(0,60),at:Date.now()});}
+function glanceSave(){if(S.demo)return;const keep=new Set(liveAgents().map(agentKey));cachePut('glance',{session:S.session,items:[...GL.map].filter(([k,g])=>keep.has(k)&&!g.missing).slice(0,60),at:Date.now()});}
 async function glanceRestore(){
  const dev=glanceDevice();if(!dev||S.demo||GL.restored===dev)return;GL.restored=dev;
  const v=await cacheGet('glance',dev);if(!v?.items||dev!==GL.dev)return;let added=false;
@@ -49,7 +50,7 @@ function glanceAsks(a){if(!['idle','done'].includes(a?.agent_status))return null
 // pane/identity key, and whether each was put aside. Known ones never notify; shown ones count as
 // waiting. The open chat knows its question from history even before the list's glance does.
 function glanceWatchAsks(){const out={},key=a=>a.pane_id+'/'+a.identity;
- S.agents.forEach(a=>{const g=glanceAsksRaw(a);if(g)out[key(a)]={call_id:g.call_id,aside:qaAside('async:'+g.call_id)};});
+ liveAgents().forEach(a=>{const g=glanceAsksRaw(a);if(g)out[key(a)]={call_id:g.call_id,aside:qaAside('async:'+g.call_id)};});
  const c=S.chat?.agent;const q=c&&!S.chat.stale?qaAsyncPending():null;
  if(q?.p.call_id)out[key(c)]={call_id:q.p.call_id,aside:q.aside};
  return out;}
@@ -95,7 +96,7 @@ function glancePreview(a){
 // Repaint previews and times in place: the list keeps its scroll and any open swipe.
 function glancePaint(){
  if(S.chat||S.tab!=='live')return;
- document.querySelectorAll('[data-glance]').forEach(line=>{const a=S.agents.find(x=>agentKey(x)===line.dataset.glance);if(!a)return;
+ const all=liveAgents();document.querySelectorAll('[data-glance]').forEach(line=>{const a=all.find(x=>agentKey(x)===line.dataset.glance);if(!a)return;
   const row=line.closest('.agent-row'),old=line.querySelector('.glance'),next=glancePreview(a);
   if(old)old.remove();if(next)line.append(next);if(row)row.classList.toggle('has-glance',!!next);
   const time=row?.querySelector('.row-time');if(time)time.textContent=rowTimeText(a);});}

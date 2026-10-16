@@ -442,6 +442,7 @@ class MainActivity : Activity() {
                             val device = dev(req).ifEmpty { core.connectedDevice?.optString("id").orEmpty() }
                             if (core.link(device) != null) watchStates[device] = JSONObject()
                                 .put("session", req.optString("session"))
+                                .put("tmux", req.optBoolean("tmux"))
                                 .put("states", req.optJSONObject("states") ?: JSONObject())
                                 .put("kids", req.optJSONObject("kids") ?: JSONObject())
                                 .put("asks", req.optJSONObject("asks") ?: JSONObject())
@@ -674,11 +675,13 @@ class MainActivity : Activity() {
         if (core.hasLinks && !isChangingConfigurations) {
             val linked = core.links().map { it.id }.toSet()
             watchStates.keys.retainAll(linked)
-            val alerts = core.alertsEnabled && notificationsAllowed() && watchStates.values.any { it.optString("session").isNotEmpty() }
+            // A computer is watched for its Herdr session, its agents in tmux panes, or both.
+            val watchable = { state: JSONObject -> state.optString("session").isNotEmpty() || state.optBoolean("tmux") }
+            val alerts = core.alertsEnabled && notificationsAllowed() && watchStates.values.any(watchable)
             val keep = core.keepAliveEnabled
             if (alerts || keep) {
                 val watch = JSONObject()
-                if (alerts) watchStates.forEach { (device, state) -> if (state.optString("session").isNotEmpty()) watch.put(device, state) }
+                if (alerts) watchStates.forEach { (device, state) -> if (watchable(state)) watch.put(device, state) }
                 try { WatchService.start(this, watch.toString(), keep, core.keepAliveMinutes); watched = true } catch (_: Exception) {}
             }
         }

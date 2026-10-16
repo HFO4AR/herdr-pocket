@@ -99,3 +99,15 @@ Remote reads execute only allow-listed resolve/catalog/history/image reads, thro
 - `closePane(session, target, identity, id)`: no other fields. The receipt is written first; then the live pane is re-checked (refusals are stored as `{closed:false, refused}` and reported as `没关：…`), and only `herdr pane close <target>` runs. A Herdr refusal is `没关：…` (stored as `{closed:false, code}`); a timeout leaves the receipt open and reports `关闭结果未知：…` (the same id then never runs again). Result `{closed:true, pane_id, agent, verified}`, `verified` when a follow-up `pane get` says `pane_not_found`. The phone never retries either op on its own; every tap uses a fresh id.
 - ch-cli panes: the local pane only runs the SSH attach to a tmux session on the other computer (`destroy-unattached off`, `remain-on-exit off`). Closing the local pane detaches and leaves that session running (`ch resume`); exiting the agent ends the remote session and the local attach returns to its shell.
 - `hidden(add?, remove?)`: history records hidden in the app. Only record IDs (64 hex, or `remote:<24 hex>:<64 hex>`, ≤ 200 per call, ≤ 2000 kept) in `~/.local/state/herdr-pocket/hidden-records.json` (0600). Transcripts are never touched; the app filters its list and shows them under 「已隐藏」.
+
+## Agents in tmux panes (protocol remains v1)
+
+A Claude Code / Codex process found in a pane of the SSH user's default tmux server (`tmux` op, `agent` on a pane) is addressed by `target` = tmux pane id (`%N`) and the agent `identity` (pane identity + agent pid + start time). The agent ops then run on tmux instead of Herdr, with the same receipts and refusal wording:
+
+- `read`: `{text, agent_status, modes, bg[, ansi][, menu]}`. The state comes from the screen: `blocked` when a numbered menu parses, `working` when the footer offers "esc to interrupt", else `idle`. `menu` (parse_menu) is attached while blocked, or with `menu: true`.
+- `status` with a target: `{tmux: true, agents: [row]}` (one process walk and one screen read; empty when the pane or its agent is gone). `status` with `tmux: true` and no target: Herdr's status rows when `session` is named and Herdr exists, followed by every tmux agent row (the background watcher).
+- `prompt`: only while the screen reads idle (`Agent is busy or waiting for confirmation…` / `没发出去：Agent 正停在…` otherwise; the phone queues). `images` / `files` name the phone's uploads, re-hashed before the receipt; the pane is local, so the prompt gets `[图片] <path>` / `[文件] <path>` lines. Several lines go in as one bracketed paste, then Enter.
+- `stageFile`: re-hashes the upload and returns `{remote: false, path}`.
+- `answer`: same request as for Herdr. The receipt is written before the first key; keys are `tmux send-keys Up|Down|Enter`, the text row gets `send-keys -l -- <text>`, and the screen is re-read after every key (`capture-pane`), stopping before Enter on any doubt.
+- `key`: the agent key list; `shift+tab` is sent as `BTab` only while the agent's input footer is on screen and no menu waits.
+- `exitAgent` is refused (close the pane with `tmuxKill`).

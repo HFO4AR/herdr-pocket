@@ -92,6 +92,13 @@ await tap('跳板机 1 往后挪');
 await page.waitForFunction(()=>document.querySelector('[aria-label="跳板机 1 地址"]').value==='jump-a.example.test');
 console.log('PASS: add hops, inline errors, user@host:port split, key hop, max 3, remove, reorder keeps input');
 
+// A stray tap on the dimmed page keeps the typed form (× still closes it).
+await page.mouse.click(195,30);
+await page.getByText('填的内容还没保存；不要了就点右上角 ×',{exact:true}).waitFor();
+assert.equal(await page.getByRole('dialog',{name:'添加设备'}).count(),1,'backdrop tap keeps a typed form');
+assert.equal(await hopPass(1).inputValue(),'jump-a-pw');
+console.log('PASS: backdrop tap does not throw away a typed device form');
+
 // ── Save: payload shape, passwords cleared from the page ──
 await tap('保存设备');
 await page.getByRole('dialog',{name:'添加设备'}).waitFor({state:'detached'});
@@ -143,8 +150,11 @@ await page.evaluate(([a,b])=>{fx.connect.push({ok:false,code:'hostkey_new',error
 await page.locator('.device-card',{hasText:'10.20.0.5'}).getByRole('button',{name:'连接设备'}).click();
 await page.getByRole('dialog',{name:'核对跳板机指纹'}).waitFor();
 await page.getByText('在跳板机上怎么看指纹',{exact:true}).waitFor();
-await page.getByText('第一次连 跳板机 jump-a.example.test:2201（第 1 跳）',{exact:false}).waitFor();
+await page.getByText('第一次连跳板机 jump-a.example.test:2201（第 1 跳）',{exact:false}).waitFor();
 await page.getByText('跳板机给出的指纹',{exact:false}).waitFor();
+// Behind the sheet: first trust of a hop is a calm info banner, not a red error.
+assert.equal(await page.locator('.connection-status.info').filter({hasText:'跳板机：等你核对指纹'}).count(),1,'first trust of a jump host is info');
+assert.equal(await page.locator('.connection-status.failed').count(),0);
 await tap('信任并连接');
 await page.getByRole('dialog',{name:'核对电脑指纹'}).waitFor();
 await page.getByText('第一次连 10.20.0.5:22（经 jump-b.example.test）',{exact:false}).waitFor();
@@ -156,6 +166,7 @@ assert.deepEqual((await calls('trustHost')).map(c=>c.fingerprint),[FP1,FP2]);
 await page.evaluate(()=>fx.connect.push({ok:false,code:'hostkey_changed',error:'跳板机 jump-a.example.test 的 SSH 指纹和上次信任的不一样，已拒绝连接。',info:{host:'jump-a.example.test',port:2201,fingerprint:'SHA256:new',previous:'SHA256:old',type:'ssh-ed25519',hop:1,hops:3,jump:true}}));
 await page.evaluate(()=>{const d=S.devices.find(x=>x.host==='10.20.0.5');return disconnect(false).then(()=>doConnect(d));});
 await page.getByRole('dialog',{name:'跳板机指纹变了'}).waitFor();
+assert.equal(await page.locator('.connection-status.failed').count(),1,'a changed jump host key stays red');
 await page.getByText('跳板机 jump-a.example.test:2201（第 1 跳） 这次给出的指纹',{exact:false}).waitFor();
 await tap('重新核对');await tap('忘掉并重新核对');
 await page.waitForFunction(()=>fx.calls.some(c=>c.op==='forgetHost'));
@@ -188,6 +199,17 @@ const bg=await page.locator('.hop-card').evaluate(n=>getComputedStyle(n).backgro
 assert.notEqual(bg,'rgb(255, 255, 255)','dark hop card is not white');
 await page.setViewportSize({width:320,height:640});assert.equal(await overflow(),false,'dark form fits 320 px');
 await tap('取消');
+
+// A key-login device: its first jump host defaults to the phone's key too; an untouched form closes on a backdrop tap.
+await tap('添加设备');const form2=page.getByRole('dialog',{name:'添加设备'});await form2.waitFor();await page.waitForTimeout(200);
+await form2.getByRole('radiogroup',{name:'登录方式',exact:true}).getByRole('radio',{name:'密钥'}).click();
+await tap('添加跳板机');await box(1).waitFor();
+assert.equal(await page.getByRole('radiogroup',{name:'跳板机 1 登录方式'}).getByRole('radio',{name:'密钥'}).getAttribute('aria-checked'),'true','hop follows the device login choice');
+await tap('删除跳板机 1');await page.waitForFunction(()=>!document.querySelector('.hop-card'));
+await form2.getByRole('radiogroup',{name:'登录方式',exact:true}).getByRole('radio',{name:'密码'}).click();
+await page.mouse.click(160,20);
+await form2.waitFor({state:'detached'});
+console.log('PASS: hop login follows the device; an untouched form still closes on a backdrop tap');
 
 assert.deepEqual(errors,[]);
 console.log('PASS: dark theme hop card, no page errors');

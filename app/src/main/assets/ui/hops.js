@@ -21,7 +21,7 @@ function hopKeys(list){let p='';return list.map(h=>{p+='>'+String(h.host).trim()
 
 // Mounts the editor before `before`; target() names the device for the route preview.
 // Returns {check(): jumps payload or null (errors shown), path(), wipe()}.
-function hopEditor(box,d,before,target=()=>d.name||d.host||''){
+function hopEditor(box,d,before,target=()=>d.name||d.host||'',authOf=()=>'password'){
  hopIcons();
  const orig=d.jumps||[];const savedKeys=new Set(hopKeys(orig).filter((k,i)=>orig[i].auth!=='key'&&orig[i].remember));
  // Working copy; typed passwords stay here (memory only) until the form is saved or closed.
@@ -29,7 +29,7 @@ function hopEditor(box,d,before,target=()=>d.name||d.host||''){
  const wrap=el('section','hop-box');wrap.setAttribute('aria-label','通过跳板机连接');box.insertBefore(wrap,before);
  const head=el('div','hop-head');const ttl=el('div','grow');ttl.append(el('div','hop-title','通过跳板机连接'),el('div','hop-sub','先 SSH 到跳板机，再从那里连这台电脑（和 ssh -J 一样）。可选，最多 '+HOP_MAX+' 台。'));
  const badge=el('span','hop-glyph');badge.append(icon('route'));head.append(badge,ttl);wrap.append(head);
- const list=el('div','hop-list');const route=el('div','hop-route');const add=btn('','secondary small hop-add',()=>{read();hops.push({host:'',port:'22',user:'',auth:'password',password:''});draw(hops.length-1);},'plus');
+ const list=el('div','hop-list');const route=el('div','hop-route');const add=btn('','secondary small hop-add',()=>{read();hops.push({host:'',port:'22',user:'',auth:(hops.length?hops[hops.length-1].auth:authOf())==='key'?'key':'password',password:''});draw(hops.length-1);},'plus');
  const note=el('p','fine hop-note','跳板机的密码和设备资料一起加密保存在这台手机上。每台跳板机第一次连都要核对指纹。');
  wrap.append(list,route,add,note);
  let rows=[];
@@ -53,7 +53,7 @@ function hopEditor(box,d,before,target=()=>d.name||d.host||''){
   // Same two choices as the device: 密码, or this phone's key (installed on the jump host first).
   const authRow=el('div','hop-auth');authRow.append(el('span','hop-auth-label','登录方式'));
   const g=el('div','seg');g.setAttribute('role','radiogroup');g.setAttribute('aria-label','跳板机 '+n+' 登录方式');
-  const keyNote=el('p','fine hop-key-note','用这台手机的密钥登录跳板机。先把公钥装到跳板机的 ~/.ssh/authorized_keys（设备页 → 这台手机的密钥）。');
+  const keyNote=el('p','fine hop-key-note','用这台手机的密钥登录跳板机。先把公钥装到跳板机的 ~/.ssh/authorized_keys（设备页 → 登录密钥）。');
   const opts=[['password','密码'],['key','密钥']].map(([v,t])=>{const b=btn(t,'seg-opt',()=>set(v));b.setAttribute('role','radio');g.append(b);return [v,b];});
   function set(v){h.auth=v;for(const [k,b] of opts){b.classList.toggle('on',k===v);b.setAttribute('aria-checked',String(k===v));}passLabel.classList.toggle('hidden',v==='key');keyNote.classList.toggle('hidden',v!=='key');}
   authRow.append(g);c.insertBefore(authRow,passLabel);c.append(keyNote);set(h.auth);

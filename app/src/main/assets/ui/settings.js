@@ -46,8 +46,8 @@ async function updateInstall(){
  catch(e){SET.error=e.message||String(e);}
  paintSettings();}
 
-function seg(label,options,value,change){
- const row=el('div','set-row set-seg-row');row.append(el('span','set-label',label));
+function seg(label,options,value,change,stack=false){
+ const row=el('div','set-row set-seg-row'+(stack?' stack':''));row.append(el('span','set-label',label));
  const g=el('div','seg');g.setAttribute('role','radiogroup');g.setAttribute('aria-label',label);
  options.forEach(([v,t])=>{const on=v===value;const b=btn(t,'seg-opt'+(on?' on':''),async()=>{if(b.classList.contains('on'))return;g.querySelectorAll('.seg-opt').forEach(n=>{n.classList.remove('on');n.setAttribute('aria-checked','false');});b.classList.add('on');b.setAttribute('aria-checked','true');await change(v);});b.setAttribute('role','radio');b.setAttribute('aria-checked',String(on));g.append(b);});
  row.append(g);return row;}
@@ -73,7 +73,7 @@ function settingsPage(main){
  const keepOn=p.keepAlive!==false,minutes=KEEPS.some(k=>k[0]===p.keepAliveMinutes)?p.keepAliveMinutes:60;
  conn.append(toggle('后台保持连接','切到后台或划掉 App 后继续连着，回来不用重新登录',keepOn,async on=>{const r=await settingsSet('keepAlive',on);if(!r)return false;toast(on?'切到后台时会保持连接 '+keepText(r.keepAliveMinutes):'切到后台后不再保持连接');paintSettings();return true;}));
  if(keepOn){
-  conn.append(seg('保持多久',KEEPS,minutes,async v=>{const r=await settingsSet('keepAliveMinutes',v);if(r){toast(v?'后台保持 '+keepText(v)+'，到时自动断开':'会一直保持连接，不用了在通知里点「断开」');paintSettings();}}));
+  conn.append(seg('保持多久',KEEPS,minutes,async v=>{const r=await settingsSet('keepAliveMinutes',v);if(r){toast(v?'后台保持 '+keepText(v)+'，到时自动断开':'会一直保持连接，不用了在通知里点「断开」');paintSettings();}},true));
   conn.append(el('p','set-note',(minutes?'到时间自动断开省电，回来时自动重连。':'一直保持会多耗一点电，不用了在通知里点「断开」。')+(p.notifications===false?'系统通知关着也照样保持，只是通知栏里看不到它。':'保持期间通知栏有一条安静的常驻通知。')));}
  const privacy=group(main,'提醒与隐私');
  privacy.append(toggle('后台提醒','切到后台后，Agent 做完或等你确认时发通知',S.alerts!==false,async on=>{try{S.alerts=(await rpc('setAlerts',{enabled:on})).alerts;toast(S.alerts?'切到后台时会继续关注 Agent':'已关闭后台提醒');return true;}catch(e){error(e);return false;}}));

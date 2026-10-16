@@ -39,7 +39,8 @@ elif cmd == "new-session":
 
 UUID = "12345678-1234-4234-8234-123456789012"
 UUID2 = "22345678-1234-4234-8234-123456789012"
-CLAUDE_IDLE = "╭───╮\n│ > │\n╰───╯\n  ⏵⏵ accept edits on (shift+tab to cycle)\n"
+# Claude Code 2.1.x: the input box is a ❯ line between two rules, the mode under it.
+CLAUDE_IDLE = "─" * 40 + "\n❯ \n" + "─" * 40 + "\n  ⏵⏵ accept edits on (shift+tab to cycle)\n"
 CLAUDE_BUSY = "✻ Pondering… (12s · esc to interrupt)\n╭───╮\n│ > │\n╰───╯\n"
 CLAUDE_ASK = ("Do you want to proceed?\n❯ 1. Yes\n  2. No, and tell Claude what to do differently (esc)\n\n"
               "Esc to cancel · Tab to amend\n")
@@ -253,9 +254,9 @@ class TmuxOnlyTests(unittest.TestCase):
     def test_agent_input_refusals(self):
         a = self.agent()
         cases = [(dict(op="prompt", identity=self.pane("%1")["identity"], text="x"), "Agent changed"),
-                 (dict(op="prompt", identity=a["identity"], text="x", images=[{"name": "a"}]), "图片"),
-                 (dict(op="answer", identity=a["identity"], action="pick", option=1), "终端"),
-                 (dict(op="stageFile", identity=a["identity"]), "文件"),
+                 (dict(op="prompt", identity=a["identity"], text="x", images=[{"name": "a"}]), "Invalid image"),
+                 (dict(op="answer", identity=a["identity"], action="pick", option=1), "Unsupported answer"),
+                 (dict(op="stageFile", identity=a["identity"]), "Invalid file"),
                  (dict(op="exitAgent", identity=a["identity"]), "关闭"),
                  (dict(op="key", identity=a["identity"], key="C-c"), "Unsupported")]
         for req, msg in cases:

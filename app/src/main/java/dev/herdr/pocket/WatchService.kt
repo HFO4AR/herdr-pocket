@@ -46,6 +46,11 @@ import org.json.JSONObject
  * per question. Questions the app already showed or the person put aside (暂不回答) come in the
  * seed and never notify. The alert goes away when the agent moves on. Decisions: [WatchRules].
  *
+ * Agents in tmux panes: the app's seed says `tmux: true` when it showed any; the status poll then
+ * asks for them too (bridge `status` with `tmux: true`: Herdr's agents when a session is named, and
+ * every Claude / Codex found in a tmux pane, its state read from its screen). A computer without
+ * Herdr is watched with no session at all. Same rules, reads only.
+ *
  * Several computers: every connected computer is kept, and each one the app showed agents for is
  * watched on its own (own session, seed and failure count; five failures in a row stop alerts for that
  * computer only). The ongoing notification says "已连接 N 台设备"; alerts name their computer; 断开
@@ -63,6 +68,11 @@ class WatchService : Service() {
      */
     private class Watch(val id: String) {
         var session = ""
+        // Also watch the agents in tmux panes (seed `tmux: true`); with no Herdr the session is empty.
+        var tmux = false
+        /** Alerts run for this computer: a Herdr session to poll, tmux agents, or both. */
+        val on get() = session.isNotEmpty() || tmux
+        fun off() { session = ""; tmux = false }
         var failures = 0
         val last = HashMap<String, String>()
         // Each agent's record as the app knows it (provider, thread, record_id, cwd or remote): what to ask about sub-agents.
@@ -96,7 +106,7 @@ class WatchService : Service() {
         val urgent get() = kind == WatchRules.Alert.BLOCKED || kind == WatchRules.Alert.ASK
     }
 
-    private val alerting get() = watches.values.any { it.session.isNotEmpty() }
+    private val alerting get() = watches.values.any { it.on }
     private val several get() = PocketCore.links().size > 1
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -122,7 +132,7 @@ class WatchService : Service() {
         if (intent?.action == ACTION_STOP) {
             // 停止关注: alerts end; the connections stay while the keep part runs.
             if (!keep || !alerting) { end(); return START_NOT_STICKY }
-            watches.values.forEach { it.session = "" }; handler.removeCallbacksAndMessages(null)
+            watches.values.forEach { it.off() }; handler.removeCallbacksAndMessages(null)
             manager().notify(ONGOING_ID, ongoing(emptyList())); handler.postDelayed(::poll, KEEP_TICK_MS)
             return START_NOT_STICKY
         }
@@ -131,13 +141,14 @@ class WatchService : Service() {
         val now = SystemClock.elapsedRealtime()
         keepUntil = if (keep && minutes > 0) now + minutes * 60_000L else 0L
         alertsUntil = now + MAX_RUNTIME_MS
-        // {device id: {session, states, kids, asks}}: what the app showed last for each computer.
+        // {device id: {session, tmux, states, kids, asks}}: what the app showed last for each computer.
         val seeds = try { JSONObject(intent?.getStringExtra(EXTRA_WATCH) ?: "{}") } catch (_: Exception) { JSONObject() }
         watches.clear()
         for (link in PocketCore.links()) {
             val w = Watch(link.id)
             seeds.optJSONObject(link.id)?.let { seed ->
                 w.session = seed.optString("session")
+                w.tmux = seed.optBoolean("tmux")
                 seed(w, seed.optJSONObject("states"))
                 seedAsks(w, seed.optJSONObject("asks"))
                 seed.optJSONObject("kids")?.let { o -> o.keys().forEach { k -> o.optJSONObject(k)?.let { w.kidItems[k] = it } } }
@@ -163,7 +174,7 @@ class WatchService : Service() {
      */
     private fun stillNeeded(): Boolean {
         val now = SystemClock.elapsedRealtime()
-        if (alerting && now > alertsUntil) watches.values.forEach { it.session = "" }
+        if (alerting && now > alertsUntil) watches.values.forEach { it.off() }
         val keeping = keep && (keepUntil == 0L || now < keepUntil)
         if (alerting || keeping) return true
         // Time is up: close the sessions cleanly instead of holding them open for nobody.
@@ -203,7 +214,7 @@ class WatchService : Service() {
         if (!alerting) return keeping()
         val working = states.count { it == "working" || it == "kids" }
         val text = WatchRules.counts(states.count { it == "blocked" }, states.count { it == "ask" }, working, "在执行")
-            .ifEmpty { "都空着，有动静会提醒你" }
+            .ifEmpty { if (states.size > 1) "都空闲，有动静会提醒你" else if (states.size == 1) "空闲，有动静会提醒你" else "有动静会提醒你" }
         val title = if (states.isEmpty()) "正在关注 Agent" else "正在关注 ${states.size} 个 Agent"
         ongoingText = "$title\n$text\n${devicesLine()}"
         return Notification.Builder(this, CHANNEL_BACKGROUND)
@@ -268,7 +279,7 @@ class WatchService : Service() {
             handler.postDelayed(::poll, KEEP_TICK_MS); return
         }
         var next = Long.MAX_VALUE
-        for (w in watches.values.toList()) if (w.session.isNotEmpty()) next = minOf(next, pollOne(w))
+        for (w in watches.values.toList()) if (w.on) next = minOf(next, pollOne(w))
         ongoing(watches.values.flatMap { it.last.values }).let { n -> if (ongoingText != lastOngoing) { lastOngoing = ongoingText; manager().notify(ONGOING_ID, n) } }
         if (!alerting) {
             // Every watched computer failed repeatedly; keep the others' connections only if asked to.
@@ -282,7 +293,9 @@ class WatchService : Service() {
     /** One read-only status poll of one computer. Returns the delay until its next poll. */
     private fun pollOne(w: Watch): Long {
         try {
-            val agents = PocketCore.request(w.id, JSONObject().put("op", "status").put("session", w.session)).getJSONArray("agents")
+            val ask = JSONObject().put("op", "status").put("session", w.session)
+            if (w.tmux) ask.put("tmux", true)
+            val agents = PocketCore.request(w.id, ask).getJSONArray("agents")
             w.failures = 0
             val seen = HashMap<String, String>()
             val listed = LinkedHashMap<String, JSONObject>()
@@ -344,7 +357,7 @@ class WatchService : Service() {
             if (++w.failures >= 5) {
                 val name = w.name
                 notify(w, "watch-stopped", "后台关注停了", "连不上" + (if (name.isEmpty()) "电脑" else " $name") + "，已停止提醒；回到 App 会重新连接", "", WatchRules.Alert.DONE, grouped = false)
-                w.session = ""; w.last.clear()
+                w.off(); w.last.clear()
             }
             return WatchRules.POLL_MS
         }
@@ -441,7 +454,7 @@ class WatchService : Service() {
         val manager = manager()
         val key = w.key(agentKey)
         // Alerts belong to the alerts part only; keeping the connection never makes a sound.
-        if (w.session.isEmpty() || !manager.areNotificationsEnabled()) return
+        if (!w.on || !manager.areNotificationsEnabled()) return
         val urgent = kind == WatchRules.Alert.BLOCKED || kind == WatchRules.Alert.ASK
         val b = Notification.Builder(this, if (urgent) CHANNEL_ALERT else CHANNEL_DONE)
             .setSmallIcon(R.drawable.ic_notification)
@@ -525,7 +538,7 @@ class WatchService : Service() {
         /** True while the service runs (it holds the session for the app). */
         @Volatile var running = false
             private set
-        /** {device id: {session, states, kids, asks}}: one entry per computer to alert about. */
+        /** {device id: {session, tmux, states, kids, asks}}: one entry per computer to alert about. */
         const val EXTRA_WATCH = "watch"
         /** [Look.asks]: the transcript did not change since the last check, so neither did the question. */
         private val SAME = WatchRules.Ask("", "", 0)

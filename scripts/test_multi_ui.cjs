@@ -57,6 +57,14 @@ const theme=t=>page.evaluate(t=>{document.documentElement.dataset.theme=t;},t);
 const shot=async name=>{await page.evaluate(()=>document.getElementById('toast').classList.remove('show'));await page.waitForTimeout(300);await page.screenshot({path:path.join(shots,'multi-'+name+'.png')});};
 const agentRow=title=>page.getByRole('button',{name:new RegExp(title)});
 
+// 0. Nothing connected: one filled 连接设备 (no history yet: the first card); the others are quiet.
+const fill=name=>card(name).locator('.device-actions>button').first().evaluate(b=>b.classList.contains('primary'));
+await card('公司工作站').getByRole('button',{name:'连接设备',exact:true}).waitFor();
+assert.deepEqual([await fill('家里的电脑'),await fill('公司工作站')],[true,false],'only the most likely computer gets the filled button');
+assert(await card('公司工作站').getByRole('button',{name:'连接设备',exact:true}).evaluate(b=>b.classList.contains('secondary')&&b.getBoundingClientRect().height>=44),'the quiet button is still a 44 px target');
+await shot('devices-idle-light');await theme('dark');await shot('devices-idle-dark');await theme('light');
+console.log('PASS: devices page: one filled 连接设备, the rest secondary');
+
 // 1. Connect A, then B: A stays connected (no disconnect, no "切换设备？" confirmation).
 await card('家里的电脑').getByRole('button',{name:'连接设备',exact:true}).click();
 await agentRow('Alpha 任务').first().waitFor();
@@ -75,6 +83,27 @@ assert.equal(await switcher.getByRole('button',{name:'公司工作站'}).getAttr
 assert.equal(await page.getByRole('button',{name:'当前设备，共连着 2 台',exact:true}).count(),1);
 await shot('live-light');await theme('dark');await shot('live-dark');await theme('light');
 console.log('PASS: connecting B leaves A connected; switcher shows both');
+
+// 1b. A silent reconnect names the computer and never covers the switcher: with several connected the
+// state is a strip in the page right under the chips (no floating pill), and the chip on screen spins.
+const strip=page.locator('.net-inline');
+await page.evaluate(()=>nativeEvent({type:'reconnecting',detail:'x'}));
+await strip.getByText('公司工作站 断了，正在重连…',{exact:true}).waitFor();
+await switcher.locator('.dev-pill.reconnecting .spinner').waitFor();
+assert.equal(await switcher.locator('.reconnecting').count(),1,'only the chip on screen spins');
+assert.equal(await page.locator('#net-banner').isVisible(),false,'no floating pill over the chips');
+{const a=await strip.boundingBox(),row=await switcher.boundingBox();assert(a.y>=row.y+row.height-0.5,'the strip sits below the switcher: '+JSON.stringify([a,row]));}
+await page.evaluate(()=>render());await switcher.locator('.dev-pill.reconnecting .spinner').waitFor();assert.equal(await strip.count(),1,'survives a re-render, once');
+await shot('reconnect-light');await theme('dark');await shot('reconnect-dark');await theme('light');
+await page.evaluate(()=>nativeEvent({type:'reconnect_failed',detail:'x'}));
+await strip.getByText('公司工作站：连不上电脑',{exact:true}).waitFor();
+assert.equal(await switcher.locator('.reconnecting').count(),0);
+await page.setViewportSize({width:320,height:640});await shot('reconnect-failed-320');await page.setViewportSize({width:390,height:844});
+await page.evaluate(()=>nativeEvent({type:'reconnected'}));
+await strip.getByText('公司工作站 已重新连上',{exact:true}).waitFor();
+await strip.waitFor({state:'detached',timeout:5000});
+assert.equal(await switcher.locator('.reconnecting').count(),0,'the chip is back to its dot');
+console.log('PASS: reconnect state names the computer, sits under the switcher (not over it), chip spins');
 
 // 2. Switch back to A: instant, its list as it was, no reconnect.
 const connectsBefore=await count('connect');
@@ -144,6 +173,9 @@ await page.locator('.account-card').getByRole('button',{name:'断开连接',exac
 await page.getByRole('dialog',{name:'断开当前设备？'}).getByRole('button',{name:'断开',exact:true}).click();
 await page.waitForFunction(()=>LINKS.ids.length===1&&S.device?.id==='A');
 assert.deepEqual(await page.evaluate(()=>fx.links),['A']);
+// The panel now shows A, and its 电脑主机名 is read (it used to stay at 读取中…).
+await page.locator('.account-card .setting-row').filter({hasText:'电脑主机名'}).getByText('A',{exact:true}).waitFor({timeout:5000});
+await card('家里的电脑').getByRole('button',{name:'回到会话',exact:true}).waitFor();
 console.log('PASS: per-device disconnect; the shown one hands over to the other');
 
 // 5. The cap: a fifth computer is refused before anything is sent.
@@ -154,6 +186,9 @@ await page.evaluate(()=>{LINKS.ids=['A'];});
 // Disconnect all (e.g. 断开 on the notification).
 await page.evaluate(()=>disconnect());
 assert.deepEqual(await page.evaluate(()=>[LINKS.ids,S.device,LINKS.views.size]),[[],null,0]);
+// Back on the devices page: the filled button follows the computer connected last (B).
+await card('家里的电脑').getByRole('button',{name:'连接设备',exact:true}).waitFor();
+assert.deepEqual([await fill('家里的电脑'),await fill('公司工作站')],[false,true],'the last used computer leads');
 for(const w of [320,390]){await page.setViewportSize({width:w,height:w===320?640:844});assert(await page.evaluate(()=>document.scrollingElement.scrollWidth<=innerWidth),'no sideways scroll at '+w);}
 assert.deepEqual(errors,[]);
 console.log('PASS: cap, disconnect all, no page errors');

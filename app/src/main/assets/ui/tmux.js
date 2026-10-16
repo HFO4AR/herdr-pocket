@@ -9,8 +9,12 @@
 //    as that agent and opens as a chat: 对话 from its transcript when the bridge could match it with
 //    evidence (else the usual "pick a record / see the terminal" note), 终端, sending. The chat's
 //    ops carry the tmux pane id as target and the agent's identity; the bridge serves them with
-//    tmux. Not for tmux agents yet: the send queue, question cards (the 终端 keys answer them),
-//    pictures/files, background alerts.
+//    tmux, so everything a Herdr agent has works the same: the send queue and 立即发送 (queue.js),
+//    question cards (answer.js; keys via tmux send-keys, verified like Herdr's), pictures and files
+//    (local paths), 中断 (Esc), mode chips and Shift+Tab, the preview line on its row (glance.js),
+//    the 切换 Agent sheet and background alerts (WatchService polls `status` with tmux: true).
+//    Its state comes from its screen (bridge tmux_state): blocked (a menu), working ("esc to
+//    interrupt", Claude's spinner, or a reply still streaming under its prompt) or idle.
 //  · 新建 tmux 会话 (tmuxNew) and 关闭 a pane or a whole session (tmuxKill), both behind a sheet.
 // Local panes only: tmux on another computer behind a ch-cli route is not listed.
 const TX={by:new Map()};
@@ -34,7 +38,9 @@ async function tmuxLoad(resolve=false){
   st.loaded=true;if(resolve)st.resolveAt=Date.now();
   for(const p of st.panes)if(p.agent?.history_ref)st.refs.set(p.agent.identity,p.agent.history_ref);
   const agents=st.panes.map(tmuxAgent).filter(Boolean);
-  if(dev===tmuxDevice()&&agents.length)noteStatus(agents);
+  if(dev===tmuxDevice()&&agents.length){noteStatus(agents);syncWatch();if(typeof glanceRefresh==='function')glanceRefresh();}
+  // A notification tapped for a tmux agent waits for this list (app.js openPending).
+  if(dev===tmuxDevice()&&/^%/.test(S.pendingPane||''))openPending();
   // A new agent in a pane: find its transcript (the scan costs more, so not on every poll).
   if(!resolve&&agents.some(a=>!a.history_ref||a.history_ref.status==='pending')&&Date.now()-st.resolveAt>15000){st.resolveAt=Date.now();setTimeout(()=>tmuxLoad(true),0);}}
  // An older bridge does not know the op: stop asking until the next device. Other failures
@@ -67,6 +73,8 @@ function tmuxAgentRow(a){const row=agentRow(a);const meta=row.querySelector('.ca
 function tmuxSection(main,only=false){
  const list=tmuxPanes();if(!list.length)return;
  const agents=list.filter(p=>p.agent),plain=list.filter(p=>!p.agent);
+ // Their preview lines (glance.js); with Herdr agents on the page livePage already asked.
+ if(agents.length&&!S.agents.length&&typeof glanceKick==='function')glanceKick();
  const label=el('div','section-label group-label tmux-label');label.append(el('span','',only?'tmux 会话':'tmux'),el('span','group-count',String(list.length)));main.append(label);
  if(agents.length){const card=el('div','card list-card tmux-list tmux-agents');agents.forEach(p=>card.append(tmuxAgentRow(tmuxAgent(p))));main.append(card);}
  if(plain.length){const card=el('div','card list-card tmux-list');plain.forEach(p=>card.append(tmuxRow(p)));main.append(card);}}
@@ -243,21 +251,31 @@ async function tmuxNewSubmit(f,go,status,nameOk,nameInput){
   else toast('新建结果未知，刷新列表看看，别直接再建');}}
 
 // ─── A chat with an agent in tmux ────────────────────────────────────────────
-// Herdr's status poll does not know tmux panes: this one follows the open chat's pane instead
-// (state from the screen). Anything else in the pane → follow.js decides (exited / another one).
+// Herdr's status poll does not know tmux panes: this one reads the open chat's pane instead
+// (bridge `status` with the pane as target: one process walk and one screen read), on the same
+// beat as Herdr's (app.js pollBeat → refreshStatus). Anything else in the pane → follow.js decides.
+// Returns the pane's agent row now (undefined: none there); a failed read throws.
+async function tmuxStatusOne(a){
+ let cur;const st=tmuxState();
+ if(!st?.statusOld){let r;
+  // An older bridge reads `status` as Herdr's (no tmux flag, or no Herdr at all): use the list then.
+  try{r=await remote('status',{target:a.pane_id,identity:a.identity});}catch(e){if(!/没找到 Herdr|Unknown operation|不支持的操作/.test(e?.message||''))throw e;}
+  if(r?.tmux)cur=r.agents?.find(x=>x.pane_id===a.pane_id);else if(st)st.statusOld=true;}
+ if(st?.statusOld){const r=await remote('tmux');const p=(r?.panes||[]).find(x=>x.pane_id===a.pane_id);cur=p?.agent?tmuxAgent(p):undefined;}
+ // Keep the list's copy in step, so the list, the queue's check and the watcher agree.
+ if(st&&cur){const p=st.panes.find(x=>x.pane_id===cur.pane_id);if(p?.agent&&p.agent.identity===cur.identity&&p.agent.agent_status!==cur.agent_status){p.agent={...p.agent,agent_status:cur.agent_status};st.sig='';}}
+ return cur?{...cur,tmux:true}:cur;}
 async function tmuxChatPoll(){
- const c=S.chat,a=c?.agent;if(!a?.tmux||c.stale||c.exited||TX.chatBusy)return;TX.chatBusy=true;
- try{const r=await remote('tmux');if(S.chat!==c)return;const st=tmuxState();
-  if(st&&Array.isArray(r?.panes)){st.panes=r.panes.filter(p=>/^%\d+$/.test(p?.pane_id)&&typeof p.identity==='string');}
-  const p=(r?.panes||[]).find(x=>x.pane_id===a.pane_id),cur=p?.agent?tmuxAgent(p):undefined;
+ const c=S.chat,a=c?.agent;if(!a?.tmux||c.exited?.gone||TX.chatBusy||S.demo||!S.device)return;TX.chatBusy=true;
+ try{const cur=await tmuxStatusOne(a);if(S.chat!==c)return;
   followHint(cur);
-  if(!cur||cur.identity!==a.identity||!cur.agent_status||cur.agent_status===a.agent_status)return;
-  const was=a.agent_status,upd={...a,agent_status:cur.agent_status};noteStatus([upd]);c.agent=upd;onAgentStatus(was,cur.agent_status);}
- catch(_){/* the next tick tries again */}
+  if(!cur||cur.identity!==c.agent.identity||!cur.agent_status||cur.agent_status===c.agent.agent_status)return;
+  const was=c.agent.agent_status,upd={...c.agent,agent_status:cur.agent_status};noteStatus([upd]);c.agent=upd;syncWatch();onAgentStatus(was,cur.agent_status);}
+ catch(_){/* the next beat tries again */}
  finally{TX.chatBusy=false;}}
 
 (function(){
- const baseLive=livePage,baseLoad=loadLive,baseActions=agentActions,baseClose=closeSession,baseOpenPane=followOpenPane,baseWants=queueWants,baseCreate=openCreate;
+ const baseLive=livePage,baseLoad=loadLive,baseActions=agentActions,baseClose=closeSession,baseOpenPane=followOpenPane,baseCreate=openCreate,baseStatus=refreshStatus;
  livePage=function(main){
   if(noHerdr()){if(requireDevice(main))tmuxOnlyPage(main);return;}
   baseLive(main);if(S.device&&!(S.liveLoading&&!S.agents.length))tmuxSection(main);};
@@ -266,12 +284,14 @@ async function tmuxChatPoll(){
  agentActions=function(a){return a?.tmux?tmuxActions(a.tmux_pane,a):baseActions(a);};
  closeSession=function(a){return a?.tmux?tmuxClose(a.tmux_pane||a):baseClose(a);};
  followOpenPane=function(pane){if(pane?.tmux){S.chatStack=[];S.chat=null;tmuxOpen(pane);return;}return baseOpenPane(pane);};
- // No send queue for tmux agents yet: the agent takes typed input while it works.
- queueWants=function(a,key){return a?.tmux?false:baseWants(a,key);};
+ // The status beat (app.js pollBeat, sendKey, answers…) also reads an open tmux chat's pane.
+ refreshStatus=function(...args){if(S.chat?.agent?.tmux)tmuxChatPoll();return baseStatus(...args);};
  // 新建 without Herdr (or before a Herdr session is known) is a tmux session.
  openCreate=function(){if(!S.demo&&S.device&&(noHerdr()||!S.session)&&tmuxCan()){tmuxNewSheet();return;}return baseCreate();};
 })();
-// The list follows tmux while it is on screen (new sessions, windows renamed, commands changing),
-// and an open chat with a tmux agent follows its pane's state.
+// The list follows tmux while it is on screen (new sessions, windows renamed, commands changing):
+// every 4 s while a tmux agent works or waits, else every 8 s. An open chat follows its pane on the
+// status beat (refreshStatus above).
 TX.tick=0;
-setInterval(()=>{if(!S.active||(typeof T!=='undefined'&&T.view))return;if(S.chat?.agent?.tmux){tmuxChatPoll();return;}if(++TX.tick%2===0&&S.tab==='live'&&!S.chat)tmuxLoad();},4000);
+setInterval(()=>{if(!S.active||(typeof T!=='undefined'&&T.view)||S.chat)return;const hot=tmuxAgents().some(a=>['working','blocked'].includes(a.agent_status));
+ if((hot||++TX.tick%2===0)&&S.tab==='live')tmuxLoad();},4000);

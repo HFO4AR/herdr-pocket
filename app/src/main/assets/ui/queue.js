@@ -12,6 +12,8 @@
 //    for. A changed conversation or an exited agent pauses the queue and says so.
 //  · The queue lives in memory for this run (per Herdr session + agent identity). Nothing here is
 //    handed to the background watcher: it never sends input.
+//  · An agent in a tmux pane (tmux.js) queues the same way: its state comes from its screen
+//    (bridge `status` with the pane as target) instead of Herdr's, everything else is shared.
 //  · Each item belongs to the computer it was written on (it.dev, several can be connected). It is
 //    sent only while that computer is on screen, and the request names it explicitly.
 const Q=new Map();// agentKey → {items:[], paused:'', resumable, inflight, retryAt, ackAt}
@@ -86,11 +88,11 @@ async function queueNow(key,qid){
   if(busy()){
    try{await remote('key',{session:S.session,target:c.agent.pane_id,identity:c.agent.identity,key:'esc',id:uuid(),...(it.dev?{device:it.dev}:{})});}
    catch(e){const msg=e.message||String(e);it.reason=queueNotSent(msg)?msg:'中断没确认：'+msg;queuePause(q,'没能中断它，消息先没发。看一眼再点继续',true);return;}
-   // Wait for Herdr to report the same agent stopped (polled, not guessed).
+   // Wait for Herdr (or the tmux pane's screen) to report the same agent stopped (polled, not guessed).
    const until=Date.now()+20000;
    while(Date.now()<until){
     await new Promise(r=>setTimeout(r,1000));if(S.chat!==c)break;
-    try{const r=await remote('status',{session:S.session});const cur=r.agents.find(a=>a.pane_id===c.agent.pane_id);
+    try{const cur=await queueStatusNow(c);
      if(!cur||cur.identity!==c.agent.identity){c.stale=true;break;}
      S.agents=S.agents.map(a=>a.pane_id===cur.pane_id?{...a,agent_status:cur.agent_status}:a);
      if(cur.agent_status!==c.agent.agent_status){const was=c.agent.agent_status;c.agent={...c.agent,agent_status:cur.agent_status};noteStatus([c.agent]);onAgentStatus(was,cur.agent_status);}
@@ -139,11 +141,14 @@ function queuePump(force){
  const was=q.paused,prev=q.why,why=queueBlock(c,key,q,force);q.why=why;if(q.paused!==was||prev!==why)paintTimeline();
  if(why){if(force&&why!=='paused')toast(why==='hold'?'窗格还在确认，稍后再发':why==='busy'?'它还没停下，停下后自动发':'稍等一下再发');return;}
  queueRun(c,key,q,force);}
+// The open agent's row right now: Herdr's status, or the tmux pane's (tmux.js). Read-only.
+async function queueStatusNow(c){if(c.agent.tmux)return tmuxStatusOne(c.agent);const r=await remote('status',{session:S.session});return r.agents.find(a=>a.pane_id===c.agent.pane_id);}
 // Read-only re-check of the pane right before sending. The latest status poll must show the same
 // agent, stopped; the conversation itself is confirmed by a follow check (follow.js). A follow check
 // that confirmed it moments ago is reused: on a remote (ch) pane each one takes seconds, and racing
 // the follow poll for it used to keep a message queued indefinitely.
-function queueStatusOk(c){const cur=S.agents.find(x=>x.pane_id===c.agent.pane_id);return S.chat===c&&!!cur&&cur.identity===c.agent.identity&&['idle','done'].includes(cur.agent_status)&&!c.stale&&!c.exited&&!c.following&&!c.unsure&&!c.followPending;}
+// A tmux chat's own agent is the newest copy (its pane is read on every status beat).
+function queueStatusOk(c){const cur=c.agent.tmux?c.agent:S.agents.find(x=>x.pane_id===c.agent.pane_id);return S.chat===c&&!!cur&&cur.identity===c.agent.identity&&['idle','done'].includes(cur.agent_status)&&!c.stale&&!c.exited&&!c.following&&!c.unsure&&!c.followPending;}
 async function queueVerify(c,force){
  if(!FOLLOW.supported)return queueStatusOk(c);
  for(let i=0;FOLLOW.busy&&i<120;i++)await new Promise(r=>setTimeout(r,250));

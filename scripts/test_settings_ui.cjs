@@ -56,6 +56,21 @@ await page.getByRole('radio',{name:'大',exact:true}).click();
 assert.deepEqual(await page.evaluate(()=>nx.calls.filter(c=>c.op==='setSetting').map(c=>[c.a.key,c.a.value]).slice(-3)),[['theme','dark'],['theme','system'],['textZoom',115]]);
 console.log('PASS: theme and text size apply immediately');
 
+// 保持多久: on phones one clean full-width control under its label, four equal segments in one row;
+// on a tablet it sits beside its label again.
+const keepGeo=()=>page.evaluate(()=>{const g=document.querySelector('[role=radiogroup][aria-label="保持多久"]'),row=g.closest('.set-row'),label=row.querySelector('.set-label');
+ const gr=g.getBoundingClientRect(),rr=row.getBoundingClientRect(),lr=label.getBoundingClientRect(),opts=[...g.children].map(b=>b.getBoundingClientRect());
+ return {full:Math.abs(gr.width-rr.width)<1.5,below:gr.top>=lr.bottom-1,oneRow:new Set(opts.map(o=>Math.round(o.top))).size===1,
+  equal:Math.max(...opts.map(o=>o.width))-Math.min(...opts.map(o=>o.width))<1.5,inRow:gr.right<=rr.right+0.5,tall:Math.min(...opts.map(o=>o.height))>=36,scroll:document.scrollingElement.scrollWidth<=innerWidth};});
+for(const [w,h] of [[390,844],[320,640]]){await page.setViewportSize({width:w,height:h});await page.waitForTimeout(150);
+ const g=await keepGeo();assert.deepEqual(g,{full:true,below:true,oneRow:true,equal:true,inRow:true,tall:true,scroll:true},'保持多久 at '+w);
+ await page.locator('.set-card').filter({hasText:'后台保持连接'}).screenshot({path:path.join(folder,'settings-keep-'+w+'.png')});}
+await page.setViewportSize({width:1024,height:768});await page.waitForTimeout(300);
+{const g=await keepGeo();assert(!g.full&&!g.below&&g.oneRow&&g.inRow&&g.scroll,'保持多久 sits beside its label on a tablet: '+JSON.stringify(g));}
+await page.locator('.set-card').filter({hasText:'后台保持连接'}).screenshot({path:path.join(folder,'settings-keep-1024.png')});
+await page.setViewportSize({width:390,height:844});
+console.log('PASS: 保持多久 is a full-width segmented control on phones, inline on tablets');
+
 // Screen protection is off by default (screenshots allowed) and can be turned on.
 const secure=page.getByRole('checkbox',{name:'防截图',exact:true});
 assert.equal(await secure.isChecked(),false);

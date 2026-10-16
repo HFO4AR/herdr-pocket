@@ -32,4 +32,10 @@
 .update-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:var(--surface);color:var(--accent);flex-shrink:0}
 .update-icon svg{width:18px;height:18px}
 .nav-dot{position:absolute;top:5px;left:calc(50% + 12px);width:8px;height:8px;border-radius:50%;background:var(--accent-raw);box-shadow:0 0 0 2px var(--surface)}
-@media (max-width:359px){.set-seg-row .seg{width:100%}.seg-opt{flex:1;min-width:0;padding:0 6px}}
+/* Long choices (保持多久) sit under their label as one full-width control on phones, equal segments;
+   from tablet width they fit beside the label again. Short ones only stack below 360 px. */
+.set-seg-row.stack{flex-direction:column;align-items:stretch;gap:8px;padding:12px 0}
+.set-seg-row.stack .seg{display:flex;width:100%}
+.set-seg-row.stack .seg-opt{flex:1 1 0;min-width:0;padding:0 4px}
+@media (min-width:600px){.set-seg-row.stack{flex-direction:row;align-items:center;padding:8px 0}.set-seg-row.stack .seg{display:inline-flex;width:auto}.set-seg-row.stack .seg-opt{flex:0 0 auto;min-width:64px;padding:0 12px}}
+@media (max-width:359px){.set-seg-row{flex-direction:column;align-items:stretch;gap:8px;padding:12px 0}.set-seg-row .seg{display:flex;width:100%}.seg-opt{flex:1 1 0;min-width:0;padding:0 6px}}

@@ -61,6 +61,10 @@
 .connection-status>.icon-btn{align-self:flex-start;margin:-10px -10px 0 0;color:inherit;opacity:.7}
 .connection-status>.icon-btn svg{width:17px;height:17px}
 .connection-status.warn{color:var(--warn);border-color:var(--warn-line);background:var(--warn-soft)}
+/* A normal next step (第一次核对指纹): neutral card, accent icon, filled action. Not an error. */
+.connection-status.info{color:var(--ink-2);border-color:var(--soft-line)}
+.connection-status.info>svg{color:var(--accent)}
+.connection-status.info .ob-banner-actions .primary{color:var(--on-primary)}
 .connection-status .grow>div{color:var(--ink-2);line-height:1.55}
 .ob-banner-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .ob-banner-actions:empty{display:none}
@@ -71,6 +75,12 @@
  max-width:calc(100% - 32px);width:max-content;min-height:40px;padding:4px 6px 4px 14px;border-radius:999px;background:var(--surface);color:var(--ink);
  border:1px solid var(--line-strong);box-shadow:var(--shadow-lift);font-size:13px;animation:ob-drop .22s var(--ease)}
 .net-banner.reconnecting,.net-banner.ok{padding-right:16px}
+/* Several computers: the 会话 list's device switcher sits right under the top bar, so the state is a strip
+   in the page under it (onboard.js netSync) instead of a pill floating over the chips. */
+body:has(.dev-switch) #net-banner{display:none}
+.net-inline{position:static;transform:none;width:auto;max-width:none;margin:0 var(--sp-4) var(--sp-2);border-radius:var(--radius-card);box-shadow:none;animation:arrive .2s var(--ease-out)}
+.dev-pill.reconnecting{color:var(--ink-2)}
+.dev-pill .spinner{width:11px;height:11px;border-width:1.6px;flex:0 0 auto}
 .net-banner .spinner{width:15px;height:15px}
 .net-banner svg{width:17px;height:17px}
 .net-banner.ok svg{color:var(--success)}

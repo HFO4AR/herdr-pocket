@@ -23,13 +23,22 @@ window.nativeEvent=e=>netEvent(e);
 window.openFromNotification=(pane,device)=>{
  // An alert from a computer that is connected but not on screen: switch to it first.
  if(device&&S.device&&!S.demo&&device!==S.device.id&&linkConnected(device)){const d=S.devices.find(x=>x.id===device)||LINKS.devs.get(device);switchDevice(d,{list:true,quiet:true}).then(()=>{if(S.device?.id===device)window.openFromNotification(pane);});return;}
- S.pendingPane=pane;if(!S.device)return;const a=S.agents.find(x=>x.pane_id===pane);if(a){openPending();return;}setTab('live');};
-function openPending(){const pane=S.pendingPane;if(!pane||!S.device)return;S.pendingPane=null;const a=S.agents.find(x=>x.pane_id===pane);if(!a){toast('那个 Agent 已经不在这个会话里了');return;}if(typeof T!=='undefined')leaveTerminal();closeSheet();openAgent(a);}
+ S.pendingPane=pane;if(!S.device)return;const a=liveAgents().find(x=>x.pane_id===pane);if(a){openPending();return;}setTab('live');};
+// A tmux pane (%N) is looked up in the tmux list, which may still be loading (tmux.js calls this again).
+function openPending(){const pane=S.pendingPane;if(!pane||!S.device)return;const a=liveAgents().find(x=>x.pane_id===pane);
+ if(!a&&/^%/.test(pane)&&typeof tmuxState==='function'&&!tmuxState()?.loaded)return;
+ S.pendingPane=null;if(!a){toast('那个 Agent 已经不在这个会话里了');return;}if(typeof T!=='undefined')leaveTerminal();closeSheet();openAgent(a);}
 // The background watcher only notifies about changes after what the UI already showed.
 // "kids" counts as working there too; `kids` names each agent's record so the watcher can check
 // its sub-agents (read-only glance) before saying 做完了. `asks` are the Codex questions the app
 // already shows or that were put aside (暂不回答): the watcher never notifies those (glance.js).
-function syncWatch(){if(S.demo||!S.device||!S.session)return;const states={},kids={};S.agents.forEach(a=>{const k=a.pane_id+'/'+a.identity;states[k]=agentState(a);const it=kidsWatchItem(a);if(it)kids[k]=it;});rpc('watchState',{session:S.session,states,kids,asks:glanceWatchAsks()}).catch(()=>{});}
+// Agents in tmux panes (tmux.js) are watched too: `tmux: true` makes the watcher's read-only status
+// poll list them next to Herdr's (also on a computer without Herdr, where there is no session).
+function syncWatch(){if(S.demo||!S.device)return;const all=liveAgents(),c=S.chat?.agent;if(c?.tmux&&!S.chat.stale&&!all.some(a=>a.identity===c.identity))all.push(c);
+ const tmux=all.some(a=>a.tmux);if(!S.session&&!tmux)return;
+ const states={},kids={};all.forEach(a=>{const k=a.pane_id+'/'+a.identity;states[k]=agentState(a);const it=kidsWatchItem(a);if(it)kids[k]=it;});rpc('watchState',{session:S.session||'',...(tmux?{tmux:true}:{}),states,kids,asks:glanceWatchAsks()}).catch(()=>{});}
+// Herdr's agents and the ones found in tmux panes (tmux.js): the switch sheet, alerts, previews.
+function liveAgents(){return typeof tmuxAgents==='function'?S.agents.concat(tmuxAgents()):S.agents.slice();}
 // Reassignable on purpose: offline tests wrap it to observe requests.
 let remote=(op,args={})=>S.demo?demoRequest(op,args):rpc('remote',{op,...args});
 
@@ -43,10 +52,10 @@ const app=document.getElementById('app'),overlay=document.getElementById('overla
 
 // ─── Feedback ───────────────────────────────────────────────────────────────
 let toastTimer;
-function toast(text){const n=document.getElementById('toast');const c=document.getElementById('composer');n.style.bottom=c?Math.min(c.offsetHeight+14,Math.round(innerHeight*.42))+'px':'';n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.classList.remove('show'),4200);}
+function toast(text){const n=document.getElementById('toast');const c=document.getElementById('composer');n.style.bottom=c?Math.min(c.offsetHeight+14,Math.round(innerHeight*.42))+'px':'';n.textContent=text;n.removeAttribute('aria-hidden');n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>{n.classList.remove('show');n.setAttribute('aria-hidden','true');},4200);}
 function error(e){toast(e.message||String(e));}
 async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const t=el('textarea');t.value=text;document.body.append(t);t.select();document.execCommand('copy');t.remove();}toast('已复制');}
-function sheet(title){dropGhost();overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);back.onclick=e=>{if(e.target===back)closeSheet();};overlay.append(back);return body;}
+function sheet(title){dropGhost();overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);back.onclick=e=>{if(e.target!==back)return;if(body.keepOpen&&body.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();};overlay.append(back);return body;}
 function closeSheet(){ghostSheet();overlay.replaceChildren();}
 // Exit animation without delaying the real close: an inert copy of the closing sheet lives in a closed
 // shadow root (invisible to queries and assistive tech) and slides away on its own.
@@ -401,9 +410,8 @@ function renderComposer(){
  const key=draftKey();let live=document.getElementById('live-state'),compose=footer.querySelector('.composer');
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
  if(offline){live.replaceChildren(el('div','compose-note','正在连接 · 显示的是上次的缓存，连上后才能发送'));}else renderLiveState(live,a);
- const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status,later=!offline&&!a.tmux&&(st==='working'||st==='blocked');
- // An agent in tmux has no send queue here: it takes what is typed while it works (tmux.js).
- input.placeholder=offline?'可以先写，连上再发':a.tmux&&st==='working'?'它在忙，发出去会进它的输入框':a.tmux&&st==='blocked'?'它在等你确认，先在「终端」里回答':st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':S.chat.noTranscript?'发给 '+providerName(a.agent)+'…'+(slashKnown(a)?'（/ 看命令）':''):'说点什么，继续这段对话…（/ 看命令）';
+ const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status,later=!offline&&(st==='working'||st==='blocked');
+ input.placeholder=offline?'可以先写，连上再发':st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':S.chat.noTranscript?'发给 '+providerName(a.agent)+'…'+(slashKnown(a)?'（/ 看命令）':''):'说点什么，继续这段对话…（/ 看命令）';
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
  // Busy agent: the button says it will queue, so sending never looks like it failed.
  send.classList.toggle('later',later);send.querySelector('.send-label').textContent=later?'排队':'';send.title=offline?'连上后才能发送':later?'先排队，它停下就发':'发送';
@@ -464,7 +472,7 @@ async function sendMessage(input){
   if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;if(!card)S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
   S.stick=true;paintTimeline();if(card)slashCapture(card);if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);
   if(S.chat?.noTranscript&&!card){toast('发给 '+providerName(a.agent)+' 了，回复看终端');setTimeout(()=>{if(epoch===S.epoch)fetchTerminal(true);},900);}}
- catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&!a.tmux&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
+ catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
  finally{S.sendBusy=Math.max(0,(S.sendBusy||1)-1);button.disabled=!input.value.trim()&&!attCount(key);}}
 // The send button answers the press at once (the haptic comes from native.js); the bubble follows.
 let sendSeq=0;
@@ -527,11 +535,11 @@ function agentSwitcher(){
  const box=sheet('切换 Agent');
  if(S.chat?.record?.parent)menuItem(box,'返回父会话',async()=>{try{const r=await remote('catalog',{thread:S.chat.record.parent,...(S.chat.record.remote?{remote:S.chat.record.remote}:{})});if(r.records.length)openRecord(r.records[0],true);else toast('没找到父会话记录');}catch(e){error(e);}},'back');
  box.append(el('div','section-label','在线 Agent'));
- if(!S.agents.length)box.append(el('p','fine','还没读到在线 Agent，回到列表刷新一下。'));
+ const all=liveAgents();if(!all.length)box.append(el('p','fine','还没读到在线 Agent，回到列表刷新一下。'));
  const current=S.chat?.agent?agentKey(S.chat.agent):'';const order={blocked:0,working:1,kids:1};
- sortAgents(S.agents).sort((x,y)=>(order[agentState(x)]??2)-(order[agentState(y)]??2)).forEach(a=>{const k=agentKey(a),here=k===current;
+ sortAgents(all).sort((x,y)=>(order[agentState(x)]??2)-(order[agentState(y)]??2)).forEach(a=>{const k=agentKey(a),here=k===current;
   const b=btn('','menu-item agent-pick'+(here?' current':''),()=>{closeSheet();if(!here)openAgent(a);});if(here)b.setAttribute('aria-current','true');
-  b.append(avatar(a.agent,stateTone(a)));const t=el('span','grow');t.append(el('span','menu-label',titleOf(a)),el('small','',(here?'当前 · ':'')+providerName(a.agent)+(projectOf(a)?' · '+projectOf(a):'')));b.append(t);
+  b.append(avatar(a.agent,stateTone(a)));const t=el('span','grow');t.append(el('span','menu-label',titleOf(a)),el('small','',(here?'当前 · ':'')+providerName(a.agent)+(a.tmux?' · tmux':'')+(projectOf(a)?' · '+projectOf(a):'')));b.append(t);
   if(S.unread.has(k))b.append(el('span','unread-dot'));b.append(el('span','badge '+stateTone(a),agentState(a)==='kids'?kidsShort(a):stateLabel(a)));box.append(b);});
  // This conversation's sub-agents, running first, live while the sheet is open (kids.js).
  kidsSection(box);}

@@ -69,6 +69,17 @@ function firstRunGuide(){
  card.append(steps,btn('添加第一台设备','primary wide',()=>deviceForm()),btn('体验聊天演示','secondary wide',startDemo));
  const wrap=el('div');wrap.append(card,el('p','fine center','设备资料和密码用 Android Keystore 加密，只存在这台手机上。'));return wrap;}
 
+// 设备 page: at most one filled 连接设备, on the computer you most likely want (the one that just failed,
+// else the last one used, else the first); the rest get a quieter outlined button. While a computer is
+// on screen its card above is the focus, so no saved card is filled except 切换到这台.
+// Kept in this WebView's storage (falls back to memory when storage is unavailable).
+let obLast='';
+function obLastId(v){if(v===undefined){try{return localStorage.getItem('hp.dev.last')||obLast;}catch(_){return obLast;}}obLast=v;try{localStorage.setItem('hp.dev.last',v);}catch(_){}return v;}
+function obFocusId(){
+ // A computer on screen, or 核对指纹 waiting in the banner (its own filled button): no filled card.
+ if(S.device&&!S.demo||S.connectFail?.code==='hostkey_new'&&S.connectError)return '';const ids=S.devices.map(d=>d.id);
+ const f=S.connectFail?.device,last=obLastId();
+ return ids.includes(f)?f:ids.includes(last)?last:ids[0]||'';}
 function deviceCard(d){
  const current=S.device?.id===d.id&&!S.demo,linked=!S.demo&&linkConnected(d.id);const card=el('section','card device-card'+(current?' current':linked?' linked':''));
  const row=el('div','row');row.append(avatar('',linked?'ok':''));const text=el('div','grow');const title=el('div','card-title');title.append(el('span','truncate',d.name));
@@ -78,7 +89,8 @@ function deviceCard(d){
  const line=el('div','device-line');line.append(icon(d.auth==='key'?'key':'lock'),document.createTextNode(d.auth==='key'?'用这台手机的密钥登录':d.remember?'密码已加密保存':'连接时输入密码'));card.append(line);
  if(d.jumps?.length)card.append(hopLine(d));
  const actions=el('div','device-actions');const busy=S.loading&&S.connecting?.id===d.id||resumeBusy(d.id);resumeLine(card,d);
- const connect=btn(busy?'正在连接…':current?'已连接':linked?'切换到这台':'连接设备',current?'secondary':'primary',()=>linked&&!current?switchDevice(d):connectDevice(d));connect.disabled=S.loading||busy;
+ const lead=!current&&(linked||d.id===obFocusId());
+ const connect=btn(busy?'正在连接…':current?'回到会话':linked?'切换到这台':'连接设备',lead?'primary':'secondary',()=>linked&&!current?switchDevice(d):connectDevice(d));connect.disabled=S.loading||busy;
  actions.append(connect);
  if(linked&&LINKS.ids.length>1)actions.append(btn('断开','link-btn device-unlink',()=>confirmAction('断开 '+d.name+'？','只断开这台电脑，其他连着的不受影响。电脑上的 Agent 会继续运行。','断开',()=>disconnectDevice(d.id,false).then(render).catch(error),true)));
  actions.append(btn('删除','link-btn danger device-delete',()=>confirmAction('删除设备？',linked?'会先断开这台电脑，再移除它和保存的密码。':'会移除这台设备及其保存的密码。','删除',async()=>{try{const was=linked;const r=await rpc('deleteDevice',{id:d.id});if(was)await linkGone(d.id);S.devices=r.devices;if(S.connectFail?.device===d.id)S.connectFail=null;render();}catch(e){error(e);}},true)));
@@ -110,11 +122,13 @@ function deviceForm(d={}){
  // 密码 stays the default: it is what works on a fresh computer; 密钥 needs the public key installed first.
  const auth=keyAuthChoice(box,passParts[0],d,passParts);
  // Optional jump hosts (hops.js), between the login choice and the buttons.
- const hopAnchor=el('div');box.append(hopAnchor);const hops=hopEditor(box,d,hopAnchor,()=>name.value.trim()||host.value.trim());
+ const hopAnchor=el('div');box.append(hopAnchor);const hops=hopEditor(box,d,hopAnchor,()=>name.value.trim()||host.value.trim(),()=>auth.get());
  // Pasted "user@host:port" is split into the three fields.
  const split=()=>{const s=obSplitAddress(host.value);if(!s)return;host.value=s.host;if(s.port)port.value=s.port;if(s.user&&!user.value.trim())user.value=s.user;if(s.user&&user.value.trim()!==s.user)return;toast('已拆成地址'+(s.user?'、用户名':'')+(s.port?'和端口':''));};
  host.addEventListener('change',split);host.addEventListener('paste',()=>setTimeout(split,0));
  const values=()=>({id:d.id||'',name:name.value.trim(),host:host.value.trim(),port:port.value.trim(),user:user.value.trim()});
+ // A tap on the dimmed page must not throw away what was typed (a long form with jump hosts); × still closes.
+ const typedNow=()=>JSON.stringify([values(),auth.get(),hops.path()]);const typedAt=typedNow();box.keepOpen=()=>!!pass.value||typedNow()!==typedAt;
  const check1=()=>{split();const v=values();const e=obValidate(v);obError(host,e.host);obError(port,e.port);obError(user,e.user);
   const first=[['host',host],['port',port],['user',user]].find(([k])=>e[k]);if(first){first[1].focus();return null;}return v;};
  const save=async(andConnect)=>{const v=check1();if(!v)return;const jumps=hops.check();if(!jumps)return;buttons.forEach(b=>b.disabled=true);
@@ -159,7 +173,7 @@ async function doConnect(d,password='',remember,o={}){
  S.loading=true;S.connecting=d;S.connectError='';S.connectFail=null;S.hostIssue=null;S.connectStage='正在建立 SSH 连接并验证身份…';netBanner(null);render();cacheConnecting(d);
  try{if(S.demo){S.demo=false;S.device=null;}
   const r=await rpc('connect',{id:d.id,password,...(remember===undefined?{}:{remember}),...(o.auto?{auto:true}:{})},stage=>{S.connectStage=stage;render();});
-  S.loading=false;clearTerminals();S.device=r.device;if(r.devices)S.devices=r.devices;S.account=null;S.records=[];S.statusSupported=true;hostCheck(r.host);linkAdd(r.device);
+  S.loading=false;clearTerminals();S.device=r.device;if(r.devices)S.devices=r.devices;S.account=null;S.records=[];S.statusSupported=true;hostCheck(r.host);linkAdd(r.device);obLastId(r.device?.id||d.id);
   if(r.ready){if(!cacheResume())setTab('live');}else{render();setupBridge({upgrade:!!r.upgrade,fromConnect:true});}
  }catch(e){S.loading=false;S.device=null;S.connectError=e.message||String(e);S.connectFail={device:d.id,d,code:e.code||'',info:e.info||null,password,remember};cacheAbandon();
   // The password is only kept (in memory) while a host-key decision is pending.
@@ -182,7 +196,7 @@ function howToCheck(box,type,where='电脑'){const d=el('details','ob-how');d.ap
  const row=el('div','ob-cmd');row.append(el('code','',cmd),ib('copy','复制命令',()=>copyText(cmd)));d.append(el('p','muted','在'+where+'的终端里运行，输出里的 SHA256:… 应该和上面一字不差：'),row);box.append(d);}
 function trustSheet(f){
  const i=f.info||{};const box=sheet(i.jump?'核对跳板机指纹':'核对电脑指纹');box.classList.add('ob-trust');
- const lead=el('div','ob-lead');lead.append(icon('shield'),el('p','','第一次连 '+hopWhere(i,f.d)+'。确认下面的指纹和'+(i.jump?'跳板机':'电脑')+'上的一致，再信任它。以后指纹变了，App 会拒绝连接。'));box.append(lead);
+ const lead=el('div','ob-lead');lead.append(icon('shield'),el('p','','第一次连'+(i.jump?'':' ')+hopWhere(i,f.d)+'。确认下面的指纹和'+(i.jump?'跳板机':'电脑')+'上的一致，再信任它。以后指纹变了，App 会拒绝连接。'));box.append(lead);
  box.append(fingerprintBox((i.jump?'跳板机':'电脑')+'给出的指纹',i.fingerprint||'',i.type));howToCheck(box,i.type,i.jump?'跳板机':'电脑');
  const actions=el('div','sheet-actions');const ok=btn('信任并连接','primary',async()=>{ok.disabled=true;
   try{await rpc('trustHost',{id:f.d.id,fingerprint:i.fingerprint});closeSheet();S.connectFail=null;S.connectError='';const d=S.devices.find(x=>x.id===f.d.id)||f.d;doConnect(d,f.password,f.remember);}
@@ -230,7 +244,9 @@ async function recheckHost(b){if(b)b.disabled=true;try{hostCheck(await remote('d
 function connectionBanner(root){
  const f=S.connectFail;
  if(S.loading){const box=el('div','connection-status');box.setAttribute('role','status');box.append(el('span','spinner'));const t=el('div','grow');t.append(el('strong','','正在连接 '+(S.connecting?.name||S.device?.name||'')),el('div','',S.connectStage));box.append(t);root.append(box);return;}
- if(S.connectError){const box=el('div','connection-status failed');box.setAttribute('role','alert');box.append(icon('alert'));const t=el('div','grow');
+ if(S.connectError){
+  // 第一次核对指纹 is a normal step: a calm info banner. Red stays for real failures and a changed key.
+  const first=f?.code==='hostkey_new';const box=el('div','connection-status '+(first?'info':'failed'));box.setAttribute('role',first?'status':'alert');box.append(icon(first?'shield':'alert'));const t=el('div','grow');
   t.append(el('strong','',(f?.info?.jump&&f.code!=='jump_forward'?'跳板机：':'')+(OB_FAIL[f?.code]||'连接未完成')),el('div','',S.connectError));
   const acts=el('div','ob-banner-actions');const d=f?.d;
   const saved=d&&(S.devices.find(x=>x.id===d.id)||d);
@@ -238,7 +254,7 @@ function connectionBanner(root){
   const jump=!/^hostkey/.test(f?.code||'')&&!!(f?.info?.jump||f?.code==='jump_forward');
   if(f?.code==='auth'&&d&&!jump)acts.append(btn('重新输入密码','secondary small',()=>connectionPassword(d,'')));
   else if(f?.code==='key_rejected'||f?.code==='key_missing')acts.append(btn(f.code==='key_missing'?'生成密钥':'查看公钥','secondary small',()=>keysSheet()),btn('重试','secondary small',()=>retryConnect()));
-  else if(f?.code==='hostkey_new')acts.append(btn('核对指纹','secondary small',()=>trustSheet(f)));
+  else if(f?.code==='hostkey_new')acts.append(btn('核对指纹','primary small',()=>trustSheet(f)));
   else if(f?.code==='hostkey_changed')acts.append(btn('查看详情','secondary small',()=>changedSheet(f)));
   else if(f||S.connecting)acts.append(btn('重试','secondary small',()=>f?retryConnect():connectDevice(S.connecting)));
   if(d&&!S.device&&jump)acts.append(btn('改跳板机','secondary small',()=>deviceForm(saved)));
@@ -254,13 +270,18 @@ function connectionBanner(root){
 // state: null | 'reconnecting' | 'failed' | 'hostkey' | 'ok'
 let obNetTimer;
 function netBanner(state,detail=''){
- S.net=state;clearTimeout(obNetTimer);let n=document.getElementById('net-banner');
+ S.net=state;S.netDetail=detail;clearTimeout(obNetTimer);let n=document.getElementById('net-banner');netSync();
  if(!state){n?.remove();return;}
  if(!n){n=el('div','net-banner');n.id='net-banner';n.setAttribute('role','status');n.setAttribute('aria-live','polite');document.body.append(n);}
- n.className='net-banner '+state;n.replaceChildren();
- if(state==='reconnecting'){n.append(el('span','spinner'),el('span','grow','连接断了，正在重连…'));}
- else if(state==='ok'){n.append(icon('check'),el('span','grow','已重新连上'));obNetTimer=setTimeout(()=>netBanner(null),2200);}
- else{n.append(icon('alert'));const t=el('span','grow',state==='hostkey'?'电脑指纹变了，已停止自动重连':'连不上电脑');t.title=detail;n.append(t);
+ netFill(n,state,detail);
+ if(state==='ok')obNetTimer=setTimeout(()=>netBanner(null),2200);}
+function netFill(n,state,detail){
+ n.className=n.className.replace(/ (reconnecting|ok|failed|hostkey)\b/g,'')+' '+state;n.replaceChildren();
+ // Several computers connected: say which one (its switcher chip spins too, see deviceSwitcher).
+ const who=S.device&&!S.demo&&LINKS.ids.length>1?S.device.name:'';
+ if(state==='reconnecting'){n.append(el('span','spinner'),el('span','grow',who?who+' 断了，正在重连…':'连接断了，正在重连…'));}
+ else if(state==='ok'){n.append(icon('check'),el('span','grow',who?who+' 已重新连上':'已重新连上'));}
+ else{n.append(icon('alert'));const t=el('span','grow',(who?who+'：':'')+(state==='hostkey'?'电脑指纹变了，已停止自动重连':'连不上电脑'));t.title=detail;n.append(t);
   if(state==='hostkey')n.append(btn('去设备页','net-action',()=>{netBanner(null);if(typeof T!=='undefined')leaveTerminal();(S.device&&LINKS.ids.length>1?disconnectDevice(S.device.id):disconnect()).catch(error);}));
   else n.append(btn('重试','net-action',()=>netRetry()));}}
 async function netRetry(){if(!S.device||S.demo||S.net==='reconnecting'){netBanner(null);return;}netBanner('reconnecting');
@@ -328,7 +349,7 @@ async function switchDevice(d,o={}){
  if(S.device?.id===d.id){if(o.list)setTab('live');else if(S.tab==='devices')setTab('live');return;}
  if(viewBusy()){toast('还有消息在发，发完再切换');return;}
  try{await rpc('activate',{device:d.id});}catch(e){await linkGone(d.id);error(e);return;}
- closeSheet();viewPark();viewTake(d.id);if(!S.device)S.device=LINKS.devs.get(d.id)||d;
+ closeSheet();viewPark();viewTake(d.id);if(!S.device)S.device=LINKS.devs.get(d.id)||d;obLastId(d.id);
  if(o.list){S.chat=null;S.chatStack=[];}
  if(S.chat){render();refreshStatus();if(S.chat.record&&S.chatMode!=='terminal')fetchHistory();else if(S.chat.agent)fetchTerminal(true);}
  else setTab(['devices','settings'].includes(S.tab)?'live':S.tab);
@@ -348,17 +369,29 @@ async function linkGone(id,show=false){
  if(typeof T!=='undefined')clearTerminals();queueClear();netBanner(null);
  const next=LINKS.ids[LINKS.ids.length-1];try{await rpc('activate',{device:next});}catch(_){}
  viewTake(next);if(!S.device)S.device=LINKS.devs.get(next)||null;
- if(show)setTab('devices');else if(S.tab==='live'&&!S.chat)loadLive();}
+ if(show)setTab('devices');else if(S.tab==='live'&&!S.chat)loadLive();else if(S.tab==='devices'&&!S.account)loadAccount();}
 function linkEvent(e){const d=LINKS.devs.get(e.device);const name=d?.name||'另一台电脑';
  if(e.type==='reconnect_failed')toast(name+'：连不上了，切过去时会再试');
  else if(e.type==='hostkey_changed')toast(name+'：电脑指纹变了，已停止自动重连');}
+// With the device switcher on screen the floating pill would sit on its chips: the state goes into the
+// page instead, as a strip right under the switcher (CSS hides the pill), and the chip on screen spins.
+function netSync(){
+ document.querySelectorAll('.dev-pill').forEach(b=>{const on=b.classList.contains('active')&&S.net==='reconnecting';
+  b.classList.toggle('reconnecting',on);b.querySelector('.dot,.spinner')?.replaceWith(el('span',on?'spinner':'dot'));});
+ const row=document.querySelector('.dev-switch');if(row)netStrip(row);}
+// row may still be detached (render builds the page before swapping it in).
+function netStrip(row){let n=row.nextElementSibling?.classList.contains('net-inline')?row.nextElementSibling:null;
+ if(!S.net){n?.remove();return;}
+ if(!n){n=el('div','net-banner net-inline');n.setAttribute('role','status');n.setAttribute('aria-live','polite');row.after(n);}
+ netFill(n,S.net,S.netDetail||'');}
 // Under the top bar of the 会话 list when several computers are connected: one tap switches.
 function deviceSwitcher(root){
  if(S.demo||LINKS.ids.length<2||S.tab!=='live')return;
  const row=el('div','dev-switch');row.setAttribute('role','group');row.setAttribute('aria-label','切换设备');
  for(const d of linkDevices()){const on=S.device?.id===d.id;const b=btn('','pill dev-pill'+(on?' active':''),()=>switchDevice(d));b.setAttribute('aria-pressed',String(on));
-  b.append(el('span','dot'),el('span','truncate',d.name));row.append(b);}
- root.append(row);}
+  const re=on&&S.net==='reconnecting';if(re)b.classList.add('reconnecting');
+  b.append(el('span',re?'spinner':'dot'),el('span','truncate',d.name));row.append(b);}
+ root.append(row);netStrip(row);}
 // Tapping the device chip with several connected: pick one, or go to the devices page.
 function deviceSheet(){
  if(S.demo||LINKS.ids.length<2){setTab('devices');return;}

@@ -72,6 +72,7 @@ async function openClose(page,name){
  await sheet.getByText('电脑屏幕上现在正显示这个窗格',{exact:true}).waitFor();
  await sheet.getByText(/最后一个窗格/).waitFor();
  const go=sheet.getByRole('button',{name:'选一种方式'});assert.equal(await go.isDisabled(),true,'nothing chosen yet');
+ assert.equal(await go.evaluate(n=>{const b=getComputedStyle(n).backgroundColor,p=document.createElement('i');p.style.color='var(--danger)';document.body.append(p);const d=getComputedStyle(p).color;p.remove();return b===d;}),false,'a disabled red button does not look ready to press');
  await sheet.getByRole('radio',{name:'结束 Codex，保留终端'}).click();
  await sheet.getByText(/发送 \/quit/).waitFor();
  await page.screenshot({path:path.join(folder,'close-idle-390.png')});
