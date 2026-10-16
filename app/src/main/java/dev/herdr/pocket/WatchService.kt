@@ -358,10 +358,15 @@ class WatchService : Service() {
         return if (h < 24) "$h 小时 ${s % 3600 / 60} 分" else "${h / 24} 天"
     }
 
+    // Display names of agent kinds Herdr detects, as in the app (app.js AGENT_KINDS); others: the kind, capitalized.
+    private fun agentName(kind: String): String = KIND_NAMES[kind]
+        ?: if (kind.isEmpty()) "Agent" else kind.replaceFirstChar { it.uppercaseChar() }
+
     // Same naming as the app: Herdr's agent title first, skipping generic "<dir>: ch" titles.
     private fun displayTitle(a: JSONObject): String {
-        val name = if (a.optString("agent") == "claude") "Claude" else if (a.optString("agent") == "codex") "Codex" else "Agent"
-        val generic = Regex("^[^:]{1,60}:\\s*(ch|claude|codex|bash|zsh|sh|ssh)$", RegexOption.IGNORE_CASE)
+        val kind = a.optString("agent")
+        val name = agentName(kind)
+        val generic = Regex("^[^:]{1,60}:\\s*(ch|claude|codex|bash|zsh|sh|ssh" + (if (kind.isEmpty()) "" else "|" + Regex.escape(kind)) + ")$", RegexOption.IGNORE_CASE)
         for (raw in listOf(a.optString("title"), a.optString("terminal_title_stripped"), a.optString("terminal_title"))) {
             val clean = raw.replace(Regex("^[\\s✳✻✽✶⠀-⣿·•*]+"), "").replace(Regex("\\s*\\|\\s*[^|]+$"), "").trim()
             if (clean.isNotEmpty() && !generic.matches(clean) && !clean.equals(name, true)) return "$name · ${clean.take(40)}"
@@ -461,6 +466,10 @@ class WatchService : Service() {
         const val EXTRA_ASKS = "asks"
         /** [Look.asks]: the transcript did not change since the last check, so neither did the question. */
         private val SAME = WatchRules.Ask("", "", 0)
+        private val KIND_NAMES = mapOf("claude" to "Claude", "codex" to "Codex", "opencode" to "OpenCode", "gemini" to "Gemini",
+            "cursor" to "Cursor", "devin" to "Devin", "agy" to "Antigravity", "cline" to "Cline", "copilot" to "Copilot",
+            "kimi" to "Kimi", "kiro" to "Kiro", "droid" to "Droid", "amp" to "Amp", "grok" to "Grok", "hermes" to "Hermes",
+            "kilo" to "Kilo", "qodercli" to "Qoder", "qwen" to "Qwen", "maki" to "Maki", "pi" to "Pi", "mastracode" to "Mastra Code")
         private val STOPPED = WatchRules.STOPPED
         private val BUSY = WatchRules.BUSY
         const val EXTRA_PANE = "pane"

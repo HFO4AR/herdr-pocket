@@ -61,11 +61,26 @@ function menuItem(box,label,fn,name,detail){const b=btn('','menu-item',()=>{clos
 const STATUS={working:['执行中','work'],blocked:['等你确认','alert'],kids:['子 Agent 运行中','work'],idle:['空闲','ok'],done:['已完成','ok']};
 function stateLabel(a){const s=agentState(a);return s==='kids'?kidsLabel(a):(STATUS[s]||['状态未知','muted'])[0];}
 function stateTone(a){return (STATUS[agentState(a)]||['','muted'])[1];}
-function providerName(p){return p==='claude'?'Claude':p==='codex'?'Codex':'Agent';}
+// Every agent kind Herdr detects is listed and driven the same way; this table only names them.
+// [display name, avatar initials]. Unknown kinds: the kind capitalized, two letters, neutral avatar.
+// Claude and Codex also have their own avatar colours and transcripts (history, glance, modes).
+const AGENT_KINDS={claude:['Claude','Cl'],codex:['Codex','Cx'],opencode:['OpenCode','Oc'],gemini:['Gemini','Ge'],cursor:['Cursor','Cu'],
+ devin:['Devin','Dv'],agy:['Antigravity','Ag'],cline:['Cline','Cn'],copilot:['Copilot','Co'],kimi:['Kimi','Ki'],kiro:['Kiro','Kr'],
+ droid:['Droid','Dr'],amp:['Amp','Am'],grok:['Grok','Gk'],hermes:['Hermes','He'],kilo:['Kilo','Kl'],qodercli:['Qoder','Qd'],
+ qwen:['Qwen','Qw'],maki:['Maki','Mk'],pi:['Pi','Pi'],mastracode:['Mastra Code','Ma']};
+// Kinds whose conversation files the bridge reads (bridge TRANSCRIPT_PROVIDERS). Others open on 终端.
+const TRANSCRIPT_KINDS=['claude','codex'];
+function kindSafe(p){return typeof p==='string'&&/^[a-z0-9][a-z0-9_-]{0,31}$/i.test(p)?p.toLowerCase():'';}
+function providerName(p){const k=kindSafe(p);return AGENT_KINDS[k]?.[0]||(k?k[0].toUpperCase()+k.slice(1):'Agent');}
+function kindInitials(p){const k=kindSafe(p);return AGENT_KINDS[k]?.[1]||(k?k[0].toUpperCase()+(k[1]||''):'');}
+function hasTranscript(p){return TRANSCRIPT_KINDS.includes(p);}
+// A live agent whose conversation the app cannot read (any kind but Claude / Codex).
+function noTranscript(a){return !!a?.agent&&!hasTranscript(a.agent);}
 // Prefer names that tell agents apart: Herdr's agent title, a meaningful terminal
 // title (not the generic "<dir>: ch" / "<dir>: claude"), then the first prompt.
 function cleanTitle(t){return String(t||'').replace(/<\/?pasted_content(?:\s+id="[^"]{0,40}")?\s*>/g,' ').replace(/^[\s✳✻✽✶⠀-⣿·•*]+/,'').replace(/\s*\|\s*[^|]+$/,'').trim();}
-function genericTitle(t,a){return !t||/^[^:]{1,60}:\s*(ch|claude|codex|bash|zsh|sh|ssh)$/i.test(t)||t===a.agent||/^(claude|codex)( code)?$/i.test(t);}
+function genericTitle(t,a){if(!t||/^[^:]{1,60}:\s*(ch|claude|codex|bash|zsh|sh|ssh)$/i.test(t)||t===a.agent||/^(claude|codex)( code)?$/i.test(t))return true;
+ const k=kindSafe(a.agent);return !!k&&(t.toLowerCase()===providerName(k).toLowerCase()||new RegExp('^[^:]{1,60}:\\s*'+k+'$','i').test(t));}
 function titleOf(a){for(const raw of [a.title,a.terminal_title_stripped,a.terminal_title]){const t=cleanTitle(raw);if(!genericTitle(t,a))return t;}
  const first=cleanTitle(a.history_ref?.record?.title);if(first&&!/^This session is being continued/.test(first))return first.slice(0,60);
  return providerName(a.agent)+(projectOf(a)?' · '+projectOf(a):'');}
@@ -75,7 +90,7 @@ function time(v){const d=toDate(v);return d?d.toLocaleString('zh-CN',{month:'2-d
 function clock(v){const d=toDate(v);return d?d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'';}
 function dayLabel(v){const d=toDate(v);if(!d)return '';const today=new Date();today.setHours(0,0,0,0);const diff=Math.round((today-new Date(d).setHours(0,0,0,0))/864e5);return diff===0?'今天':diff===1?'昨天':diff<7&&diff>0?['周日','周一','周二','周三','周四','周五','周六'][d.getDay()]:d.toLocaleDateString('zh-CN',{month:'long',day:'numeric'});}
 function relative(v){const d=toDate(v);if(!d)return '';const s=(Date.now()-d)/1000;if(s<60)return '刚刚';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400&&dayLabel(v)==='今天')return clock(v);return dayLabel(v)==='昨天'?'昨天 '+clock(v):time(v);}
-function avatar(kind,status){const n=el('div','avatar '+(kind||''),kind==='claude'?'Cl':kind==='codex'?'Cx':'');if(!kind)n.append(icon('device'));if(status)n.append(el('span','status-dot '+status));return n;}
+function avatar(kind,status){const k=kindSafe(kind);const n=el('div','avatar'+(k?' '+k+(hasTranscript(k)?'':' kind-other'):''),kindInitials(k));if(!k)n.append(icon('device'));if(status)n.append(el('span','status-dot '+status));return n;}
 function draftKey(){return S.chat?.agent?S.session+'/'+S.chat.agent.identity:S.chat?.record?.id||'';}
 // Durations: a running clock under an hour ("2:05"), coarse after that.
 function dur(ms){const s=Math.max(0,Math.floor(ms/1000));if(s<3600)return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');const h=Math.floor(s/3600);return h<24?h+' 小时 '+Math.floor(s%3600/60)+' 分':Math.floor(h/24)+' 天';}
@@ -152,7 +167,7 @@ async function loadAccount(){const epoch=S.epoch;try{const a=await remote('accou
 function agentRow(a){
  const k=agentKey(a),unread=S.unread.has(k),asks=!!glanceAsks(a),tone=asks?'alert':stateTone(a),st=agentState(a);
  const n=btn('','card-button agent-row tone-'+tone+(unread?' unread':''),()=>openAgent(a));
- const text=el('div','grow');text.append(el('div','card-title',titleOf(a)));
+ const text=el('div','grow');text.append(el('div','card-title',rowTitle(a)));
  // The avatar already says Claude / Codex; the meta line is where it runs, then a one-line
  // preview (glance.js): the current step, the question waiting for you, or the last reply.
  const meta=el('div','card-meta');meta.dataset.glance=k;const project=projectOf(a);meta.append(el('span','project',project||providerName(a.agent)));
@@ -171,6 +186,8 @@ function agentRow(a){
   else if(st==='done')side.append(el('span','row-state','已完成'));}
  n.append(avatar(a.agent,tone),text,side);closeHold(n,()=>agentActions(a));
  return closeSwipe(n,[['关闭','x','danger',()=>closeSession(a)],['更多','more','',()=>agentActions(a)]]);}
+// The meta line already names the project: a fallback title ("OpenCode · site") drops it there.
+function rowTitle(a){const t=titleOf(a),p=projectOf(a);return p&&t===providerName(a.agent)+' · '+p?providerName(a.agent):t;}
 function rowTimeText(a){const at=statusSince(a),last=lastActivity(a);if(!last)return '';return (at&&at>=last?ago(Date.now()-at)+'前':relative(last/1000)).replace('刚刚前','刚刚');}
 // Within a group: unseen results first, then whatever changed most recently.
 function sortAgents(items){return items.map((a,i)=>({a,i,u:S.unread.has(agentKey(a))?1:0,t:lastActivity(a)})).sort((x,y)=>y.u-x.u||y.t-x.t||x.i-y.i).map(x=>x.a);}
@@ -210,7 +227,7 @@ function livePage(main){
  function draw(){list.replaceChildren();const q=S.agents.length>8?S.search.trim().toLowerCase():'';const matches=S.agents.filter(a=>liveMatch(a,q)&&(!S.liveProject||(projectOf(a)||'其他')===S.liveProject));
   if(!matches.length){
    if(q||S.liveProject)empty(list,'没有匹配的 Agent','换个关键词，或者看看全部会话。',btn('清除筛选','secondary',()=>{S.search='';S.liveProject='';render();}));
-   else empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动，这里会自动出现。',S.device&&S.session?createButton():undefined);
+   else empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&S.session?createButton():undefined);
    return;}
   // 子 Agent 运行中 (kids.js) sits with 执行中: the agent is not done while its sub-agents work.
   // An idle Codex with an unanswered question (glance.js) waits for you too.
@@ -251,7 +268,10 @@ async function refreshStatus(){
 // ─── Chat ───────────────────────────────────────────────────────────────────
 function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.terminalAnsi='';S.activity='';S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;}
 async function openAgent(a){
- S.unread.delete(agentKey(a));S.chatStack=[];resetChat({agent:a,record:null,title:titleOf(a),provider:a.agent});const epoch=++S.epoch;renderChat();
+ S.unread.delete(agentKey(a));S.chatStack=[];resetChat({agent:a,record:null,title:titleOf(a),provider:a.agent});
+ // No transcript reader for this kind: the terminal is the conversation. Say so once, calmly.
+ if(noTranscript(a)){S.chat.noTranscript=true;S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal(true);return;}
+ const epoch=++S.epoch;renderChat();
  const ref=a.history_ref;
  if(ref?.record){S.bindings.delete(S.session+'/'+a.identity);S.chat.record=ref.record;await fetchHistory(false,true);return;}
  const remembered=S.bindings.get(S.session+'/'+a.identity);if(remembered){S.chat.record=remembered;S.chat.manual=true;await fetchHistory(false,true);return;}
@@ -347,7 +367,7 @@ function renderChat(){
  const name=el('div','grow chat-id');name.append(el('h2','',S.chat.title||'对话'));const sub=el('small','chat-meta');sub.id='chat-meta';name.append(sub);head.append(name);
  const sw=ib('branch','切换 Agent',agentSwitcher);sw.classList.add('with-count');const count=el('span','icon-count hidden');count.id='child-count';count.setAttribute('aria-hidden','true');sw.append(count);
  const more=ib('more','更多操作',chatMenu);sw.classList.add('head-act');more.classList.add('head-act');head.append(sw,more);root.append(head);
- const tabs=el('div','chat-tabs');tabs.setAttribute('role','group');tabs.setAttribute('aria-label','视图');[['conversation','对话'],['commands','命令'],['terminal','终端']].forEach(([mode,title])=>{const b=btn(title,S.chatMode===mode?'active':'',()=>{if(S.chatMode===mode)return;S.chatMode=mode;S.stick=true;S.unseen=0;S.epoch++;renderChat();if(mode==='terminal')fetchTerminal();else if(S.chat.record&&!S.messages.length)fetchHistory(false,true);});b.setAttribute('aria-pressed',String(S.chatMode===mode));tabs.append(b);});head.append(tabs);
+ const tabs=el('div','chat-tabs');tabs.setAttribute('role','group');tabs.setAttribute('aria-label','视图');[['conversation','对话'],['commands','命令'],['terminal','终端']].filter(([mode])=>!(S.chat.noTranscript&&mode==='commands')).forEach(([mode,title])=>{const b=btn(title,S.chatMode===mode?'active':'',()=>{if(S.chatMode===mode)return;S.chatMode=mode;S.stick=true;S.unseen=0;S.epoch++;renderChat();if(mode==='terminal')fetchTerminal();else if(S.chat.record&&!S.messages.length)fetchHistory(false,true);});b.setAttribute('aria-pressed',String(S.chatMode===mode));tabs.append(b);});head.append(tabs);
  const wrap=el('div','chat-body-wrap');const body=el('main','chat-body');body.id='chat-scroll';
  body.onscroll=()=>{const bottom=body.scrollHeight-body.scrollTop-body.clientHeight<80;if(bottom!==S.stick||(bottom&&S.unseen)){S.stick=bottom;if(bottom)S.unseen=0;updateJump();}
   // Reading near the top pulls in the previous page (position is kept, see keepPlace).
@@ -371,7 +391,7 @@ function renderComposer(){
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
  if(offline){live.replaceChildren(el('div','compose-note','正在连接 · 显示的是上次的缓存，连上后才能发送'));}else renderLiveState(live,a);
  const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status,later=!offline&&(st==='working'||st==='blocked');
- input.placeholder=offline?'可以先写，连上再发':st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':'说点什么，继续这段对话…（/ 看命令）';
+ input.placeholder=offline?'可以先写，连上再发':st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':S.chat.noTranscript?'发给 '+providerName(a.agent)+'…'+(slashKnown(a)?'（/ 看命令）':''):'说点什么，继续这段对话…（/ 看命令）';
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
  // Busy agent: the button says it will queue, so sending never looks like it failed.
  send.classList.toggle('later',later);send.querySelector('.send-label').textContent=later?'排队':'';send.title=offline?'连上后才能发送':later?'先排队，它停下就发':'发送';
@@ -399,7 +419,9 @@ function renderLiveState(live,a){
 // 中断 sends Esc: both Claude Code and Codex stop the current turn on Esc and never quit on it,
 // while a second Ctrl+C on an idle Claude would exit it. Ctrl+C stays in 终端按键.
 function interruptButton(a){
- const b=btn('中断','secondary small',()=>confirmAction('中断 Agent？','让 '+titleOf(a)+' 停下手上的事（发送 Esc，不会退出）。排队的消息会在它停下后接着发。','中断',async()=>{S.chat.interruptAt=Date.now();renderComposer();await sendKey('esc','Esc');setTimeout(()=>{if(S.chat)renderComposer();},4000);},true));
+ // Esc is checked for Claude Code and Codex only; another agent may treat it differently, so say so.
+ const what=hasTranscript(a.agent)?'让 '+titleOf(a)+' 停下手上的事（发送 Esc，不会退出）。':'给 '+titleOf(a)+' 发送 Esc。多数 Agent 会停下当前这一步，但 '+providerName(a.agent)+' 具体怎么处理不一定，之后看一眼终端。';
+ const b=btn('中断','secondary small',()=>confirmAction('中断 Agent？',what+'排队的消息会在它停下后接着发。','中断',async()=>{S.chat.interruptAt=Date.now();renderComposer();await sendKey('esc','Esc');setTimeout(()=>{if(S.chat)renderComposer();},4000);},true));
  b.disabled=!!S.chat?.interruptAt&&Date.now()-S.chat.interruptAt<4000;if(b.disabled)b.textContent='正在中断…';return b;}
 async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'已发送 '+label);setTimeout(()=>{refreshStatus();fetchTerminal(true);},700);}catch(e){toast('按键未确认：'+e.message+'。不会自动重发。');}}
 async function sendMessage(input){
@@ -427,7 +449,8 @@ async function sendMessage(input){
   if(docs.length){fileSet(key,fileAttached(key).filter(f=>!docs.includes(f)));rpc('dropFiles',{ids:docs.map(f=>f.id)}).catch(()=>{});}
   // A slash command may not start a turn at all (/status), so no optimistic "working": Herdr's own state decides.
   if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;if(!card)S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
-  S.stick=true;paintTimeline();if(card)slashCapture(card);if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);}
+  S.stick=true;paintTimeline();if(card)slashCapture(card);if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);
+  if(S.chat?.noTranscript&&!card){toast('发给 '+providerName(a.agent)+' 了，回复看终端');setTimeout(()=>{if(epoch===S.epoch)fetchTerminal(true);},900);}}
  catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
  finally{button.disabled=!input.value.trim()&&!attCount(key);}}
 // The send button answers the press at once (the haptic comes from native.js); the bubble follows.
@@ -502,13 +525,15 @@ function agentSwitcher(){
 function chatMenu(){
  const box=sheet('对话操作');
  menuItem(box,'在对话里搜索',findOpen,'search','消息、过程和命令输出');
- menuItem(box,'刷新对话',()=>{S.paused=false;fetchHistory(false,true);},'refresh');
- menuItem(box,S.paused?'恢复自动更新':'暂停自动更新',()=>{S.paused=!S.paused;toast(S.paused?'自动更新已暂停':'自动更新已恢复');},S.paused?'refresh':'pause');
- menuItem(box,'选择其他历史记录',pickHistory,'history');
- if(S.chat.agent){menuItem(box,'终端按键',keyMenu,'terminal','↑ ↓ Enter Esc Ctrl+C'+(modeAgent(S.chat.agent)?' Shift+Tab':''));menuItem(box,'查看终端',()=>{S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal();},'terminal');}
+ if(!S.chat.noTranscript){menuItem(box,'刷新对话',()=>{S.paused=false;fetchHistory(false,true);},'refresh');
+  menuItem(box,S.paused?'恢复自动更新':'暂停自动更新',()=>{S.paused=!S.paused;toast(S.paused?'自动更新已暂停':'自动更新已恢复');},S.paused?'refresh':'pause');
+  menuItem(box,'选择其他历史记录',pickHistory,'history');}
+ if(S.chat.agent){menuItem(box,'终端按键',keyMenu,'terminal','↑ ↓ Enter Esc Ctrl+C'+(modeAgent(S.chat.agent)||modeShiftTab(S.chat.agent)?' Shift+Tab':''));menuItem(box,'查看终端',()=>{S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal();},'terminal');}
  closeChatMenu(box);}
 function keyMenu(){const box=sheet('终端按键');box.append(el('p','fine','先看一眼终端：Enter 可能会批准当前操作。'));[['↑ 上','up'],['↓ 下','down'],['Enter 确认','enter'],['Esc 返回','esc'],['Ctrl+C 中断','ctrl+c']].forEach(([t,key])=>{const b=btn(t,'menu-item',()=>{closeSheet();sendKey(key,t);});box.append(b);});
- if(modeAgent(S.chat?.agent)){const b=btn('Shift+Tab 切换模式','menu-item',()=>{closeSheet();modeCycle();});const why=modeBlockedWhy(S.chat.agent);b.disabled=!!why;if(why)b.title=why;box.append(b);}}
+ if(modeAgent(S.chat?.agent)){const b=btn('Shift+Tab 切换模式','menu-item',()=>{closeSheet();modeCycle();});const why=modeBlockedWhy(S.chat.agent);b.disabled=!!why;if(why)b.title=why;box.append(b);}
+ // Other agents: only when their own footer offers Shift+Tab (mode.js); what it does is theirs to say.
+ else if(modeShiftTab(S.chat?.agent)){const a=S.chat.agent;const b=btn('Shift+Tab','menu-item',()=>{closeSheet();sendKey('shift+tab','Shift+Tab');});const why=a.agent_status==='blocked'?'它正等你确认，这时按 Shift+Tab 可能直接批准':'';b.disabled=!!why;if(why)b.title=why;box.append(b);}}
 async function pickHistory(){
  const targetAgent=S.chat?.agent;const box=sheet('选择历史记录');box.append(el('p','fine','选中后先只读打开，不会把消息发给其他 Agent。'));const list=el('div','pick-list');let requestNumber=0;
  async function search(query=''){const token=++requestNumber;list.replaceChildren(el('div','loading','读取中…'));
@@ -620,7 +645,7 @@ function pollBeat(){
  if(!S.active||S.demo||!S.device)return;tick++;const beat=tick%2===0,n=tick>>1;
  const busy=S.chat?.agent&&!S.chat.stale&&['working','blocked'].includes(S.chat.agent.agent_status);
  if(S.chat){const reply=awaitingReply();if(reply){if(!S.paused&&!S.polling&&S.chatMode!=='terminal')fetchHistory();updateChatMeta();}
-  if(beat){if(!reply&&!S.paused&&!S.polling&&S.chatMode!=='terminal'&&historyDue(busy,n))fetchHistory();if(busy&&S.chatMode!=='commands')fetchTerminal(true);}
+  if(beat){if(!reply&&!S.paused&&!S.polling&&S.chatMode!=='terminal'&&historyDue(busy,n))fetchHistory();if((busy||S.chat.noTranscript&&S.chatMode==='terminal'&&(pollHot()||n%4===0))&&S.chatMode!=='commands')fetchTerminal(true);}
   if(beat||pollHot())refreshStatus();}
  else if(S.tab==='live'&&tick%(listHot()?2:6)===0)refreshStatus().then(()=>glanceRefresh());}
 setInterval(pollBeat,POLL_BEAT);

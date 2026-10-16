@@ -38,12 +38,22 @@ const SLASH_BUILTIN={
   ['title','设置终端标题显示什么',1],['theme','选择代码高亮主题',1],['experimental','开关实验功能',1],['memories','设置记忆的使用和生成',1],
   ['hooks','查看和管理生命周期钩子',1],['keymap','修改快捷键',1],['vim','开关 Vim 编辑模式'],['raw','切换原始滚动模式，方便复制'],
   ['plugins','浏览插件',1],['apps','管理应用',1],['import','从 Claude Code 导入设置和对话',1],['feedback','把日志发给维护者',1],
-  ['rollout','显示对话记录文件的路径'],['debug-config','显示配置来源，排查用'],['logout','退出 Codex 登录'],['quit','退出 Codex']]};
+  ['rollout','显示对话记录文件的路径'],['debug-config','显示配置来源，排查用'],['logout','退出 Codex 登录'],['quit','退出 Codex']],
+ // opencode 1.2.20: the TUI's own command list (read from the installed binary). Most open a dialog.
+ opencode:[
+  ['new','开一段新对话（/clear 也行）'],['sessions','切换到之前的对话',1],['models','切换模型',1],['agents','切换 Agent',1],
+  ['compact','压缩上下文，把前面的对话总结一下'],['undo','撤销上一步'],['redo','重做'],['share','分享这段对话'],['unshare','取消分享'],
+  ['rename','给这段对话改个名',1],['fork','从这里分出一段新对话',1],['timeline','跳到对话里的某一步',1],['copy','复制对话记录'],
+  ['export','导出对话记录',1],['editor','用外部编辑器写消息'],['skills','查看技能',1],['mcps','开关 MCP',1],['connect','连接模型提供商',1],
+  ['status','当前状态',1],['themes','切换主题',1],['thinking','显示或隐藏思考过程'],['timestamps','显示或隐藏时间'],['help','查看帮助',1],
+  ['exit','退出 OpenCode']]};
 const SLASH_KIND={command:'自定义',skill:'技能',prompt:'提示词'};
 const SL={custom:new Map(),cards:new Map(),seq:0};// custom: agentKey → {list,at,loading}; cards: draftKey → [card]
-function slashProvider(a){return a?.agent==='codex'?'codex':'claude';}
+// Agents without a known command list get no suggestions; a typed "/word" still goes out as usual.
+function slashProvider(a){return a&&SLASH_BUILTIN[a.agent]?a.agent:'';}
+function slashKnown(a){return !!slashProvider(a);}
 function slashList(a){
- const built=SLASH_BUILTIN[slashProvider(a)].map(([name,desc,panel])=>({name,desc,panel:!!panel,kind:''}));
+ const built=(SLASH_BUILTIN[slashProvider(a)]||[]).map(([name,desc,panel])=>({name,desc,panel:!!panel,kind:''}));
  const own=(a&&SL.custom.get(agentKey(a))?.list||[]).filter(c=>!built.some(b=>b.name===c.name)).map(c=>({name:c.name,desc:(c.scope==='project'?'项目':'个人')+SLASH_KIND[c.kind]+(c.kind==='skill'?'':'命令'),kind:c.kind,panel:false}));
  return built.concat(own);}
 // The bridge adds the user's own commands once per agent (and again after five minutes).
@@ -65,7 +75,7 @@ function slashMatches(a,query){
  return list.map((c,i)=>({c,i,s:score(c)})).filter(x=>x.s<9).sort((x,y)=>x.s-y.s||x.i-y.i).map(x=>x.c);}
 function slashToken(input){const v=input.value;const m=v.match(/^\/([^\s\/]*)$/);return m&&input.selectionStart===v.length?m[1]:null;}
 function slashSuggest(compose,input){
- const a=S.chat?.agent;const q=a&&!S.chat.stale?slashToken(input):null;
+ const a=S.chat?.agent;const q=a&&!S.chat.stale&&slashKnown(a)?slashToken(input):null;
  if(q===null){slashClose(compose);return;}
  slashLoad(a);const items=slashMatches(a,q);const st=compose.slash||(compose.slash={active:0});
  if(st.query!==q){st.active=0;st.query=q;}st.items=items;st.active=Math.min(st.active,Math.max(0,items.length-1));

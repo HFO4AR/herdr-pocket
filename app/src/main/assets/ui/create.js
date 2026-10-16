@@ -5,6 +5,9 @@
 // message goes out through the normal prompt path, only once the new agent is ready.
 const NEW={info:null,infoSession:'',busy:false,watch:0,form:null,recent:null,recentFor:''};
 const NEW_KINDS={codex:['Codex','codex','本机运行'],claude:['Claude','claude','本机运行'],ch:['Claude · ch','claude','用 ch new 开']};
+// Other agents Herdr can start (bridge createInfo `more`: only kinds whose command is installed).
+// [label, avatar kind, detail]: they run like any agent; their replies are read from the terminal.
+function newKind(k){return NEW_KINDS[k]||[providerName(k),k,'看终端回复'];}
 const NEW_DEMO={kinds:[{kind:'codex',found:true},{kind:'claude',found:true},{kind:'ch',found:true}],home:'/home/demo',
  workspaces:[{workspace_id:'w1',label:'pocket',focused:true,dirs:[{path:'/home/demo/projects/pocket',agents:2,panes:3}]},{workspace_id:'w2',label:'site',dirs:[{path:'/home/demo/projects/site',agents:1,panes:1}]}],
  dirs:[{path:'/home/demo/projects/pocket',source:'pane',agents:2,workspace_id:'w1'},{path:'/home/demo/projects/site',source:'pane',agents:1,workspace_id:'w2'},{path:'/home/demo/notes',source:'history',modified:Date.now()/1000-86400*2}]};
@@ -34,7 +37,8 @@ async function openCreate(){
 
 function createForm(body,info){
  body.replaceChildren();
- const kinds=info.kinds.filter(k=>k.found||k.kind!=='ch').map(k=>k.kind);
+ const kinds=info.kinds.filter(k=>k.found||k.kind!=='ch').map(k=>k.kind).concat((info.more||[]).filter(k=>k&&k.found&&kindSafe(k.kind)&&!NEW_KINDS[k.kind]).map(k=>k.kind));
+ const found=k=>info.kinds.concat(info.more||[]).find(x=>x.kind===k)?.found;
  const last=NEW.lastKind||newPref('kind'),recent=(NEW.recentFor===(S.device?.id||'')&&NEW.recent)||[];
  const f=NEW.form={kind:kinds.includes(last)?last:kinds[0]||'codex',dir:'',custom:false,place:'new',placeTouched:false};
  // Recently used from here first (marked), then what the computer reports (busiest first).
@@ -46,9 +50,9 @@ function createForm(body,info){
  // Agent kind
  body.append(el('div','section-label','用哪个 Agent'));
  const kindRow=el('div','new-kinds');kindRow.setAttribute('role','radiogroup');kindRow.setAttribute('aria-label','Agent 类型');body.append(kindRow);
- function drawKinds(){kindRow.replaceChildren();for(const k of kinds){const [label,av,detail]=NEW_KINDS[k];const found=info.kinds.find(x=>x.kind===k)?.found;
+ function drawKinds(){kindRow.replaceChildren();for(const k of kinds){const [label,av,detail]=newKind(k);
   const b=btn('','new-kind'+(f.kind===k?' on':''),()=>{f.kind=k;drawKinds();},null);b.setAttribute('role','radio');b.setAttribute('aria-checked',String(f.kind===k));b.setAttribute('aria-label',label);
-  const t=el('span','new-kind-text');t.append(el('strong','',label),el('small','',found?detail:'没找到命令'));b.append(avatar(av),t);kindRow.append(b);}}
+  const t=el('span','new-kind-text');t.append(el('strong','',label),el('small','',found(k)?detail:'没找到命令'));b.append(avatar(av),t);kindRow.append(b);}}
  drawKinds();
 
  // Directory
@@ -99,7 +103,7 @@ async function createSubmit(text,go,status){
  const f=NEW.form;if(!f||NEW.busy)return;
  if(!f.dir){toast(f.custom?'先填目录路径':'先选一个目录');return;}
  if(S.demo){closeSheet();toast('演示模式：不会真的新建');return;}
- const label=NEW_KINDS[f.kind][0];
+ const label=newKind(f.kind)[0];
  NEW.busy=true;go.disabled=true;go.replaceChildren(el('span','spinner'),document.createTextNode('正在启动…'));
  newStatus(status,'busy','正在开标签页并启动 '+label+'，一般要十几秒');
  const req={session:S.session,id:uuid(),kind:f.kind,cwd:f.dir,workspace:f.place};

@@ -164,3 +164,9 @@
 .older-retry{display:flex;align-items:center;gap:4px;flex-shrink:0;min-height:44px;padding:0 10px;color:var(--accent);font-size:13px;font-weight:600;border-radius:8px}
 .older-retry svg{width:15px;height:15px}
 .older-retry:active{background:var(--press)}
+/* Agents without a transcript reader (app.js noTranscript): a calm explanation, not an error. */
+.note.no-transcript{background:var(--sunken);color:var(--ink-2);align-items:flex-start;margin-bottom:10px}
+.note.no-transcript .grow{display:flex;flex-direction:column;gap:2px;min-width:0}
+.note.no-transcript strong{color:var(--ink);font-weight:600}
+.note.no-transcript .fine{color:var(--muted);font-size:var(--fs-xs)}
+.note.no-transcript .btn,.note.no-transcript button{flex-shrink:0;align-self:center}

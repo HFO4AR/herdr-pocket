@@ -35,7 +35,7 @@ const HELP=[
    ['只在 App 在前台、这段对话开着的时候发；后台不会发送任何东西。','每条排队消息可以「删掉」「修改」或「立即发送」。','「立即发送」先给 Agent 发 Esc 打断当前这一轮，等 Herdr 报告它停下再发；20 秒内没停下就不发。','排队只存在这次运行的内存里，退出 App 就没了。'],
   ]},
   {id:'chat-stop',h:'中断',body:[
-   '执行中时，输入框上方的状态条右边有「中断」。它发送 Esc：Claude Code 和 Codex 都会停下当前这一轮，不会退出。',
+   '执行中时，输入框上方的状态条右边有「中断」。它发送 Esc：Claude Code 和 Codex 都会停下当前这一轮，不会退出。其他 Agent 多数也是这样，但具体看它自己，按完看一眼终端。',
    '要按 Ctrl+C 或方向键，在「更多操作 → 终端按键」里。Enter 可能就是批准当前操作，先看清终端。']},
   {id:'chat-answer',h:'回答提问卡片',body:[
    'Agent 问你问题或要你批准时，输入框上方会出现一张卡片。点选项再提交，App 会移动光标、核对屏幕上那一行，再按 Enter。',
@@ -46,6 +46,9 @@ const HELP=[
   {id:'chat-files',h:'图片和文件',body:[
    '输入框左边的 + 可以从相册选、拍照或选文件。一条消息最多 4 张图片、4 个文件，单个文件不超过 25 MB。',
    ['图片在手机上转正、压到长边 2048 px，去掉拍摄地点等 EXIF 信息。','都经 SFTP 传到电脑的 `~/.herdr-pocket/uploads/`，消息后面附上路径交给 Agent；14 天后自动清理。','上传或准备失败时整条消息都不发，草稿还在。']]},
+  {id:'chat-other',h:'其他 Agent',body:[
+   'Herdr 认得的 Agent（OpenCode、Gemini、Kimi、Devin 等）都会出现在「会话」里，状态跟 Herdr 一致。发消息、排队、按键、回答菜单和关闭窗格都能用。',
+   ['App 目前只读得懂 Claude 和 Codex 的对话记录，其他 Agent 打开后直接看「终端」画面，回复也在那里。','历史、子 Agent 和模式条只对 Claude、Codex 有。','Shift+Tab 只在它自己的状态栏提到时才给；「结束 Agent」只在知道它的退出命令时才给（OpenCode 是 /exit），不然只能关窗格。']]},
   {id:'chat-share',h:'从别的应用分享',body:[
    '在其他应用里分享文字、图片或文件，选 Herdr Pocket，再选「发给哪个 Agent」。内容会放进那段对话的草稿和附件里，不会自动发送。还没连上电脑时，会先等连接好。']}]},
  {id:'ch',title:'远程会话（ch）',parts:[
@@ -56,7 +59,7 @@ const HELP=[
    ['消息照常发；图片会变成 `ch-file://` 地址，文件先复制到那台电脑的同一个上传目录，复制失败就不发。','窗格 SSH 到别的电脑、但不是 ch 时，App 不知道怎么把图片和文件送过去，会直接拒绝。','「新建」里选「Claude · ch」，App 在新窗格里运行 `ch new`。','关闭时选「只关本机窗格」，远端的 Claude 会话继续运行，之后可以用 `ch resume` 接回；结束 Agent 会结束远端会话。']]}]},
  {id:'sessions',title:'新建和关闭会话',parts:[
   {id:'sessions-new',h:'新建',body:[
-   '「会话」页右上角的「新建」：选 Codex、Claude 或 Claude · ch，选目录（这台手机最近用过的排在前面），选放进已有工作区的新标签页还是新工作区，还可以顺手写第一条消息。',
+   '「会话」页右上角的「新建」：选 Codex、Claude 或 Claude · ch（电脑上装了 Herdr 能启动的其他 Agent，比如 OpenCode，也会列出来），选目录（这台手机最近用过的排在前面），选放进已有工作区的新标签页还是新工作区，还可以顺手写第一条消息。',
    '不会抢走电脑上的焦点。结果不确定时 App 不会自己重试，回列表刷新看看。']},
   {id:'sessions-close',h:'关闭',body:[
    '在列表里左滑或长按一行，或者在对话里点「更多操作 → 关闭会话」。有两种：',
@@ -196,7 +199,7 @@ async function helpDiagnostics(){
  else{add('桥接程序','未连接，无法读取');add('Herdr','未连接，无法读取');}
  const ag=S.agents||[],isCh=a=>typeof closeIsCh==='function'&&closeIsCh(a);
  const count=f=>ag.filter(f).length;
- add('在线 Agent',ag.length+'（Codex '+count(a=>a.agent==='codex')+'，Claude '+count(a=>a.agent==='claude')+'，ch 远端 '+count(isCh)+'；执行中 '+count(a=>a.agent_status==='working')+'，等确认 '+count(a=>a.agent_status==='blocked')+'）');
+ add('在线 Agent',ag.length+'（Codex '+count(a=>a.agent==='codex')+'，Claude '+count(a=>a.agent==='claude')+(count(noTranscript)?'，其他 '+count(noTranscript):'')+'，ch 远端 '+count(isCh)+'；执行中 '+count(a=>a.agent_status==='working')+'，等确认 '+count(a=>a.agent_status==='blocked')+'）');
  add('历史未关联',count(a=>a.history_ref&&!['matched','pending'].includes(a.history_ref.status)));
  const c=S.chat;add('当前对话',!c?'无':c.agent?(isCh(c.agent)?'ch 远端':'本机')+' · '+(c.agent.agent||'agent')+(c.stale?' · 已变化':''):c.record?((c.record.remote?'ch 远端':'本机')+' · 历史只读'+(c.record.parent?' · 子 Agent':'')):'无');
  let queued=0;if(typeof Q!=='undefined')for(const q of Q.values())queued+=q.items.length;

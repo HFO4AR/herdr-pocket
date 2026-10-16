@@ -114,6 +114,8 @@ small,.muted{color:var(--muted);font-size:var(--fs-xs);line-height:1.5}
 .avatar{position:relative;width:40px;height:40px;border-radius:12px;background:var(--sunken);color:var(--ink-2);display:grid;place-items:center;font-size:14px;font-weight:700;flex-shrink:0;letter-spacing:-.3px}
 .avatar.claude{background:var(--soft);color:var(--accent)}
 .avatar.codex{background:var(--codex-bg);color:var(--codex-ink)}
+/* Any other agent kind Herdr detects: initials on a quiet outlined tile (app.js AGENT_KINDS). */
+.avatar.kind-other{background:var(--surface);box-shadow:inset 0 0 0 1px var(--line);color:var(--ink-2);font-size:13px}
 .avatar svg{width:20px;height:20px}
 .status-dot{position:absolute;right:-3px;bottom:-3px;width:12px;height:12px;border-radius:50%;border:2px solid var(--surface);background:var(--faint)}
 .status-dot.ok{background:var(--success)}

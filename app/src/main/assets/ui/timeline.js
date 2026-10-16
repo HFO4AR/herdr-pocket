@@ -429,7 +429,11 @@ function tlFlipEnd(n,m){
   if(Math.abs(dy)>1&&Math.abs(dy)<400)r.animate([{transform:'translateY('+dy+'px)'},{transform:'none'}],{duration:220,easing:'cubic-bezier(.16,1,.3,1)'});}}
 function tlBuild(list,open){
  followMarker(list);
- if(S.chatMode==='terminal'){list.append(termAgentView(S.terminalText||(S.chat.agent?'正在读取终端…':'这条历史没有在线终端。'),S.chat.agent?btn('刷新终端','link-btn',()=>fetchTerminal(),'refresh'):null,S.terminalText&&S.terminalAnsi));return;}
+ if(S.chatMode==='terminal'){if(S.chat.noTranscript)list.append(noTranscriptNote(false));list.append(termAgentView(S.terminalText||(S.chat.agent?'正在读取终端…':'这条历史没有在线终端。'),S.chat.agent?btn('刷新终端','link-btn',()=>fetchTerminal(),'refresh'):null,S.terminalText&&S.terminalAnsi));if(S.chat.noTranscript){slashRest(list);queueTimeline(list);}return;}
+ // An agent whose conversation cannot be read: the screen is the conversation; sends and the queue still show.
+ if(S.chat.noTranscript){list.append(noTranscriptNote(true));
+  if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));list.append(el('pre','agent-terminal compact',tail(S.terminalText,14)));}
+  S.outbox=S.outbox.filter(o=>o.key!==draftKey()||o.state!=='sent'||Date.now()-o.at<180000);outboxRows(list,()=>{});slashRest(list);queueTimeline(list);return;}
  if(!S.chat.record){const box=el('div','unlinked');box.append(el('h2','','还没关联到对话记录'),el('p','muted',S.chat.historyIssue||'正在定位这个窗格对应的历史记录…'));
   if(S.chat.historyIssue)box.append(btn('选择历史记录','primary',pickHistory));list.append(box);
   const candidates=S.chat.agent?.history_ref?.candidates||[];if(candidates.length){list.append(el('div','section-label','候选历史 · 点击后确认'));const g=el('div','card list-card');candidates.forEach(rec=>{const b=btn('','card-button',()=>chooseHistory(rec,S.chat.agent));const t=el('div','grow');t.append(el('div','card-title',rec.title),el('div','card-meta',relative(rec.modified)+' · '+String(rec.thread).slice(0,8)));b.append(t,icon('chevron'));g.append(b);});list.append(g);}
@@ -451,4 +455,10 @@ function tlBuild(list,open){
  outboxRows(list,dayMark);
   queueTimeline(list);
  if(!count&&!S.chat.historyError)list.append(el('div','empty small',S.chat.historyLoading?'正在读取对话记录…':commandsOnly?'这段记录里还没有执行过命令。':S.more?'这一页没有可显示的消息，继续加载更早记录。':'这条记录暂无可显示的消息。'));}
+// What the app can and cannot do for an agent kind without a transcript reader (app.js noTranscript).
+function noTranscriptNote(withLink){
+ const box=el('div','note no-transcript');box.setAttribute('role','note');
+ const t=el('div','grow');t.append(el('strong','','这个 Agent 的对话记录还读不了，先看终端画面'),el('span','fine',providerName(S.chat.provider)+' 的回复显示在终端里。发消息、排队、按键和关闭都照常能用。'));box.append(t);
+ if(withLink)box.append(btn('看终端','secondary small',()=>{S.chatMode='terminal';S.stick=true;S.epoch++;renderChat();fetchTerminal();},'terminal'));
+ return box;}
 function tail(text,n){return text.replace(/\s+$/,'').split('\n').slice(-n).join('\n');}

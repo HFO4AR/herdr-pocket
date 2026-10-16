@@ -98,7 +98,7 @@ function settingsPage(main){
  about.append(linkRow('项目主页','GitHub',()=>rpc('openUrl',{url:'https://github.com/HFO4AR/herdr-pocket'}).catch(error),'globe'));
  about.append(linkRow('全部版本','',()=>rpc('openUrl',{url:'https://github.com/HFO4AR/herdr-pocket/releases'}).catch(error),'globe'));
  const lic=el('div','set-row');lic.append(el('span','set-label','开源许可'),el('span','set-value','MIT'));about.append(lic);
- main.append(el('p','fine center','Herdr Pocket · 在手机上和电脑里的 Codex、Claude 对话'));}
+ main.append(el('p','fine center','Herdr Pocket · 在手机上和电脑里的 Codex、Claude 等 Agent 对话'));}
 
 function updateBanner(){
  const u=updateInfo().latest;const b=el('section','update-banner');b.setAttribute('role','status');

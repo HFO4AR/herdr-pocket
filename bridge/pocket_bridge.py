@@ -22,6 +22,32 @@ LIMIT = 65536
 # Keys the phone may press in an agent pane. "shift+tab" is Herdr's name for Back-Tab (ESC [ Z).
 AGENT_KEYS = ("up", "down", "left", "right", "enter", "esc", "ctrl+c", "shift+tab")
 
+# Any agent kind Herdr detects (claude, codex, opencode, gemini, pi, …) is listed, read, prompted,
+# interrupted and closed the same generic way. Extras need an understood format:
+#  · TRANSCRIPT_PROVIDERS: kinds whose own conversation files this bridge can read (history,
+#    glance, sub-agents, modes). Extension point: a new kind needs transcript_roots(), its row
+#    reader in history_page/glance_tail and resolve_agent_history evidence before it goes here.
+#  · AGENT_PROCESS_NAMES: executable names of a kind when it is not the kind itself (process-tree
+#    checks; interpreters such as node are looked through to the script name).
+TRANSCRIPT_PROVIDERS = ("claude", "codex")
+AGENT_PROCESS_NAMES = {"cursor": ("cursor-agent", "cursor"), "agy": ("agy", "antigravity"), "kiro": ("kiro-cli", "kiro"),
+                       "qodercli": ("qodercli", "qoder"), "copilot": ("copilot", "github-copilot"), "kilo": ("kilo", "kilocode")}
+SCRIPT_HOSTS = ("node", "bun", "deno", "python", "python3")
+SHIFT_TAB_HINT = re.compile(r"(?i)shift\s*\+\s*tab|⇧\s*⇥|⇧tab")
+
+
+def agent_names(kind):
+    names = AGENT_PROCESS_NAMES.get(kind, (kind,)) if isinstance(kind, str) and kind else ()
+    return {n for name in names for n in (name, name + ".exe")}
+
+
+def is_agent_process(argv, kind):
+    """The agent's own process: its executable, or a script host (node …/gemini) running it."""
+    if not argv or not argv[0]: return False
+    names = agent_names(kind)
+    if Path(argv[0]).name in names: return True
+    return Path(argv[0]).name in SCRIPT_HOSTS and len(argv) > 1 and Path(argv[1]).name in names
+
 
 class BridgeError(Exception):
     pass
@@ -124,7 +150,7 @@ def agents(prefix, include_history=False):
     global _remote_deadline
     _remote_deadline = time.monotonic() + 20
     _remote_results.clear()
-    live = [a for a in result if a.get("agent") in ("codex", "claude")]
+    live = [a for a in result if a.get("agent") in TRANSCRIPT_PROVIDERS]
     probes = {a["pane_id"]: probe_pane(a, prefix, a["agent"]) for a in live}
     prefetch_remote([(probes[a["pane_id"]]["route"], a["agent"]) for a in live if probes[a["pane_id"]]["route"]])
     catalog = transcript_catalog() if live else []
@@ -149,7 +175,7 @@ def relay_pane(agent, prefix):
     process is the relay, not the agent. Herdr's agent commands refuse such a pane (agent_not_ready:
     "no longer the pane foreground process") although it lists the agent; input has to go to the
     pane itself. Decided before anything is written, from the process tree only."""
-    if agent.get("agent") not in ("claude", "codex"): return False
+    if not agent.get("agent"): return False
     probe = probe_pane(agent, prefix, agent["agent"])
     return bool(probe["ok"] and probe["route"] and not probe.get("native"))
 
@@ -284,10 +310,14 @@ def mutate(request, prefix, agent, state_dir):
             if key == "shift+tab":
                 # Shift+Tab switches the agent's own mode. On a permission dialog Claude takes it as
                 # "yes, and don't ask again", so it is only sent while no question or approval waits.
-                if agent.get("agent") not in ("claude", "codex"):
-                    raise BridgeError("没发出去：只有 Claude 和 Codex 能用 Shift+Tab 切换模式")
+                if not agent.get("agent"):
+                    raise BridgeError("没发出去：这个窗格里没有 Agent")
                 if agent.get("agent_status") not in ("idle", "done", "working"):
                     raise BridgeError("没发出去：Agent 正等你确认，这时按 Shift+Tab 可能直接批准；先处理完再切换")
+                # Other agents: only when their own screen offers Shift+Tab (a footer hint); what it
+                # does there is theirs to say, so it is never sent blind.
+                if agent["agent"] not in ("claude", "codex") and not shift_tab_offered(read_screen(prefix, agent, 40).get("text", "")):
+                    raise BridgeError("没发出去：这个 Agent 的画面上没提到 Shift+Tab，不确定它会做什么")
             args = ["agent", "send-keys", agent["pane_id"], key]
         elif op == "exitAgent":
             # The command is chosen here from the agent kind; the phone sends none.
@@ -376,7 +406,7 @@ def process_snapshot(pid):
 
 def explicit_session_ids(argv, provider):
     """Accept native CLI session switches, not UUIDs from arbitrary commands/prompts."""
-    if not argv or Path(argv[0]).name not in (provider, provider + ".exe"): return set()
+    if provider not in TRANSCRIPT_PROVIDERS or not is_agent_process(argv, provider): return set()
     switches = {"resume"} if provider == "codex" else {"--resume", "-r", "--session-id"}
     ids = set()
     for i, arg in enumerate(argv):
@@ -437,7 +467,7 @@ def probe_pane(agent, prefix, provider):
         argv = snapshot["argv"] if snapshot else initial_argv
         found["remote"] = found["remote"] or bool(argv and Path(argv[0]).name in ("ssh", "mosh", "mosh-client"))
         found["route"] = found["route"] or ch_ssh_route(argv)
-        native = bool(argv and Path(argv[0]).name in (provider, provider + ".exe"))
+        native = is_agent_process(argv, provider)
         found["native"] = found.get("native", False) or native
         if native:
             found["ids"].update(explicit_session_ids(argv, provider))
@@ -575,7 +605,7 @@ def active_threads_in_pane(pid, provider, expected_pid=None, expected_start=None
             if str(snapshot.get("start"))!=str(expected_start): raise BridgeError("导入的原生进程已更换")
             verified=True
         argv=snapshot["argv"]
-        if argv and Path(argv[0]).name in (provider,provider+".exe"):
+        if is_agent_process(argv, provider):
             # Runtime directory beats startup --resume after /clear or /resume.
             ids=set(snapshot.get("active_threads",[])) if provider=="claude" else set()
             if not ids: ids=explicit_session_ids(argv,provider)
@@ -1974,9 +2004,17 @@ def codex_footer(lines):
     return None
 
 
+def shift_tab_offered(text):
+    """An agent's footer (the bottom lines of its screen) names Shift+Tab as one of its keys."""
+    return any(SHIFT_TAB_HINT.search(x) for x in screen_lines(text)[-8:])
+
+
 def screen_modes(text, provider):
-    """{agent, permission|collaboration, goal, cycle} from the footer, or None when it is not on screen."""
+    """{agent, permission|collaboration, goal, cycle} from the footer, or None when it is not on screen.
+    Other agents: {agent, generic, cycle} when their footer offers Shift+Tab, else None."""
     lines = screen_lines(text)
+    if provider and provider not in ("claude", "codex"):
+        return {"agent": provider, "generic": True, "cycle": True} if shift_tab_offered(text) else None
     if provider == "claude":
         foot = claude_footer(lines)
         if foot is None: return None
@@ -2075,7 +2113,7 @@ def follow_pane(request, prefix):
         raise BridgeError("Invalid pane target")
     agent = next((a for a in agents(prefix) if a.get("pane_id") == target), None)
     if agent:
-        if agent.get("agent") in ("codex", "claude"): agent["history_ref"] = resolve_one(agent, prefix)
+        if agent.get("agent") in TRANSCRIPT_PROVIDERS: agent["history_ref"] = resolve_one(agent, prefix)
         state = "same" if agent["identity"] == request.get("identity") else "changed"
         return {"follow": True, "state": state, "agents": [agent], "pane": None}
     # No agent in the pane any more: tell "exited, the shell is still there" from "pane closed".
@@ -2101,6 +2139,12 @@ def follow_pane(request, prefix):
 # presses Enter. Anything unexpected stops before Enter.
 # Scrolling lists may put ↑/↓ in the pointer column of the first/last visible row.
 MENU_ROW = re.compile(r"^(?:[↑↓][ \t]*)?(?P<ptr>[❯›>▶➤])?[ \t]*(?:[↑↓][ \t]*)?(?P<n>\d{1,2})\.[ \t]+(?P<rest>\S.*)$")
+# Other agents also mark the focused row with a filled dot (Gemini CLI: "● 1. Allow once").
+MENU_ROW_ANY = re.compile(r"^(?:[↑↓][ \t]*)?(?P<ptr>[❯›>▶➤●◉])?[ \t]*(?:[↑↓][ \t]*)?(?P<n>\d{1,2})\.[ \t]+(?P<rest>\S.*)$")
+# Unnumbered pickers (other agents only): one pointer row among rows aligned with its text, and a
+# key hint under them. The rows are numbered by position; answering re-checks every label.
+ARROW_ROW = re.compile(r"^(?P<pad>[ \t]*)(?P<ptr>[❯›▶➤●◉→])[ \t]+(?P<rest>\S.{0,118})$")
+ARROW_HINT = re.compile(r"(?i)↑\s*/?\s*↓|arrow keys|to navigate|navigate|to select|enter to (?:confirm|select|submit)|enter (?:confirm|select|submit)")
 MENU_SUBMIT = re.compile(r"^(?P<ptr>[❯›>▶➤])?[ \t]*(?P<label>Submit answers|Submit|Next)[ \t]*$")
 MENU_CHECK = re.compile(r"^(?:\[(?P<box>[ ✔✓×xX√])\]|(?P<sym>[☐☒◻◼]))[ \t]*")
 MENU_FOOTER = re.compile(r"(?i)(enter to |esc to |to navigate|tab to |to cancel|ctrl\+\w to |press enter|↑/↓|←/→)")
@@ -2152,18 +2196,45 @@ def menu_esc(lines, run, last_line):
     return {"action": action or "cancel", "option": option}
 
 
+def arrow_run(lines):
+    """The newest unnumbered picker at the bottom of the screen as menu rows, or None if unsure."""
+    blank = lambda x: not x.strip()
+    pointers = [i for i, x in enumerate(lines) if ARROW_ROW.match(x.rstrip()) and not menu_rule(x)]
+    if not pointers: return None
+    p = pointers[-1]
+    found = ARROW_ROW.match(lines[p].rstrip())
+    column = len(lines[p].rstrip()) - len(found["rest"])
+    def row_at(i):
+        line = lines[i].rstrip()
+        if blank(line) or menu_rule(line) or i in pointers and i != p: return None
+        if i == p: return found["rest"]
+        pad = len(line) - len(line.lstrip())
+        return line.strip() if pad == column and len(line.strip()) <= 118 and not ARROW_HINT.search(line) else None
+    top = p
+    while top > 0 and p - top < 11 and row_at(top - 1) is not None: top -= 1
+    bottom = p
+    while bottom + 1 < len(lines) and bottom - top < 11 and row_at(bottom + 1) is not None: bottom += 1
+    if bottom == top: return None
+    after = [x for x in lines[bottom + 1:] if x.strip()]
+    if len(after) > 10 or not any(ARROW_HINT.search(x) for x in after[:6]): return None
+    return [{"n": i - top + 1, "line": i, "ptr": i == p, "rest": row_at(i)} for i in range(top, bottom + 1)]
+
+
 def parse_menu(text, provider=""):
     """Find the newest numbered menu at the bottom of an agent screen; None if unsure."""
     lines = [menu_clean(x) for x in str(text or "").split("\n")][-70:]
+    generic = provider not in ("claude", "codex")
+    row_re = MENU_ROW_ANY if generic else MENU_ROW
     runs = []
     for index, raw in enumerate(lines):
-        match = MENU_ROW.match(raw.strip())
+        match = row_re.match(raw.strip())
         if not match: continue
         n = int(match["n"])
         if not runs or n != runs[-1][-1]["n"] + 1: runs.append([])
         runs[-1].append({"n": n, "line": index, "ptr": bool(match["ptr"]), "rest": match["rest"]})
     # The live menu is the last run; earlier runs are numbered lists in the transcript.
     runs = [r for r in runs if len(r) >= 2]
+    if not runs and generic: runs = [r for r in [arrow_run(lines)] if r]
     if not runs: return None
     run = runs[-1]
     last_line = run[-1]["line"]
@@ -2904,6 +2975,11 @@ def remote_files_op(params, stream):
 # launches the canonical codex/claude executable, and for ch the fixed text `ch new` is
 # typed into the brand-new shell pane. Nothing the phone sends is ever run as a command.
 CREATE_KINDS = ("codex", "claude", "ch")
+# Other kinds `herdr agent start --kind` accepts (Herdr 0.8.2), offered only when their executable
+# is on this computer. Herdr starts its canonical executable for the kind; "cursor" is left out
+# because a `cursor` on PATH is usually the editor, not the agent.
+CREATE_MORE = ("opencode", "gemini", "pi", "devin", "agy", "cline", "omp", "mastracode", "copilot", "kimi", "kiro",
+               "droid", "amp", "grok", "hermes", "kilo", "qodercli", "qwen", "maki")
 CREATE_KEYS = {"v", "op", "session", "id", "kind", "cwd", "workspace"}
 CREATE_BUDGET = 26.0   # seconds for one create; the app waits 35 s for any request
 CH_NEW = "ch new"      # ch-cli: new Claude for the shell's current directory (default account)
@@ -2985,7 +3061,8 @@ def create_info(prefix):
         seen.add(os.path.realpath(d["path"]))
         dirs.append({"path": d["path"], "source": "history", "modified": d["modified"]})
     kinds = [{"kind": k, "found": bool(find_executable(k))} for k in CREATE_KINDS]
-    return {"kinds": kinds, "workspaces": workspaces, "dirs": dirs[:24], "home": str(Path.home())}
+    more = [{"kind": k, "found": True} for k in CREATE_MORE if find_executable(k)]
+    return {"kinds": kinds, "more": more, "workspaces": workspaces, "dirs": dirs[:24], "home": str(Path.home())}
 
 
 def create_dir(raw, known):
@@ -3084,7 +3161,7 @@ def create_agent(request, prefix, state_dir):
     if not isinstance(req_id, str) or not re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", req_id):
         raise BridgeError("Mutation requires a UUID request id")
     kind = request.get("kind")
-    if kind not in CREATE_KINDS: raise BridgeError("没创建：不支持的 Agent 类型")
+    if kind not in CREATE_KINDS + CREATE_MORE: raise BridgeError("没创建：不支持的 Agent 类型")
     place = request.get("workspace")
     if not isinstance(place, str) or not (place == "new" or re.fullmatch(r"w[A-Za-z0-9]{1,16}", place)):
         raise BridgeError("没创建：位置不对")
@@ -3208,7 +3285,9 @@ def custom_commands(agent):
 #  · closePane: `herdr pane close <pane>`, nothing else. The pane's processes end with it.
 # For a ch-cli attach the pane only holds the SSH attach: closing it detaches and the remote
 # tmux session keeps running (it can be resumed with `ch resume`); exiting the agent ends it.
-EXIT_COMMANDS = {"claude": "/exit", "codex": "/quit"}
+# opencode: `/exit` (aliases /quit, /q) in its command list, checked in the opencode 1.2.20 binary.
+# Kinds without a known command are not offered 结束 Agent, only closing the pane.
+EXIT_COMMANDS = {"claude": "/exit", "codex": "/quit", "opencode": "/exit"}
 CLOSE_KEYS = {"v", "op", "session", "id", "target", "identity"}
 PANE_ID = re.compile(r"w[A-Za-z0-9]+:p[A-Za-z0-9]+")
 HIDDEN_ID = re.compile(r"[a-f0-9]{64}|remote:[a-f0-9]{24}:[a-f0-9]{64}")

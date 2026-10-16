@@ -197,10 +197,12 @@ class ShiftTabKeyTests(unittest.TestCase):
         self.assertEqual(self.commands, [])
         self.assertFalse((self.state / "receipts.sqlite").exists() and sqlite3.connect(self.state / "receipts.sqlite").execute("SELECT 1 FROM receipts").fetchone())
 
-    def test_only_claude_and_codex(self):
+    def test_other_agents_only_when_their_footer_offers_it(self):
+        # Changed with generic agents: any kind may get Shift+Tab, but only when its own screen names it.
         self.agent["agent"] = "pi"
-        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去"): self.send(key="shift+tab")
-        self.assertEqual(self.commands, [])
+        self.screen = "  pi ready\n  esc interrupt · ctrl+c exit"
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：这个 Agent 的画面上没提到 Shift\\+Tab"): self.send(key="shift+tab")
+        self.assertFalse(any(c[:2] == ["agent", "send-keys"] for c in self.commands))
 
     def test_other_names_are_refused(self):
         for key in ("backtab", "shift-tab", "tab", "ctrl+d"):

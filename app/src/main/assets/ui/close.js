@@ -10,6 +10,9 @@
 // pane detaches and leaves it running on the other computer (`ch resume` picks it up again).
 // History records are never deleted: 「从列表移除」 only hides the record ID (bridge-side list).
 const CLOSE={busy:false,hidden:null,hiddenFor:'',hiddenLoading:false};
+// Exit commands the bridge knows (bridge EXIT_COMMANDS); the bridge's own answer (closeInfo) wins.
+// Other kinds get no 「结束 Agent」, only closing the pane: typing a guessed command could do anything.
+const CLOSE_EXIT={claude:'/exit',codex:'/quit',opencode:'/exit'};
 
 // ─── Long press (agent rows, history rows) ─────────────────────────────────
 // Long press or the context-menu key opens the row's actions; the click that ends a long press is eaten.
@@ -90,8 +93,9 @@ async function closeSession(a){
   const mark=el('span','close-radio');b.append(mark);const tx=el('span','grow');tx.append(el('strong','',label),el('small','',detail));b.append(tx);
   opts.append(b);}
  function draw(){
-  opts.replaceChildren();const ch=closeIsCh(a,info),cmd=info?.exit_command||(a.agent==='codex'?'/quit':'/exit');
-  if(a.agent){
+  opts.replaceChildren();const ch=closeIsCh(a,info),cmd=info?info.exit_command||'':CLOSE_EXIT[a.agent]||'';
+  if(!cmd&&choice==='exit')choice='';
+  if(a.agent&&cmd){
    const label=ch?'结束远端会话':'结束 '+who+'，保留终端';
    const detail=busy?'它'+(st==='blocked'?'在等你确认':'还在干活')+'：先点上面的「先中断」（Ctrl+C），停下后再结束':ch?'让 Claude 自己退出（发送 '+cmd+'），电脑那边的 ch 会话跟着结束；这个窗格回到普通终端':'让 '+who+' 自己退出（发送 '+cmd+'），窗格留着，回到普通终端';
    option('exit',label,detail,busy);}

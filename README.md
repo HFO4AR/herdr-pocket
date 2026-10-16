@@ -20,7 +20,8 @@ Herdr Pocket is a **mobile client for AI coding agents**: a phone companion for 
 - **approve tool calls from your phone** or answer an agent's question with real buttons;
 - send messages, pictures and files, queue a message while the agent is busy, interrupt it, run slash commands;
 - get **push notifications** when an agent finishes or waits for you (a read-only background check);
-- start and close Codex / Claude sessions, browse past transcripts, and use a plain SSH terminal.
+- start and close Codex / Claude sessions, browse past transcripts, and use a plain SSH terminal;
+- drive any other agent Herdr detects (OpenCode, Gemini CLI, Kimi, Devin …) the same way: status, prompts, queue, keys, menus and close. Their replies are shown from the terminal screen; transcripts are read for Claude Code and Codex only.
 
 The UI is Chinese. It is MIT-licensed, ships its small Python bridge inside the APK, and keeps credentials encrypted with the Android Keystore. See [SECURITY.md](SECURITY.md).
 
@@ -41,6 +42,7 @@ The UI is Chinese. It is MIT-licensed, ships its small Python bridge inside the 
 - **发消息**：Agent 忙的时候写好会排队，停下就按顺序发；「立即发送」先打断再发；「中断」发送 Esc，不会退出 Agent。输入 `/` 列出斜杠命令。
 - **图片和文件**：一条最多 4 张图、4 个文件（单个 ≤ 25 MB）。图片在手机上压缩并去掉 EXIF，经 SFTP 传到电脑 `~/.herdr-pocket/uploads/`，14 天后清理。也可以从别的应用分享进来，先放进草稿，不会自动发送。
 - **新建和关闭会话**：在手机上开新的 Codex、Claude 或 Claude · ch 会话（选目录和工作区，不抢电脑焦点）；结束 Agent 或关闭窗格前都要确认。
+- **其他 Agent**：Herdr 认得的 Agent（OpenCode、Gemini、Kimi、Devin 等）都会出现在会话列表里，能发消息、排队、按键、回答菜单和关闭；它们的对话记录 App 还读不了，打开后直接看终端画面。
 - **远程会话（ch）**：窗格通过 ch 连到另一台电脑时，经同一条 SSH 路由只读读取那台电脑上的对话记录，图片和文件也能送过去。
 - **历史**：浏览当前 SSH 用户的 Codex / Claude 本地记录，按天分组、搜索、按子 Agent 筛选；Agent 退出后也能只读查看。
 - **后台提醒**：切到后台后只读查状态（有 Agent 在干活时每 20 秒，都停着时每 60 秒），做完、等你确认或 Codex 在问你时发通知（同一个问题只提醒一次，「暂不回答」的不再提醒），点通知直接进那个对话；8 小时、连续失败或回到 App 时自动停止，回到 App 时收起等你处理的通知。

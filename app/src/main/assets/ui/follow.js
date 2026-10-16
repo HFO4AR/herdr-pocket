@@ -65,6 +65,9 @@ function followApply(c,r){
  c.followPending='';
  if(a.identity!==c.agent.identity){
   if(strong&&ref.record.id===cur?.id){followAdopt(c,a,cur);return;}
+  // No transcript to compare for this kind (app.js noTranscript): the same agent in the same terminal
+  // under a new session id is still the screen the person is looking at.
+  if(c.noTranscript&&a.agent===c.agent.agent&&a.terminal_id===c.agent.terminal_id){followAdopt(c,a,null);return;}
   // The pane's session changed but nothing says which conversation it is now.
   c.following=false;c.stale=true;c.unsure=a;renderComposer();updateChatMeta();return;}
  // Nothing changed after all (a status blip): release the hold, refresh names.

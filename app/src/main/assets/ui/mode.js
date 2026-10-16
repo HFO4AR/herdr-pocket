@@ -21,11 +21,15 @@ const MODE_CYCLE={claude:'手动确认 → 自动接受编辑 → 计划模式 �
  codex:'默认模式 ↔ 计划模式。审批权限（/approvals）不受 Shift+Tab 影响。'};
 function modeIcons(){if(paths.shiftTab)return;Object.assign(paths,{shiftTab:'M7 3L2 9h3v7h4V9h3zM14 12h7M18 8.5l3.5 3.5-3.5 3.5M22 7v10'});}
 function modeAgent(a){return !!a&&['claude','codex'].includes(a.agent);}
+// Other agents have no mode bar; Shift+Tab is offered as a plain key only while their own footer
+// names it (bridge screen_modes {generic, cycle}), as of the latest screen read.
+function modeShiftTab(a){if(!a||modeAgent(a)||S.chat?.stale)return false;const m=MD.screen.get(agentKey(a))?.modes;return !!(m&&m.generic&&m.cycle);}
 
 // Called with every screen read of the open chat. `modes: null` means the footer is not on screen
 // (a menu or a dialog covers it): keep what was last seen, only note when.
 function modeScreen(r){
  const a=S.chat?.agent;if(!a||S.chat.stale||!r||!('modes' in r))return;const k=agentKey(a),old=MD.screen.get(k);
+ if(!modeAgent(a)){MD.screen.set(k,{modes:r.modes&&typeof r.modes==='object'?r.modes:null,at:Date.now(),read:Date.now()});return;}
  if(r.modes&&typeof r.modes==='object')MD.screen.set(k,{modes:r.modes,at:Date.now(),read:Date.now()});
  else if(old)old.read=Date.now();else MD.screen.set(k,{modes:null,at:0,read:Date.now()});
  modePaint();}
