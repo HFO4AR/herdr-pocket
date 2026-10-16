@@ -16,6 +16,7 @@ import javax.crypto.spec.GCMParameterSpec
 /**
  * 所有设备资料以 Android Keystore AES-GCM 加密；列表不返回保存的密码。
  * auth: "password"（默认）或 "key"（用 SshIdentity 里这台手机的密钥）；改成密钥会清掉保存的密码。
+ * jumps: 可选的跳板机列表（见 JumpHosts），各自的密码同样只存在这份加密资料里。
  */
 class SecureProfiles(context: Context) {
     private val prefs = context.getSharedPreferences("secure_devices", Context.MODE_PRIVATE)
@@ -42,10 +43,7 @@ class SecureProfiles(context: Context) {
     }
     @Synchronized fun list(): JSONArray = JSONArray().apply {
         val rows = all()
-        for (i in 0 until rows.length()) put(JSONObject(rows.getJSONObject(i).toString()).apply {
-            put("remember", optString("password").isNotEmpty()); remove("password")
-            put("auth", optString("auth").ifBlank { "password" })
-        })
+        for (i in 0 until rows.length()) put(JumpHosts.redact(rows.getJSONObject(i)))
     }
     @Synchronized fun get(id: String): JSONObject {
         val rows = all()
@@ -62,15 +60,20 @@ class SecureProfiles(context: Context) {
             val item = rows.getJSONObject(i)
             if (item.getString("id") == id) old = item else next.put(item)
         }
+        // Jump hosts (跳板机) in front of the device, validated; their saved passwords carry over only unchanged.
+        val jumps = JumpHosts.normalize(value.optJSONArray("jumps"), old?.optJSONArray("jumps"))
         // Changing a destination must not silently forward the previous device's password.
-        val same = old?.optString("host") == host && old?.optInt("port") == port && old?.optString("user") == user
+        // Behind a different jump host the same address can be another machine, so the path counts too.
+        val same = old?.optString("host") == host && old?.optInt("port") == port && old?.optString("user") == user &&
+            JumpHosts.path(old!!) == JumpHosts.path(JSONObject().put("jumps", jumps))
         val auth = value.optString("auth").ifBlank { old?.optString("auth").orEmpty().ifBlank { "password" } }
         require(auth == "password" || auth == "key") { "不支持的登录方式" }
         // A key device keeps no password: switching to the key is also how a saved password is dropped.
         val pass = if (auth == "password" && value.optBoolean("remember")) value.optString("password").ifEmpty { if (same) old?.optString("password") ?: "" else "" } else ""
         require(pass.length <= 4096) { "密码过长" }
         next.put(JSONObject().put("id", id).put("name", value.optString("name").trim().take(80).ifBlank { host })
-            .put("host", host).put("port", port).put("user", user).put("password", pass).put("auth", auth))
+            .put("host", host).put("port", port).put("user", user).put("password", pass).put("auth", auth)
+            .apply { if (jumps.length() > 0) put("jumps", jumps) })
         write(next)
         return JSONObject().put("id", id).put("devices", list())
     }

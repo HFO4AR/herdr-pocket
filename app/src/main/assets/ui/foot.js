@@ -7,7 +7,7 @@
 //   · the composer, which stays on screen in every state and size. Only the question card may take
 //     its place on a short screen (landscape, keyboard open); the card then offers 「写消息」, which
 //     folds it into the rail so the input comes back.
-// Priority, highest first: question / approval > slash list > queue > working > mode.
+// Priority, highest first: question / approval > slash list > queue > working > 后台 (bg.js) > mode.
 // Loaded after mode.js and before app.js: declarations, listeners and one timer only.
 const FOOT={pin:'',write:'',primary:'',el:null};
 const FOOT_MODE={permission:{default:'手动确认',acceptEdits:'自动编辑',plan:'计划模式',auto:'自动模式',bypassPermissions:'跳过确认',dontAsk:'不询问'},collaboration:{default:'默认模式',plan:'计划模式'}};
@@ -49,7 +49,10 @@ function footPaint(footer,a){
  const items=[],offline=!S.device&&!S.demo;
  if(!offline){if(writing)items.push('ask');
   if(queueItems(key).length&&!S.chat.stale)items.push('queue');
-  if(st==='working')items.push('work');else if(done&&!blocked)items.push('done');}
+  if(st==='working')items.push('work');else if(done&&!blocked&&!bgHold(a))items.push('done');
+  // Background work (bg.js): leads while the agent itself rests, a chip while it works — unless the
+  // rail already carries two things (queue + 执行中); the status line and the list still say it.
+  if(bgChatRunning()&&!S.chat.stale&&(st!=='working'||items.length<2))items.push('bg');}
  // The mode never earns a line under the slash list by itself; it is not switchable while blocked.
  const mode=!blocked&&!offline&&footModeItem(a);if(mode&&(items.length||block!=='slash'))items.push('mode');
  if(FOOT.pin&&!items.includes(FOOT.pin))FOOT.pin='';
@@ -57,7 +60,7 @@ function footPaint(footer,a){
  const chips=items.filter(x=>x!==lead);
  // What the rail shows; rebuilt only when this changes (the timers inside tick on their own).
  const q=Q.get(key);const sig=JSON.stringify([lead,chips,lead==='mode'?'':mode,items.includes('queue')?[q.items.length,footQueueText(a,key)]:0,
-  st,lead==='work'?[!!S.chat.interruptAt&&Date.now()-S.chat.interruptAt<4000,statusSince(a)||S.chat.sentAt||0]:0,done?[S.chat.took,S.stick]:0,writing?ask.className:'']);
+  st,items.includes('bg')?[bgChatRunning(),bgChat()?.stamp||'']:0,lead==='work'?[!!S.chat.interruptAt&&Date.now()-S.chat.interruptAt<4000,statusSince(a)||S.chat.sentAt||0]:0,done?[S.chat.took,S.stick]:0,writing?ask.className:'']);
  if(bar)bar.classList.toggle('hidden',lead!=='mode');
  if(rail.dataset.sig!==sig){rail.dataset.sig=sig;
   rail.querySelectorAll(':scope>:not(#mode-bar)').forEach(n=>n.remove());
@@ -82,6 +85,7 @@ function footLead(kind,a,key,ask){
  if(kind==='done'){const n=el('div','foot-lead t-done');n.setAttribute('role','status');n.append(icon('check'),el('strong','','做完了'));
   if(S.chat.took>=5000)n.append(el('span','foot-detail','用时 '+dur(S.chat.took)));
   if(!S.stick)n.append(btn('看结果','link-btn',()=>{S.stick=true;S.unseen=0;scrollBottom();updateJump();footRefresh();}));return n;}
+ if(kind==='bg')return bgFootLead(a);
  if(kind==='queue'){const n=btn('','foot-lead t-queue',footQueueShow,'history');n.setAttribute('aria-label','排队的消息：'+queueItems(key).length+' 条，'+footQueueText(a,key));
   n.append(el('strong','','排队 '+queueItems(key).length+' 条'),el('span','foot-detail',footQueueText(a,key)));return n;}
  // ask: the folded question card, and the way back to it.
@@ -94,6 +98,7 @@ function footChip(kind,a,key,mode,ask){
  if(kind==='work'){c=btn('','foot-chip t-work',()=>{FOOT.pin='work';footRefresh();});c.append(el('span','pulse'),document.createTextNode('执行中'));const at=statusSince(a)||S.chat.sentAt;if(at)c.append(' ',since(at));c.setAttribute('aria-label','执行中，点开看进度和中断');}
  else if(kind==='done'){c=btn('做完了','foot-chip t-done',()=>{FOOT.pin='done';footRefresh();},'check');}
  else if(kind==='queue'){c=btn('排队 '+queueItems(key).length,'foot-chip t-queue',footQueueShow,'history');c.setAttribute('aria-label','排队 '+queueItems(key).length+' 条，'+footQueueText(a,key));}
+ else if(kind==='bg')c=bgFootChip();
  else if(kind==='ask'){const approval=ask?.classList.contains('approval')||ask?.classList.contains('confirm-panel');c=btn(approval?'等你确认':'在问你','foot-chip t-ask'+(approval?' approval':''),footUnwrite,approval?'alert':'chat');c.setAttribute('aria-label','展开问题');}
  else{c=btn(mode.text,'foot-chip mode-chip '+(mode.tone||''),modeSheet);c.setAttribute('aria-label','模式：'+mode.text+'，点开切换');}
  return c;}

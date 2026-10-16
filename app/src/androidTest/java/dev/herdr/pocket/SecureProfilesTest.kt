@@ -19,8 +19,9 @@ class SecureProfilesTest : Instrumentation() {
             testShareIn()
             testIdentity()
             testWatchRules()
-            if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeepAlive(); testKeyLogin() }
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\nwatch-rules: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS" else "ssh-pty: SKIPPED") })
+            testJumpVault()
+            if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeepAlive(); testKeyLogin(); testSeveralLinks(); testJumpChain() }
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\nwatch-rules: PASS\njump-vault: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS\nssh-jump: PASS" else "ssh-pty: SKIPPED") })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
@@ -185,6 +186,105 @@ class SecureProfilesTest : Instrumentation() {
         check(ConnectErrors.connect(jsch("Auth fail for methods 'publickey,password'"), lan, usingKey = true).code == "key_rejected") { "key_rejected 2" }
         check(ConnectErrors.connect(jsch("Auth fail for methods 'password'"), lan, usingKey = true).code == "key_method") { "key_method" }
         check(sshKeyType(java.util.Base64.getDecoder().decode("AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl")) == "ssh-ed25519") { "key type" }
+        // Multi-hop: a jump host's failure is named and flagged (the page then never asks for the device password).
+        val jump = Endpoint("jump.invalid", 22, "j"); val inner = Endpoint("10.9.0.5", 2222, "y")
+        val jumpAuth = ConnectErrors.connect(HopFailed(0, 2, jump, false, false, null, jsch("Auth fail for methods 'publickey,password'")), lan)
+        check(jumpAuth.code == "auth" && jumpAuth.info!!.getBoolean("jump") && jumpAuth.info!!.getInt("hop") == 1 && jumpAuth.message!!.startsWith("第 1 跳（跳板机 jump.invalid）")) { "jump auth ${jumpAuth.message}" }
+        val targetAuth = ConnectErrors.connect(HopFailed(1, 2, inner, false, false, jump, jsch("Auth fail for methods 'publickey,password'")), lan)
+        check(targetAuth.code == "auth" && !targetAuth.info!!.getBoolean("jump") && !targetAuth.message!!.contains("跳板机")) { "target auth" }
+        val forward = ConnectErrors.connect(HopFailed(1, 2, inner, false, true, jump, jsch("x", HopProxy.ForwardRefused(jsch("channel is not opened.")))), lan)
+        check(forward.code == "jump_forward" && forward.message!!.contains("jump.invalid") && forward.message!!.contains("10.9.0.5:2222")) { "forward" }
+        val behind = ConnectErrors.connect(HopFailed(1, 2, inner, false, false, jump, jsch("timeout", java.net.SocketTimeoutException("Read timed out"))), lan)
+        check(behind.code == "timeout" && !behind.message!!.contains("Wi-Fi") && behind.message!!.contains("经 jump.invalid")) { "behind timeout ${behind.message}" }
+    }
+
+    /**
+     * Jump hosts in the vault: hop passwords are encrypted with the device, never listed, carried over
+     * only while the hop and the path in front of it are unchanged; at most three; a changed path also
+     * drops the device's own saved password. Fixture names only.
+     */
+    private fun testJumpVault() {
+        val vault = SecureProfiles(targetContext)
+        fun hop(host: String, user: String, password: String = "", auth: String = "password") =
+            JSONObject().put("host", host).put("port", 22).put("user", user).put("auth", auth).put("password", password)
+        val id = vault.save(JSONObject().put("host", "inner.invalid").put("user", "fixture").put("password", "device-secret-1").put("remember", true)
+            .put("jumps", org.json.JSONArray().put(hop("jump1.invalid", "j1", "jump-secret-1")).put(hop("jump2.invalid", "j2", auth = "key")))).getString("id")
+        try {
+            val stored = vault.get(id)
+            check(stored.getJSONArray("jumps").getJSONObject(0).getString("password") == "jump-secret-1") { "hop password not stored" }
+            val listed = vault.list().toString()
+            check(!listed.contains("jump-secret-1") && !listed.contains("device-secret-1") && listed.contains("jump2.invalid")) { "hop password listed" }
+            val encrypted = targetContext.getSharedPreferences("secure_devices", 0).getString("vault", "")!!
+            check(!encrypted.contains("jump-secret-1") && !encrypted.contains("jump1.invalid")) { "hop stored in plaintext" }
+            check(JumpHosts.pinIds(stored) == listOf("pin:jump1.invalid:22", "pin:jump1.invalid:22>jump2.invalid:22", "pin:jump1.invalid:22>jump2.invalid:22>inner.invalid:22")) { "pin ids" }
+            check(JumpHosts.redact(stored).getJSONArray("jumps").getJSONObject(0).getBoolean("remember")) { "redact remember" }
+            // Same hops, no passwords typed: everything kept.
+            vault.save(JSONObject().put("id", id).put("host", "inner.invalid").put("user", "fixture").put("remember", true)
+                .put("jumps", org.json.JSONArray().put(hop("jump1.invalid", "j1")).put(hop("jump2.invalid", "j2", auth = "key"))))
+            check(vault.get(id).getString("password") == "device-secret-1") { "device password lost" }
+            check(vault.get(id).getJSONArray("jumps").getJSONObject(0).getString("password") == "jump-secret-1") { "hop password lost" }
+            // A password hop without a password (new user) is refused; nothing changes.
+            try { vault.save(JSONObject().put("id", id).put("host", "inner.invalid").put("user", "fixture").put("jumps", org.json.JSONArray().put(hop("jump1.invalid", "other")))); fail("hop without password accepted") } catch (_: IllegalArgumentException) { }
+            try { vault.save(JSONObject().put("id", id).put("host", "inner.invalid").put("user", "fixture").put("jumps", org.json.JSONArray().apply { repeat(4) { put(hop("j$it.invalid", "j", auth = "key")) } })); fail("4 jumps accepted") } catch (_: IllegalArgumentException) { }
+            // A different path in front of the device: the device password is not reused.
+            vault.save(JSONObject().put("id", id).put("host", "inner.invalid").put("user", "fixture").put("remember", true)
+                .put("jumps", org.json.JSONArray().put(hop("jump2.invalid", "j2", auth = "key"))))
+            check(vault.get(id).getString("password") == "") { "device password reused behind another jump host" }
+            // Removing every jump host: a plain device again, no jumps key left.
+            vault.save(JSONObject().put("id", id).put("host", "inner.invalid").put("user", "fixture"))
+            check(!vault.get(id).has("jumps") && !vault.list().toString().contains("jumps")) { "jumps left behind" }
+        } finally { vault.delete(id) }
+    }
+
+    /**
+     * A real two- and three-hop chain on the CI fixture: the phone reaches 10.0.2.2:22222 and, through
+     * it, the same sshd again as 127.0.0.1:22222 (that is what the jump host sees). Covers the bridge
+     * over the chain, per-hop pins, silent reconnect of the whole chain, and errors naming the hop.
+     */
+    private fun testJumpChain() {
+        PocketCore.init(targetContext)
+        val outside = Endpoint("10.0.2.2", 22222, "pocket-fixture"); val inside = Endpoint("127.0.0.1", 22222, "pocket-fixture")
+        fun hop(e: Endpoint, password: String = "pocket-fixture-password", pin: String? = fixturePin) = Hop(e, password, false, pin)
+        val ssh = SshTransport()
+        try {
+            ssh.connect(inside, "pocket-fixture-password", fixturePin, jumps = listOf(hop(outside)))
+            ssh.install(targetContext.assets.open("pocket_bridge.py").use { it.readBytes() })
+            check(ssh.request(JSONObject().put("op", "hello")).getInt("protocol") == 1) { "bridge over 2 hops" }
+            ssh.connect(inside, "pocket-fixture-password", fixturePin, jumps = listOf(hop(outside), hop(inside)))
+            ssh.useBundled(targetContext.assets.open("pocket_bridge.py").use { it.readBytes() })
+            check(ssh.request(JSONObject().put("op", "hello")).getInt("protocol") == 1) { "bridge over 3 hops" }
+            check(ssh.ping(4000)) { "ping over 3 hops" }
+            fun failure(block: () -> Unit): Throwable { try { block(); error("connected unexpectedly") } catch (e: IllegalStateException) { if (e.message == "connected unexpectedly") throw e; return e } catch (e: Exception) { return e } }
+            val wrongJump = failure { SshTransport().connect(inside, "pocket-fixture-password", fixturePin, jumps = listOf(hop(outside, "wrong"))) }
+            val wj = ConnectErrors.connect(wrongJump, inside)
+            check(wj.code == "auth" && wj.info!!.getBoolean("jump")) { "jump auth: ${wj.code} ${wj.message}" }
+            val closed = ConnectErrors.connect(failure { SshTransport().connect(Endpoint("127.0.0.1", 1, "x"), "x", fixturePin, jumps = listOf(hop(outside))) }, inside)
+            check(closed.code == "jump_forward") { "forward: ${closed.code} ${closed.message}" }
+            val newJump = failure { SshTransport().connect(inside, "pocket-fixture-password", fixturePin, jumps = listOf(hop(outside, pin = null))) }
+            check(newJump is UntrustedHost && newJump.hop == 0) { "jump trust: $newJump" }
+            val changed = failure { SshTransport().connect(inside, "pocket-fixture-password", "AAAAC3NzaC1lZDI1NTE5AAAAIChangedChangedChangedChangedChangedChange", jumps = listOf(hop(outside))) }
+            check(changed is HostKeyChanged && changed.hop == 1) { "target changed: $changed" }
+        } finally { ssh.close() }
+        // Through PocketCore with a saved device: pins per path, and a dropped chain comes back silently.
+        val device = JSONObject().put("name", "fixture-jump").put("host", inside.host).put("port", inside.port).put("user", inside.user)
+            .put("password", "pocket-fixture-password").put("remember", true)
+            .put("jumps", org.json.JSONArray().put(JSONObject().put("host", outside.host).put("port", outside.port).put("user", outside.user).put("password", "pocket-fixture-password")))
+        val id = PocketCore.vault.save(device).getString("id")
+        val pinIds = JumpHosts.pinIds(PocketCore.vault.get(id))
+        val previous = pinIds.associateWith { PocketCore.pins.getString(it, null) }
+        try {
+            pinIds.forEach { PocketCore.pins.edit().putString(it, fixturePin).commit() }
+            PocketCore.connect(PocketCore.vault.get(id), "pocket-fixture-password") {}
+            check(!PocketCore.connectedDevice.toString().contains("pocket-fixture-password")) { "hop password in connectedDevice" }
+            PocketCore.transport.install(PocketCore.bridge)
+            check(PocketCore.request(JSONObject().put("op", "hello")).getInt("protocol") == 1)
+            PocketCore.transport.simulateDrop()
+            check(PocketCore.request(JSONObject().put("op", "hello")).getInt("protocol") == 1) { "chain not rebuilt" }
+        } finally {
+            PocketCore.disconnect()
+            PocketCore.vault.delete(id)
+            PocketCore.pins.edit().apply { previous.forEach { (k, v) -> if (v == null) remove(k) else putString(k, v) } }.commit()
+        }
     }
     /**
      * The phone's SSH key: generated Ed25519, stored only as Keystore AES-GCM ciphertext, reloads,
@@ -466,6 +566,56 @@ class SecureProfilesTest : Instrumentation() {
         } finally {
             PocketCore.disconnect(); PocketCore.listener = null
             PocketCore.vault.delete(id)
+            PocketCore.pins.edit().apply { if (previousPin == null) remove(pinKey) else putString(pinKey, previousPin) }.commit()
+        }
+    }
+
+    /**
+     * Two saved devices (both pointing at the fixture) connected at the same time: connecting the second
+     * keeps the first, requests are routed per device, a drop on one reconnects only that one, and
+     * disconnecting one leaves the other working.
+     */
+    private fun testSeveralLinks() {
+        PocketCore.init(targetContext)
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+        PocketCore.linkListener = { type, _, device -> events.add("$type@$device") }
+        val endpoint = Endpoint("10.0.2.2", 22222, "pocket-fixture")
+        val pinKey = PocketCore.pinId(endpoint)
+        val previousPin = PocketCore.pins.getString(pinKey, null)
+        val save = { name: String -> PocketCore.vault.save(JSONObject().put("name", name).put("host", endpoint.host).put("port", endpoint.port)
+            .put("user", endpoint.user).put("password", "pocket-fixture-password").put("remember", true)).getString("id") }
+        val a = save("fixture-a"); val b = save("fixture-b")
+        val hello = { id: String? -> check(PocketCore.request(id, JSONObject().put("op", "hello")).getInt("protocol") == 1) }
+        try {
+            PocketCore.pins.edit().putString(pinKey, fixturePin).commit()
+            PocketCore.connect(PocketCore.vault.get(a), "pocket-fixture-password") {}
+            PocketCore.install(a); hello(a)
+            PocketCore.connect(PocketCore.vault.get(b), "pocket-fixture-password") {}
+            check(PocketCore.links().map { it.id } == listOf(a, b)) { "Connecting B dropped A" }
+            check(PocketCore.connectedDevice?.getString("id") == b) { "The new device is not active" }
+            hello(a); hello(b); hello(null)
+            val ta = PocketCore.link(a)!!.transport; val tb = PocketCore.link(b)!!.transport
+            check(ta !== tb && ta.isConnected() && tb.isConnected())
+            // A drop on A reconnects A only, and only A's events say so.
+            val genB = tb.generation
+            ta.simulateDrop(); hello(a)
+            check(tb.generation == genB) { "B reconnected for A's drop" }
+            check(events == listOf("reconnecting@$a", "reconnected@$a")) { "Unexpected events $events" }
+            // Switching the active device never logs in again.
+            val logins = PocketCore.totalLogins()
+            PocketCore.activate(a); hello(null); PocketCore.activate(b); hello(null)
+            check(PocketCore.totalLogins() == logins) { "Switching logged in again" }
+            // Disconnecting B leaves A connected and active.
+            PocketCore.disconnect(b)
+            check(!tb.isConnected() && ta.isConnected())
+            check(PocketCore.connectedDevice?.getString("id") == a)
+            hello(a)
+            var refused = false
+            try { hello(b) } catch (_: IllegalStateException) { refused = true }
+            check(refused) { "A disconnected device still answered" }
+        } finally {
+            PocketCore.disconnect(); PocketCore.linkListener = null
+            PocketCore.vault.delete(a); PocketCore.vault.delete(b)
             PocketCore.pins.edit().apply { if (previousPin == null) remove(pinKey) else putString(pinKey, previousPin) }.commit()
         }
     }

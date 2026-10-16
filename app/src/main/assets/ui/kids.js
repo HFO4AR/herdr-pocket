@@ -15,19 +15,22 @@ function kidsKey(a){return a?agentKey(a):'';}
 function kidsOf(a){const r=a?K.map.get(kidsKey(a)):null;return r&&Date.now()-r.seen<K.ttl?r:null;}
 function kidsRunning(a){const r=kidsOf(a);return r&&r.running>0?r.running:0;}
 // Herdr's state, except an idle/done parent whose sub-agents still run is "kids".
-function agentState(a){const s=a?.agent_status||'';return (s==='idle'||s==='done')&&kidsRunning(a)?'kids':s;}
-function kidsLabel(a){return '子 Agent 运行中 · '+kidsRunning(a);}
+// Background work that will wake it again (bg.js) holds it the same way, as 后台运行中.
+function agentState(a){const s=a?.agent_status||'';return (s==='idle'||s==='done')&&(kidsRunning(a)||bgHold(a))?'kids':s;}
+function kidsLabel(a){return kidsRunning(a)?'子 Agent 运行中 · '+kidsRunning(a):bgLabel(a);}
+// The short form for badges.
+function kidsShort(a){return kidsRunning(a)?'子 Agent · '+kidsRunning(a):'后台 · '+bgHold(a);}
 
 // What the glance op should ask about this agent. Local agents ride on the preview item; a ch pane
 // (transcript on the other computer, ~1 s a read) is asked at most every 10 s while something runs
 // there and every 30 s otherwise.
 function kidsGlance(a,item){
- if(!item)return item;item.kids=true;const r=K.map.get(kidsKey(a));if(r?.stamp)item.kids_stamp=r.stamp;return item;}
+ if(!item)return item;item.kids=true;const r=K.map.get(kidsKey(a));if(r?.stamp)item.kids_stamp=r.stamp;return bgGlance(a,item);}
 function kidsRemoteItem(a){
  const ref=a.history_ref,rec=ref?.record;if(S.demo||!ref||ref.status!=='matched')return null;
  const remote=rec?.remote||ref.remote,record_id=rec?.id||ref.record_id,thread=rec?.thread||ref.thread;
  if(!remote||!record_id||!thread||!['claude','codex'].includes(a.agent))return null;
- const k=kidsKey(a),busy=kidsRunning(a)||['working','blocked'].includes(a.agent_status),last=K.ask.get(k)||0;
+ const k=kidsKey(a),busy=kidsRunning(a)||bgRunning(a)||['working','blocked'].includes(a.agent_status),last=K.ask.get(k)||0;
  if(Date.now()-last<(busy?10000:30000))return null;K.ask.set(k,Date.now());
  const item=kidsGlance(a,{key:k,provider:a.agent,thread,record_id,remote});
  // A stopped Codex: also whether its async question waits (a stat there while nothing changed).
@@ -40,12 +43,12 @@ async function kidsRemoteRefresh(){
  if(kidsRemoteBusy||GL.unsupported||S.demo||!S.device||!S.session)return;const items=S.agents.map(kidsRemoteItem).filter(Boolean).slice(0,40);if(!items.length)return;
  kidsRemoteBusy=true;const session=S.session;
  try{const r=await remote('glance',{items});if(session!==S.session)return;let asked=false;const status=new Map(S.agents.map(a=>[agentKey(a),a.agent_status||'']));
-  for(const [k,v] of Object.entries(r?.previews||{}))if(v&&typeof v==='object'){kidsTake(k,v.kids);if(glanceTakeAsk(k,v,status.get(k)||''))asked=true;}
+  for(const [k,v] of Object.entries(r?.previews||{}))if(v&&typeof v==='object'){kidsTake(k,v.kids);bgTake(k,v.bg);if(glanceTakeAsk(k,v,status.get(k)||''))asked=true;}
   if(asked){glanceSave();if(!glanceRegroup())glancePaint();syncWatch();}}
  catch(e){if(/Unknown operation|不支持的操作|unsupported/i.test(e?.message||''))GL.unsupported=true;/* otherwise the next poll asks again */}
  finally{kidsRemoteBusy=false;}}
 // The list poll asks again for agents whose sub-agents run even when the parent itself is idle.
-function kidsWanted(a){return kidsRunning(a)>0;}
+function kidsWanted(a){return kidsRunning(a)>0||bgRunning(a)>0;}
 // What the background watcher (WatchService) asks before it says 做完了: the same glance item,
 // without the preview stamp. Only for agents whose record is known.
 function kidsWatchItem(a){
@@ -80,6 +83,7 @@ function kidsFromHistory(record,r){
  if(!record||!r)return;const c=S.chat;if(!c||c.record?.id!==record.id&&c.record!==record)return;
  if(typeof r.kid?.running==='boolean')c.kidRunning=r.kid.running;
  if(r.kids){K.rec.set(record.id,{...r.kids,seen:Date.now()});if(c.agent&&!c.stale)kidsTake(kidsKey(c.agent),r.kids);}
+ bgFromHistory(record,r);
  updateChatMeta();kidsPaintSheet();}
 function kidsChat(){const c=S.chat;if(!c)return null;return (c.agent&&!c.stale?kidsOf(c.agent):null)||K.rec.get(c.record?.id)||null;}
 
@@ -88,14 +92,19 @@ function kidsCount(r){const n=r.running;return '子 Agent '+r.total+(n?' · '+n+
 function kidsWhen(x){const t=Number(x.modified)||0;return x.state==='starting'?'正在启动':x.running?'运行中':t?relative(t)||'':'';}
 // The strip under a row: a chip, and when opened the sub-agents themselves. Outside the row
 // button (no nested buttons); the row keeps its swipe and long press.
+// Running background work (bg.js) adds its 「后台 N」 chip to the same strip: one chip group per row.
 function kidsStrip(a){
- const r=kidsOf(a);if(!r||!r.total)return null;const k=kidsKey(a);
+ const r=kidsOf(a);if(!(r&&r.total)&&!bgRunning(a))return null;const k=kidsKey(a);
  const box=el('div','kids-strip');box.dataset.kids=k;kidsFillStrip(box,a,r);return box;}
 function kidsFillStrip(box,a,r){
- const k=kidsKey(a),open=K.open.has(k);box.replaceChildren();box.classList.toggle('open',open);box.classList.toggle('busy',r.running>0);
- const chip=btn('','kids-chip',()=>{if(K.open.has(k))K.open.delete(k);else K.open.add(k);kidsFillStrip(box,a,kidsOf(a)||r);},'branch');
- if(r.running)chip.append(el('span','kids-pulse'));chip.append(el('span','kids-chip-text',kidsCount(r)),icon('down'));
- chip.setAttribute('aria-expanded',String(open));chip.setAttribute('aria-label',kidsCount(r)+(open?'，收起':'，展开'));box.append(chip);
+ const k=kidsKey(a),open=!!(r&&r.total)&&K.open.has(k);box.replaceChildren();box.classList.toggle('open',open);box.classList.toggle('busy',!!r&&r.running>0);
+ const chips=el('div','kids-chips');box.append(chips);
+ const bg=bgChip(a);
+ if(r&&r.total){
+  const chip=btn('','kids-chip',()=>{if(K.open.has(k))K.open.delete(k);else K.open.add(k);kidsFillStrip(box,a,kidsOf(a)||r);},'branch');
+  if(r.running)chip.append(el('span','kids-pulse'));chip.append(el('span','kids-chip-text',kidsCount(r)),icon('down'));
+  chip.setAttribute('aria-expanded',String(open));chip.setAttribute('aria-label',kidsCount(r)+(open?'，收起':'，展开'));chips.append(chip);}
+ if(bg)chips.append(bg);
  if(!open)return;
  const list=el('div','kids-list');
  const items=kidsSorted(r.items);items.forEach(x=>list.append(kidsRow(x,false)));
@@ -118,7 +127,7 @@ function kidsRow(x,inSheet){
 function kidsPaintStrips(){
  if(S.tab!=='live')return;
  document.querySelectorAll('.kids-strip[data-kids]').forEach(box=>{const a=S.agents.find(x=>kidsKey(x)===box.dataset.kids);const r=a&&kidsOf(a);
-  if(!r||!r.total){box.remove();return;}kidsFillStrip(box,a,r);});
+  if(!a||!(r&&r.total)&&!bgRunning(a)){box.remove();return;}kidsFillStrip(box,a,r);});
  // A row that just got sub-agents gets its strip.
  document.querySelectorAll('[data-glance]').forEach(line=>{const k=line.dataset.glance;const wrap=line.closest('.swipe')||line.closest('.agent-row');
   if(!wrap||wrap.nextElementSibling?.dataset?.kids===k)return;const a=S.agents.find(x=>kidsKey(x)===k);const s=a&&kidsStrip(a);if(s)wrap.after(s);});}
@@ -152,4 +161,4 @@ function kidsPaintHead(){
  b.textContent=String(running||total);b.classList.toggle('hidden',!total);b.classList.toggle('kids-on',running>0);
  const sw=b.closest('button');if(sw){const label='切换 Agent';sw.title=running?label+' · '+running+' 个子 Agent 运行中':label;}
  const c=S.chat;if(!c.agent&&c.record?.parent){const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(c.kidRunning?'work':'muted');}}
-function kidsForget(){K.map.clear();K.rec.clear();K.ask.clear();}
+function kidsForget(){K.map.clear();K.rec.clear();K.ask.clear();bgForget();}

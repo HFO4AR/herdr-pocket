@@ -1,7 +1,7 @@
 // Builds the same single-page HTML as MainActivity (keep the file lists in sync).
 const fs=require('node:fs'),path=require('node:path');
-const CSS=['vendor/xterm.css','app.css','chat.css','timeline.css','markdown.css','follow.css','answer.css','images.css','files.css','queue.css','create.css','slash.css','close.css','settings.css','keys.css','onboard.css','native.css','lists.css','help.css','find.css','terminals.css','glyphs.css','ansi.css','kids.css','mode.css','foot.css','layout.css'];
-const JS=['markdown.js','ansi.js','timeline.js','images.js','files.js','answer.js','demo.js','follow.js','queue.js','create.js','slash.js','close.js','cache.js','settings.js','keys.js','onboard.js','native.js','glance.js','help.js','find.js','fileview.js','kids.js','mode.js','foot.js','app.js','layout.js'];
+const CSS=['vendor/xterm.css','app.css','chat.css','timeline.css','markdown.css','follow.css','answer.css','images.css','files.css','queue.css','create.css','slash.css','close.css','settings.css','keys.css','onboard.css','hops.css','native.css','lists.css','help.css','find.css','terminals.css','glyphs.css','ansi.css','kids.css','bg.css','mode.css','foot.css','tmux.css','layout.css'];
+const JS=['markdown.js','ansi.js','timeline.js','images.js','files.js','answer.js','demo.js','follow.js','queue.js','create.js','slash.js','close.js','cache.js','settings.js','keys.js','hops.js','onboard.js','native.js','glance.js','help.js','find.js','fileview.js','kids.js','bg.js','mode.js','foot.js','app.js','tmux.js','layout.js'];
 module.exports=function bundle(root){
  const ui=path.join(root,'app/src/main/assets/ui'),read=f=>fs.readFileSync(path.join(ui,f),'utf8');
  return read('index.html')

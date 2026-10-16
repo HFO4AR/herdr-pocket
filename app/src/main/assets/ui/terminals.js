@@ -110,17 +110,17 @@ function termState(entry){
  return entry.kind==='ssh'?['ok','已连接']:['ok','实时'];}
 function renderTerminal(){
  const entry=T.view;if(!entry)return;S.chat=null;termFontVar();const root=shell();root.classList.add('terminal-shell');
- const head=el('header','chat-head term-head');head.append(ib('back','返回终端列表',()=>{leaveTerminal();render();}));
+ const head=el('header','chat-head term-head');head.append(ib('back',entry.kind==='tmux'?'返回列表':'返回终端列表',()=>{leaveTerminal();render();}));
  const [st,stLabel]=termState(entry);
  const av=el('div','avatar term-av'+(entry.kind==='ssh'?' ssh':''));av.append(icon(entry.kind==='ssh'?'globe':'terminal'),el('span','status-dot '+(st==='ok'?'ok':st==='warn'?'work':'')));head.append(av);
  const name=el('div','grow chat-id');const sub=el('small','term-sub');const chip=el('span','term-state '+st,stLabel);chip.id='term-state';
- sub.append(chip,el('span','',entry.kind==='ssh'?'独立 SSH · '+S.device.user+'@'+S.device.host:'Herdr 窗格 · '+(entry.pane.workspace_label?entry.pane.workspace_label+' · ':'')+entry.pane.pane_id));
+ sub.append(chip,el('span','',entry.kind==='ssh'?'独立 SSH · '+S.device.user+'@'+S.device.host:entry.kind==='tmux'?tmuxSub(entry):'Herdr 窗格 · '+(entry.pane.workspace_label?entry.pane.workspace_label+' · ':'')+entry.pane.pane_id));
  name.append(el('h2','',entry.title),sub);
  head.append(name,ib('copy','复制屏幕内容',()=>terminalCopy(entry)),ib('more','终端选项',terminalMenu));root.append(head);
  // The screen: a dark card on the warm page in light theme, a deeper well in dark theme.
  const stage=el('div','term-stage');const surface=el('div','term-surface');surface.id='term-surface';surface.classList.toggle('is-off',!!entry.ended);
  if(entry.kind==='ssh'){surface.append(entry.host);requestAnimationFrame(()=>{if(!entry.disposed){entry.fit.fit();termJump(entry);}});}
- else{const output=el('pre','pane-screen',paneText(entry.text));output.id='pane-screen';output.tabIndex=0;output.setAttribute('aria-label','Herdr 窗格输出');
+ else{const output=el('pre','pane-screen',paneText(entry.text));output.id='pane-screen';output.tabIndex=0;output.setAttribute('aria-label',entry.kind==='tmux'?'tmux 窗格输出':'Herdr 窗格输出');if(entry.ansi)screenPaint(output,paneText(entry.text),entry.ansi);
   output.addEventListener('scroll',()=>{entry.stick=output.scrollHeight-output.scrollTop-output.clientHeight<24;termJump(entry);},{passive:true});
   surface.append(output);requestAnimationFrame(()=>{output.scrollTop=output.scrollHeight;});}
  const jump=btn('','jump-btn term-jump',()=>termBottom(entry),'down');jump.id='term-jump';jump.setAttribute('aria-label','跳到最新输出');jump.hidden=true;surface.append(jump);
@@ -169,7 +169,7 @@ function paintStatus(entry){
  const surface=document.getElementById('term-surface');if(surface)surface.classList.toggle('is-off',!!entry.ended);
  if(!text)return;n.append(icon(entry.ended?'x':'alert'),el('span','grow',text));
  if(entry.kind==='ssh'&&entry.ended)n.append(btn('重新打开','link-btn',()=>reopenShell(entry)));
- else if(entry.kind==='pane'&&entry.paused)n.append(btn('恢复读取','link-btn',()=>{entry.paused=false;entry.notice='';paintStatus(entry);pollTerminal();}));}
+ else if(entry.kind!=='ssh'&&entry.paused)n.append(btn('恢复读取','link-btn',()=>{entry.paused=false;entry.notice='';paintStatus(entry);pollTerminal();}));}
 async function reopenShell(entry){
  if(T.shell!==entry)return;try{if(!entry.demo)await rpc('shellClose',{terminalId:entry.id});}catch(_){/* already gone */}
  if(T.shell!==entry)return;entry.disposed=true;entry.observer.disconnect();entry.term.dispose();T.shell=null;T.view=null;openShell().catch(error);}
@@ -219,7 +219,7 @@ function sendShell(entry,text){
  entry.queue=entry.queue.then(async()=>{if(entry.ended||entry.paused)return false;try{await rpc('shellWrite',{terminalId:entry.id,sequence:++entry.sequence,text});return true;}catch(e){entry.paused=true;terminalStatus(entry,'输入结果未知，已停止后续输入；请检查终端。'+e.message);return false;}});
  return entry.queue;
 }
-async function sendPane(entry,op,args){if(entry.demo){toast('终端演示：未发送');return false;}if(entry.paused||entry.ended)throw Error('终端已暂停，请刷新检查');try{await remote(op,{session:entry.session,target:entry.pane.pane_id,identity:entry.pane.identity,id:uuid(),...args});return true;}catch(e){entry.paused=true;terminalStatus(entry,'输入未确认，已暂停；不会重发。'+e.message);throw e;}}
+async function sendPane(entry,op,args){if(entry.demo){toast('终端演示：未发送');return false;}if(entry.paused||entry.ended)throw Error('终端已暂停，请刷新检查');try{if(entry.kind==='tmux')await tmuxSend(entry,op,args);else await remote(op,{session:entry.session,target:entry.pane.pane_id,identity:entry.pane.identity,id:uuid(),...args});return true;}catch(e){entry.paused=true;terminalStatus(entry,'输入未确认，已暂停；不会重发。'+e.message);throw e;}}
 async function sendTerminalLine(entry,input){
  const text=input.value;if(!text)return;const enter=document.getElementById('terminal-enter').checked;
  if(entry.ctrl&&entry.kind==='ssh'&&text.length===1&&ctrlCode(text)){termCtrl(entry,false);if(await sendShell(entry,ctrlCode(text))){entry.draft='';input.value='';input.oninput?.();}return;}
@@ -235,6 +235,7 @@ async function pollTerminal(){
  if(r.lost){entry.term.reset();terminalStatus(entry,'离开期间输出超过缓存，显示最近内容。');}
  const bytes=Uint8Array.from(atob(r.data),c=>c.charCodeAt(0));await new Promise(resolve=>entry.term.write(bytes,resolve));entry.cursor=r.next;
  if(r.ended&&bytes.length===0){entry.ended=true;terminalStatus(entry,r.error||'SSH shell 已结束，可以重新打开。');}
+ }else if(entry.kind==='tmux'){await tmuxPoll(entry);
  }else{
  const r=await remote('paneRead',{session:entry.session,target:entry.pane.pane_id,identity:entry.pane.identity});const changed=r.text!==entry.text;entry.text=r.text;
  if(T.view===entry&&changed){const n=document.getElementById('pane-screen');if(n){n.textContent=paneText(r.text);if(entry.stick!==false)n.scrollTop=n.scrollHeight;termJump(entry,true);}}
@@ -247,8 +248,9 @@ function terminalMenu(){const entry=T.view;const box=sheet('终端选项');
  size.append(cur,btn('A−','secondary small',()=>step(-1)),btn('A+','secondary small',()=>step(1)));size.querySelectorAll('button')[0].setAttribute('aria-label','字号小一点');size.querySelectorAll('button')[1].setAttribute('aria-label','字号大一点');box.append(size);
  menuItem(box,entry.kind==='ssh'&&entry.term.hasSelection()?'复制选中内容':'复制屏幕内容',()=>terminalCopy(entry),'copy');
  menuItem(box,'选择文字',()=>terminalSelect(entry),'textCursor','长按选择任意一段，含往上的历史');
- menuItem(box,'刷新 / 恢复读取',()=>{if(entry.kind==='pane'){entry.paused=false;entry.notice='';paintStatus(entry);}else if(entry.paused){toast('SSH 输入异常后需关闭并重新打开；不自动恢复输入');return;}pollTerminal();},'refresh');
+ menuItem(box,'刷新 / 恢复读取',()=>{if(entry.kind!=='ssh'){entry.readAt=0;entry.paused=false;entry.notice='';paintStatus(entry);}else if(entry.paused){toast('SSH 输入异常后需关闭并重新打开；不自动恢复输入');return;}pollTerminal();},'refresh');
  menuItem(box,'回到底部',()=>termBottom(entry),'down');
+ if(entry.kind==='tmux')tmuxMenu(box);
  if(entry.kind==='ssh')menuItem(box,'关闭 SSH shell',()=>confirmAction('关闭 SSH shell？','这会关闭独立 SSH 通道，里面运行的程序可能随之结束。Herdr 窗格不受影响。','关闭 shell',async()=>{try{if(!entry.demo)await rpc('shellClose',{terminalId:entry.id});entry.disposed=true;entry.observer.disconnect();entry.term.dispose();if(T.shell===entry)T.shell=null;leaveTerminal();render();}catch(e){error(e);}},true),'x','里面运行的程序可能随之结束');
  else box.append(el('p','fine','返回列表只退出手机查看，不关闭电脑上的窗格。'));
 }

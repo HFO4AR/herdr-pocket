@@ -877,6 +877,7 @@ def remote_dispatch(request):
         except BridgeError as exc: return {"image_error": str(exc)[:200]}
     if op == "catalog": return {"records": [public_record(x) for x in scoped_records(request.get("provider", "claude"), request["workspace"], 100)]}
     if op == "kids": return remote_kids_main(request.get("items"))
+    if op == "bgOutput": return bg_output_main(request)
     if op == "fileView": return view_file(request.get("path"), request.get("cwd"), view_roots(request.get("record_id"), request.get("provider", "claude"), request.get("workspace")))
     return {"error": "unknown remote op"}
 
@@ -1490,7 +1491,7 @@ def glance(request):
         # A ch pane's transcript is on the other computer: only its sub-agents (and, asked for,
         # a waiting Codex question) are read there.
         if isinstance(item.get("remote"), dict):
-            if item.get("kids") or item.get("ask"): far.append(item)
+            if item.get("kids") or item.get("ask") or item.get("bg"): far.append(item)
             continue
         try:
             path = glance_path(item)
@@ -1516,6 +1517,7 @@ def glance(request):
                 out[key] = summary
             # Sub-agents change without the parent transcript changing, so they come every time.
             if item.get("kids"): out[key]["kids"] = kids_report(path, item["provider"], item["thread"])
+            if item.get("bg"): out[key]["bg"] = bg_for_item(item, path)
         except OSError:
             out[key] = {"missing": True}
     try:
@@ -1570,7 +1572,7 @@ def kids_state():
         try: value = json.loads(kids_state_path().read_text())
         except (OSError, ValueError): value = None
         if not isinstance(value, dict): value = {}
-        for part in ("parents", "heads", "meta"):
+        for part in ("parents", "heads", "meta", "bg"):
             if not isinstance(value.get(part), dict): value[part] = {}
         _kids_state = dict(value, dirty=False)
     return _kids_state
@@ -1580,7 +1582,8 @@ def kids_save():
     state = _kids_state
     if not state or not state.get("dirty"): return
     parents = state["parents"]
-    for key in sorted(parents, key=lambda k: parents[k].get("used", 0))[:max(0, len(parents) - KIDS_PARENTS)]: del parents[key]
+    for part in (parents, state["bg"]):
+        for key in sorted(part, key=lambda k: part[k].get("used", 0))[:max(0, len(part) - KIDS_PARENTS)]: del part[key]
     for part, limit in (("heads", KIDS_HEADS), ("meta", 600)):
         extra = len(state[part]) - limit
         for key in list(state[part])[:max(0, extra)]: del state[part][key]
@@ -1589,7 +1592,7 @@ def kids_save():
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temp = path.with_name("." + os.urandom(6).hex() + ".part")
         with open(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as out:
-            json.dump({k: state[k] for k in ("parents", "heads", "meta")}, out)
+            json.dump({k: state[k] for k in ("parents", "heads", "meta", "bg")}, out)
         os.replace(temp, path)
         state["dirty"] = False
     except OSError:
@@ -1887,6 +1890,7 @@ def attach_kids(result, catalog, request):
     try:
         result["kids"] = kids_report(entry["_path"], entry["provider"], entry["thread"])
         if entry.get("parent"): result["kid"] = kid_self(entry)
+        result["bg"] = bg_report(entry["_path"], entry["provider"], entry["thread"])
     except OSError: pass
     finally: kids_save()
     return result
@@ -1910,7 +1914,7 @@ def remote_kids(items):
         group = groups.setdefault(json.dumps(route["ssh"]), {"route": route, "items": [], "places": {}})
         group["items"].append({"key": key, "provider": item.get("provider"), "thread": item.get("thread"), "record_id": record[len(prefix):],
                                "kids_stamp": item.get("kids_stamp"), "kids": bool(item.get("kids")), "ask": bool(item.get("ask")),
-                               "ask_stamp": item.get("ask_stamp")})
+                               "ask_stamp": item.get("ask_stamp"), "bg": bool(item.get("bg")), "bg_stamp": item.get("bg_stamp")})
         group["places"][key] = (route, context)
     def run(group):
         try: return remote_read(group["route"], {"op": "kids", "items": group["items"]}, 12).get("kids", {})
@@ -1924,10 +1928,11 @@ def remote_kids(items):
             report = data.get(x["key"]) if isinstance(data, dict) else None
             if not isinstance(report, dict): out[x["key"]] = {"kids_error": "远端没有返回子 Agent"}; continue
             route, context = group["places"][x["key"]]
-            check = report.pop("ask_check", None)
+            check = report.pop("ask_check", None); bg = report.pop("bg_check", None)
             if isinstance(report.get("items"), list):
                 report["items"] = [wrap_remote_record(r, route, context) if r.get("id") else r for r in report["items"] if isinstance(r, dict)]
             entry = {"kids": report} if x["kids"] else {}
+            if isinstance(bg, dict): entry["bg"] = bg
             if isinstance(check, dict):
                 entry.update({k: check[k] for k in ("ask", "ask_stamp", "ask_same") if k in check})
             out[x["key"]] = entry
@@ -1944,10 +1949,433 @@ def remote_kids_main(items):
             if not path: out[item["key"]] = {"missing": True}; continue
             report = kids_for_item(item, path) if item.get("kids", True) else {}
             if item.get("ask"): report["ask_check"] = ask_state(path, item)
+            if item.get("bg"): report["bg_check"] = bg_for_item(item, path)
             out[item["key"]] = report
         except OSError: out[item["key"]] = {"missing": True}
     kids_save()
     return {"kids": out}
+
+
+# ─── Background work ("bg"): shells, monitors and terminals an agent left running ──────
+# Like sub-agents, background work runs after the agent's turn ends: Herdr reads "idle"/"done"
+# while a build or a watch loop still runs. This answers, read-only and from the agent's own
+# transcript, which background tasks a conversation started and which still run.
+#   Claude Code: a Bash tool_use (run_in_background, or moved to the background after its timeout
+#     or by the person) gets a result with toolUseResult.backgroundTaskId and the text "Output is
+#     being written to: <tmp>/claude-<uid>/<project>/<session>/tasks/<id>.output". A Monitor
+#     tool_use gets toolUseResult {taskId, timeoutMs, persistent}. <task-notification> rows close
+#     them: <status>completed|failed|stopped|killed</status>, "exit code N" in the summary,
+#     <output-file>; a Monitor's events arrive as notifications with an <event> and no status
+#     ("[Monitor expired …]" ends it); after a restart one "__orphan_summary__" notification
+#     lists every task id that did not finish. Stopping one from Claude's UI leaves no marker, so
+#     an open shell or monitor whose output file no process holds any more (/proc fds) has ended.
+#   Codex: an exec_command whose process outlives its yield answers with a session id
+#     ("session_id":N in code mode, "Process running with session ID N" otherwise): a background
+#     terminal. The CommandExecution item_completed with process_id N (exit_code, status) ends it.
+#     Codex writes no output file; the newest output it saw is in the rollout.
+# Parents are scanned incrementally with byte filters (state kept beside the sub-agent state),
+# so a poll costs a stat and the new bytes. Counts only; nothing is ever sent to a task.
+BG_LIST = 20
+BG_TASKS = 80              # remembered per conversation (oldest finished ones go first)
+BG_PEND = 40               # Bash/Monitor calls waiting for their result
+BG_OPEN = 12 * 3600        # an open task with no end record counts as running at most this long
+BG_CODEX_OPEN = 6 * 3600
+BG_GRACE = 15              # just launched: its output file may not be held yet
+BG_EVENTS = 1500           # a monitor's newest event text kept in the state
+BG_OUTPUT = 65_536         # bgOutput: the tail of an output file
+BG_LINE = 8_000_000        # bgOutput (Codex): the rollout line holding the output
+CLAUDE_BG_MARKS = re.compile(rb'"name":\s*"(?:Bash|Monitor)"|"backgroundTaskId"|Monitor started|<task-notification>')
+CODEX_BG_MARKS = re.compile(rb'exec_command|session_id|Process running with session ID|"CommandExecution"')
+BG_PATH_RE = re.compile(r"Output is being written to: (/[^\s]{1,600}?\.output)")
+BG_EXIT_RE = re.compile(r"exit code (-?\d{1,4})")
+BG_SESSION_RE = re.compile(r'"session_id"\s*:\s*(\d{1,10})|Process running with session ID (\d{1,10})')
+BG_CMD_RE = re.compile(r'exec_command\(\s*\{\s*"?cmd"?\s*:\s*"((?:[^"\\]|\\.){0,4000})"')
+BG_TAG_RE = {k: re.compile(r"<%s>(.*?)</%s>" % (k, k), re.S) for k in ("status", "summary", "output-file", "event")}
+BG_ID_RE = re.compile(r"<task-id>([\w.:-]{1,80})</task-id>")
+BG_TASK_ID = re.compile(r"[\w.-]{1,80}")
+BG_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def bg_label(text, limit=160):
+    """One short line for a command or description."""
+    text = ANSI_RE.sub("", str(text or "")).strip()
+    line = next((x.strip() for x in text.split("\n") if x.strip()), "")
+    line = BG_CTRL_RE.sub("", line)
+    return line[:limit - 1] + "…" if len(line) > limit else line
+
+
+def bg_clean(text):
+    """Output for the phone: colours and cursor moves dropped, carriage-return redraws collapsed
+    to their final state, control characters removed. Plain text only."""
+    text = ANSI_RE.sub("", text.replace("\r\n", "\n"))
+    text = "\n".join(x.rsplit("\r", 1)[-1] for x in text.split("\n"))
+    return BG_CTRL_RE.sub("", text.replace("\t", "    "))
+
+
+def bg_unescape(text):
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&#39;", "'").replace("&amp;", "&")
+
+
+def bg_task(tasks, key, **fields):
+    """Create or update one task, newest last; bounded, finished ones dropped first."""
+    old = tasks.pop(key, None) or {}
+    tasks[key] = dict(old, **{k: v for k, v in fields.items() if v is not None})
+    if len(tasks) > BG_TASKS:
+        done = [k for k, v in tasks.items() if v.get("s") != "open"]
+        for k in (done or list(tasks))[:len(tasks) - BG_TASKS]: del tasks[k]
+    return tasks[key]
+
+
+def bg_pend(pend, key, value):
+    pend.pop(key, None); pend[key] = value
+    for k in list(pend)[:max(0, len(pend) - BG_PEND)]: del pend[k]
+
+
+def claude_bg_note(note, tasks, at):
+    """A <task-notification>: an end record, a monitor event or the after-restart orphan list."""
+    ids = BG_ID_RE.findall(note)
+    tag = {k: (r.search(note) or [None, None])[1] for k, r in BG_TAG_RE.items()}
+    status = (tag["status"] or "").strip()
+    summary = bg_unescape(tag["summary"] or "")
+    if ids and ids[-1].startswith("__orphan_summary__"):
+        listed = set(re.findall(r"[\w.-]{1,80}", summary.split("Task ids:", 1)[1])) if "Task ids:" in summary else set(ids)
+        for key in ids[:-1] + sorted(listed):
+            if key in tasks and tasks[key].get("s") == "open": bg_task(tasks, key, s="killed", end=at)
+        return
+    key = ids[0] if ids else None
+    if key not in tasks: return
+    task = tasks[key]
+    out = (tag["output-file"] or "").strip()
+    if out and len(out) <= 600 and not task.get("out"): task["out"] = bg_unescape(out)
+    event = tag["event"]
+    if event is not None and not status:
+        text = bg_unescape(event).strip()
+        mark = hashlib.sha256(text.encode()).hexdigest()[:10]
+        seen = task.get("eh") or []
+        if mark not in seen:
+            task["eh"] = (seen + [mark])[-12:]
+            task["ev"] = (str(task.get("ev") or "") + "\n" + text).strip()[-BG_EVENTS:]
+            task["n"] = int(task.get("n") or 0) + 1
+        task["last"] = at
+        if "Monitor expired" in text or "Monitor timed out" in text: bg_task(tasks, key, s="completed", end=at)
+        return
+    if status in ("completed", "failed", "stopped", "killed"):
+        code = BG_EXIT_RE.search(summary)
+        state = "killed" if status in ("stopped", "killed") else status
+        if code and state == "completed" and int(code.group(1)) != 0: state = "failed"
+        bg_task(tasks, key, s=state, end=at, x=int(code.group(1)) if code else None)
+
+
+def claude_bg_row(row, entry):
+    tasks, pend = entry["t"], entry["p"]
+    at = iso_epoch(row.get("timestamp"))
+    kind = row.get("type")
+    notes = []
+    if kind == "queue-operation" and row.get("operation") == "enqueue": notes.append(row.get("content"))
+    elif kind == "attachment" and isinstance(row.get("attachment"), dict) and row["attachment"].get("type") == "queued_command": notes.append(row["attachment"].get("prompt"))
+    elif kind == "assistant":
+        content = (row.get("message") or {}).get("content")
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict) or block.get("type") != "tool_use" or block.get("name") not in ("Bash", "Monitor") or not block.get("id"): continue
+            args = block.get("input") if isinstance(block.get("input"), dict) else {}
+            bg_pend(pend, str(block["id"])[:120], {"k": "shell" if block["name"] == "Bash" else "monitor", "at": at,
+                                                   "d": bg_label(args.get("description")), "c": bg_label(args.get("command"), 300)})
+    elif kind == "user":
+        content = (row.get("message") or {}).get("content")
+        if isinstance(content, str): notes.append(content)
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict): continue
+            if block.get("type") == "text": notes.append(block.get("text"))
+            if block.get("type") != "tool_result" or block.get("tool_use_id") not in pend: continue
+            use = pend.pop(block["tool_use_id"])
+            meta = row.get("toolUseResult") if isinstance(row.get("toolUseResult"), dict) else {}
+            text = block["content"] if isinstance(block.get("content"), str) else text_content(block.get("content", ""))
+            key = meta.get("backgroundTaskId") if use["k"] == "shell" else meta.get("taskId")
+            if not isinstance(key, str) or not BG_TASK_ID.fullmatch(key) or block.get("is_error"): continue
+            path = BG_PATH_RE.search(text)
+            bg_task(tasks, key, k=use["k"], at=at or use["at"], d=use["d"], c=use["c"], s="open", u=str(block["tool_use_id"])[:120],
+                    out=path.group(1) if path else None, to=int(meta["timeoutMs"]) // 1000 if isinstance(meta.get("timeoutMs"), int) else None,
+                    p=True if meta.get("persistent") is True else None, auto=True if meta.get("timedOutAfterMs") else None)
+    for note in notes:
+        if isinstance(note, str) and note.lstrip().startswith("<task-notification>"):
+            for part in note.split("<task-notification>")[1:]: claude_bg_note(part, tasks, at)
+
+
+def codex_bg_text(value):
+    """The text of a tool output (plain string or code mode's list of text items)."""
+    if isinstance(value, str): return value
+    if isinstance(value, list): return "\n".join(str(x.get("text", "")) for x in value if isinstance(x, dict))
+    return ""
+
+
+def codex_bg_cmds(raw):
+    """Commands an exec call started, in order (code mode: JS calling tools.exec_command)."""
+    out = []
+    for m in BG_CMD_RE.finditer(raw or ""):
+        try: out.append(json.loads('"' + m.group(1) + '"'))
+        except ValueError: out.append(m.group(1))
+    return out
+
+
+def codex_bg_row(row, entry, offset):
+    tasks, pend = entry["t"], entry["p"]
+    at = iso_epoch(row.get("timestamp"))
+    value = row.get("payload") or {}
+    kind = value.get("type")
+    if row.get("type") == "response_item" and kind in ("custom_tool_call", "function_call"):
+        name, raw = value.get("name"), value.get("arguments", value.get("input", ""))
+        cmds = []
+        if name == "exec_command":
+            try: args = json.loads(raw) if isinstance(raw, str) else raw
+            except ValueError: args = {}
+            if isinstance(args, dict) and isinstance(args.get("cmd"), (str, list)):
+                cmds.append(" ".join(args["cmd"]) if isinstance(args["cmd"], list) else args["cmd"])
+        elif isinstance(raw, str) and "exec_command" in raw: cmds = codex_bg_cmds(raw)
+        if value.get("call_id"): bg_pend(pend, str(value["call_id"])[:120], {"c": [bg_label(c, 300) for c in cmds[:8]], "at": at})
+    elif row.get("type") == "response_item" and kind in ("custom_tool_call_output", "function_call_output"):
+        text = codex_bg_text(value.get("output"))
+        found = []
+        for m in BG_SESSION_RE.finditer(text):
+            key = m.group(1) or m.group(2)
+            if key not in found: found.append(key)
+        if not found: return
+        call = pend.get(value.get("call_id")) or {}
+        cmds = call.get("c") or []
+        fresh = [k for k in found if not (k in tasks and tasks[k].get("s") == "open")]
+        for key in found:
+            if key in fresh:
+                # Several commands in one call: their order is the order of their outputs.
+                i = fresh.index(key)
+                cmd = cmds[i] if len(cmds) == len(fresh) else cmds[0] if len(cmds) == 1 and len(fresh) == 1 else ""
+                bg_task(tasks, key, k="terminal", at=at, d="", c=cmd, s="open", x=None, ln=offset, lo=0, end=0)
+            else: tasks[key]["ln"] = offset
+            # The newest line where this terminal printed something (an empty poll keeps the old one).
+            if re.search(r'"session_id"\s*:\s*' + key + r'\b[^{}]*"output"\s*:\s*"[^"]|session ID ' + key + r'\b[\s\S]*Output:\s*\S', text): tasks[key]["lo"] = offset
+    elif row.get("type") == "event_msg" and kind == "item_completed":
+        item = value.get("item") if isinstance(value.get("item"), dict) else {}
+        key = str(item.get("process_id") or "")
+        if item.get("type") != "CommandExecution" or key not in tasks or tasks[key].get("s") != "open": return
+        code = item.get("exit_code") if isinstance(item.get("exit_code"), int) else None
+        command = item.get("command")
+        task = bg_task(tasks, key, s="failed" if item.get("status") == "failed" or (code or 0) != 0 else "completed", x=code, end=at, ln=offset,
+                       lo=offset if str(item.get("aggregated_output") or "").strip() else None)
+        if not task.get("c") and isinstance(command, list) and command: task["c"] = bg_label(command[-1], 300)
+
+
+def bg_events(path, provider):
+    """{"t": tasks, "p": pending calls} for a transcript, read incrementally like the sub-agents."""
+    state = kids_state(); info = path.stat()
+    key = hashlib.sha256((provider + ":" + str(path)).encode()).hexdigest()[:32]
+    entry = state["bg"].get(key)
+    if not isinstance(entry, dict) or entry.get("ino") != info.st_ino or entry.get("off", 0) > info.st_size \
+            or not isinstance(entry.get("t"), dict) or not isinstance(entry.get("p"), dict):
+        entry = {"ino": info.st_ino, "off": 0, "t": {}, "p": {}}
+    entry["used"] = time.time()
+    state["bg"][key] = entry; state["dirty"] = True
+    if entry["off"] >= info.st_size: return entry
+    marks = CLAUDE_BG_MARKS if provider == "claude" else CODEX_BG_MARKS
+    with path.open("rb") as stream:
+        stream.seek(entry["off"])
+        data = stream.read(min(KIDS_SCAN, info.st_size - entry["off"]))
+    end = data.rfind(b"\n") + 1
+    at = 0
+    for line in data[:end].split(b"\n"):
+        offset = entry["off"] + at; at += len(line) + 1
+        if not line or not marks.search(line): continue
+        try: row = json.loads(line)
+        except (ValueError, UnicodeError): continue
+        if not isinstance(row, dict): continue
+        try:
+            if provider == "claude": claude_bg_row(row, entry)
+            else: codex_bg_row(row, entry, offset)
+        except (AttributeError, TypeError, ValueError): continue
+    entry["off"] += end
+    return entry
+
+
+def bg_held():
+    """Paths of files our own processes hold open (Linux /proc), or None when that is unknowable."""
+    if not os.path.isdir("/proc/self/fd"): return None
+    uid, out = os.getuid(), set()
+    try: pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError: return None
+    for pid in pids:
+        try:
+            if os.stat("/proc/" + pid).st_uid != uid: continue
+            fds = os.listdir("/proc/%s/fd" % pid)
+        except OSError: continue
+        for fd in fds:
+            try: target = os.readlink("/proc/%s/fd/%s" % (pid, fd))
+            except OSError: continue
+            if target.endswith(".output"): out.add(target)
+    return out
+
+
+def bg_output_path(task, key, thread):
+    """The task's recorded output file when it is exactly <tmp>/claude-<our uid>/<project>/<this
+    session>/tasks/<this id>.output, the claude-<uid> folder is ours and nothing at or below it is
+    a symlink (the system's own /tmp may be one, e.g. macOS /private/tmp); else None. Returned
+    resolved, so it compares with what /proc says a process holds."""
+    raw = task.get("out")
+    if not isinstance(raw, str) or not raw.startswith("/") or len(raw) > 600 or "\x00" in raw: return None
+    path = Path(raw)
+    if path.name != key + ".output" or path.parent.name != "tasks" or path.parent.parent.name != thread: return None
+    if len(path.parents) < 5 or path.parents[3].name != "claude-%d" % os.getuid() or ".." in path.parts: return None
+    base = path.parents[3]
+    try:
+        info = os.lstat(base)
+        if not stat_module.S_ISDIR(info.st_mode) or info.st_uid != os.getuid(): return None
+        real = os.path.realpath(raw)
+        if real != os.path.join(os.path.realpath(base), str(path.relative_to(base))): return None
+    except (OSError, ValueError): return None
+    return Path(real)
+
+
+def bg_state(task, key, provider, thread, now, held):
+    """running | completed | failed | killed | ended | unknown for one task."""
+    s = task.get("s")
+    if s != "open": return s if s in ("completed", "failed", "killed") else "unknown"
+    age = now - (task.get("at") or 0)
+    if provider == "codex": return "running" if age < BG_CODEX_OPEN else "unknown"
+    if task.get("k") == "monitor" and not task.get("p") and task.get("to") and age > task["to"] + 120: return "unknown"
+    if age >= BG_OPEN: return "unknown"
+    if held is not None and age > BG_GRACE:
+        # Claude's UI can stop a task without writing anything: then no process holds its file.
+        path = bg_output_path(task, key, thread)
+        if path is not None:
+            if str(path) not in held: return "ended"
+        elif not any(x.endswith("/" + thread + "/tasks/" + key + ".output") for x in held): return "ended"
+    return "running"
+
+
+def bg_report(path, provider, thread, now=None):
+    """{total, running, hold, items[≤BG_LIST], stamp}. Running first, then newest. `hold`: running
+    tasks that will wake the agent again (Claude's shells and its monitors with a timeout)."""
+    if provider not in ("claude", "codex") or not path: return {"total": 0, "running": 0, "hold": 0, "items": [], "stamp": ""}
+    now = now or time.time()
+    tasks = bg_events(path, provider)["t"]
+    held = bg_held() if provider == "claude" and any(v.get("s") == "open" for v in tasks.values()) else None
+    rows = []
+    for key, task in tasks.items():
+        state = bg_state(task, key, provider, thread, now, held)
+        item = {"id": key, "kind": task.get("k") or "shell", "title": task.get("d") or task.get("c") or (("终端 #" + key) if provider == "codex" else key),
+                "command": task.get("c") or "", "started": task.get("at") or 0, "state": state, "running": state == "running"}
+        if task.get("x") is not None: item["exit"] = task["x"]
+        if task.get("end"): item["ended"] = task["end"]
+        if task.get("p"): item["persistent"] = True
+        if task.get("to"): item["timeout"] = task["to"]
+        if task.get("n"): item["events"] = task["n"]
+        if task.get("auto"): item["auto"] = True
+        item["output"] = bool(bg_output_path(task, key, thread) or task.get("ev") or task.get("ln"))
+        rows.append(item)
+    rows.sort(key=lambda r: (not r["running"], -(r["started"] or 0)))
+    running = [r for r in rows if r["running"]]
+    hold = sum(1 for r in running if provider == "claude" and (r["kind"] == "shell" or not r.get("persistent")))
+    items = rows[:BG_LIST]
+    stamp = hashlib.sha256(json.dumps([[r["id"], r["state"], r.get("exit"), r.get("events")] for r in items], ensure_ascii=False).encode()).hexdigest()[:20]
+    return {"total": len(rows), "running": len(running), "hold": hold, "items": items, "stamp": stamp}
+
+
+def bg_for_item(item, path):
+    report = bg_report(path, item["provider"], item["thread"])
+    if item.get("bg_stamp") and item["bg_stamp"] == report["stamp"]: return {"same": True, "running": report["running"], "hold": report["hold"]}
+    return report
+
+
+def bg_tail_file(path):
+    """The last BG_OUTPUT bytes of a regular file we own, opened without following symlinks."""
+    try: fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError as exc: raise BridgeError("输出文件已经不在了") from exc
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat_module.S_ISREG(info.st_mode) or info.st_uid != os.getuid(): raise BridgeError("不是这个任务的输出文件")
+        start = max(0, info.st_size - BG_OUTPUT)
+        stream.seek(start); data = stream.read(BG_OUTPUT)
+    if start and b"\n" in data[:4096]: data = data[data.index(b"\n") + 1:]
+    return data.decode("utf-8", "replace"), info.st_size, start > 0, info.st_mtime
+
+
+def codex_bg_line_output(path, offset, key):
+    """The output a Codex rollout line shows for one terminal (newest chunk or the final output)."""
+    with path.open("rb") as stream:
+        stream.seek(offset); line = stream.readline(BG_LINE)
+    try: row = json.loads(line)
+    except (ValueError, UnicodeError): return ""
+    value = row.get("payload") or {} if isinstance(row, dict) else {}
+    item = value.get("item") if isinstance(value.get("item"), dict) else None
+    if item and str(item.get("process_id")) == key: return str(item.get("aggregated_output") or "")
+    text, parts = codex_bg_text(value.get("output")), []
+    for piece in (text.split("\n") if text.lstrip().startswith("{") else [text]):
+        try: chunk = json.loads(piece)
+        except ValueError: chunk = None
+        if isinstance(chunk, dict):
+            if str(chunk.get("session_id")) == key and isinstance(chunk.get("output"), str): parts.append(chunk["output"])
+        elif "session ID " + key in piece: parts.append(piece.split("Output:", 1)[-1])
+    if not parts and isinstance(value.get("output"), list):
+        for x in value["output"]:
+            try: chunk = json.loads(x.get("text", "")) if isinstance(x, dict) else None
+            except ValueError: chunk = None
+            if isinstance(chunk, dict) and str(chunk.get("session_id")) == key and isinstance(chunk.get("output"), str): parts.append(chunk["output"])
+    return "\n".join(parts)
+
+
+def bg_output(item, path):
+    """bgOutput: the output of one background task this transcript started, read-only."""
+    key = item.get("task")
+    if not isinstance(key, str) or not BG_TASK_ID.fullmatch(key): raise BridgeError("Invalid background task")
+    provider, thread = item["provider"], item["thread"]
+    task = bg_events(path, provider)["t"].get(key)
+    if not task: raise BridgeError("这段对话里没有这个后台任务")
+    out = {"task": key, "kind": task.get("k") or "shell", "state": bg_state(task, key, provider, thread, time.time(), None if provider == "codex" else bg_held())}
+    file = bg_output_path(task, key, thread) if provider == "claude" else None
+    if file is not None and (task.get("k") != "monitor" or os.path.exists(file)):
+        text, size, cut, mtime = bg_tail_file(str(file))
+        return dict(out, source="file", text=bg_clean(text), size=size, truncated=cut, mtime=mtime, path=str(file))
+    if provider == "claude" and task.get("ev"):
+        return dict(out, source="events", text=bg_clean(task["ev"]), truncated=int(task.get("n") or 0) > 1 and len(task["ev"]) >= BG_EVENTS - 200)
+    if provider == "codex" and isinstance(task.get("ln"), int):
+        text = codex_bg_line_output(path, task.get("lo") or task["ln"], key)
+        cut = len(text.encode()) > BG_OUTPUT
+        if cut: text = text.encode()[-BG_OUTPUT:].decode("utf-8", "replace")
+        return dict(out, source="transcript", text=bg_clean(text), truncated=cut)
+    if provider == "claude" and task.get("out"): raise BridgeError("输出文件不在这个任务自己的目录里，不读取")
+    return dict(out, source="none", text="")
+
+
+def bg_output_request(request):
+    """bgOutput: this computer, or the other computer of a ch route (same rules there)."""
+    item = {k: request.get(k) for k in ("provider", "thread", "record_id", "cwd", "task")}
+    if request.get("remote") is not None:
+        context = request["remote"]; route = route_for_context(context); prefix = "remote:" + route["key"] + ":"
+        record = item.get("record_id")
+        if not isinstance(record, str) or not record.startswith(prefix) or not re.fullmatch(r"[a-f0-9]{64}", record[len(prefix):]):
+            raise BridgeError("Invalid remote history record")
+        data = dict(item, op="bgOutput", record_id=record[len(prefix):])
+        return remote_read(route, data, 20)
+    return bg_output_main(item)
+
+
+def bg_output_main(item):
+    """Runs where the transcript is."""
+    try:
+        path = glance_path(item)
+        if not path: raise BridgeError("历史记录已不存在，请刷新列表")
+        return bg_output(item, path)
+    finally: kids_save()
+
+
+# The agent's own footer counts its background work (when it shows them): Claude "· 3 shells",
+# Codex "2 background terminals running"; other agents when their footer uses the same words.
+SCREEN_BG_RE = re.compile(r"(\d{1,3})\s+(?:active\s+)?(shells?|monitors?|background\s+(?:terminals?|tasks?|shells?|jobs?|processes))\b", re.I)
+
+
+def screen_bg(text):
+    """{"count", "words"} from the bottom lines of a screen, or None when they name no background work."""
+    total, words = 0, []
+    for line in screen_lines(text)[-6:]:
+        for m in SCREEN_BG_RE.finditer(line):
+            total += int(m.group(1)); words.append(m.group(0)[:40])
+    return {"count": total, "words": words} if words else None
 
 
 # ─── Agent modes ────────────────────────────────────────────────────────────
@@ -3366,6 +3794,170 @@ def close_pane(request, prefix, state_dir):
         db.close()
 
 
+# ─── tmux (0.6): the SSH user's own tmux sessions, shown as terminal screens ─────────────────
+# Only the user's default tmux server is used (no -L/-S; $TMUX is dropped so a bridge started
+# inside tmux does not pick that server by accident; TMUX_TMPDIR is honored like tmux itself
+# does). Commands are argv lists, never shell strings, and none of them can start a server:
+# list-panes, capture-pane (reads) and send-keys / load-buffer / paste-buffer (input).
+#  · tmux: list panes (no server running → empty, not an error). Panes running the Herdr client
+#    are left out: those agents are already in the app.
+#  · tmuxRead: one pane's screen plus recent scrollback, colors as SGR only (clean_ansi).
+#  · tmuxSend: text, text + Enter, or one named key into one pane. Same rules as Herdr pane
+#    input: a UUID receipt is committed before anything is written, a request is never run
+#    twice, and a failure after the first write leaves the outcome unknown.
+# Panes are addressed by tmux's own id (%N) plus an identity hash (server pid, pane id, pane
+# pid), so a pane that was closed and whose id came back in a new server is never written to.
+# tmux on another computer behind a ch-cli route is not listed: local only.
+TMUX_PANE_ID = re.compile(r"%\d{1,9}")
+TMUX_SEP = "\x1f"
+TMUX_FORMAT = TMUX_SEP.join("#{%s}" % f for f in (
+    "pid", "pane_id", "pane_pid", "session_name", "window_index", "window_name", "window_active",
+    "pane_index", "pane_active", "session_attached", "pane_current_command", "pane_current_path",
+    "pane_width", "pane_height", "pane_dead", "window_panes"))
+TMUX_MAX = 64
+TMUX_SCROLL = 200
+TMUX_TEXT = 16000
+TMUX_KEYS = {"up": "Up", "down": "Down", "left": "Left", "right": "Right", "enter": "Enter", "esc": "Escape",
+             "ctrl+c": "C-c", "ctrl+d": "C-d", "tab": "Tab", "backspace": "BSpace"}
+TMUX_SEND_KEYS = {"v", "op", "id", "target", "identity", "action", "text", "key"}
+TMUX_SKIP = ("herdr",)
+TMUX_NO_SERVER = re.compile(r"(?i)no server running|error connecting to|no such file or directory|server exited")
+
+
+class TmuxFailed(BridgeError):
+    pass
+
+
+def tmux_binary():
+    return shutil.which("tmux")
+
+
+def tmux_run(args, timeout=6, data=None):
+    binary = tmux_binary()
+    if not binary: raise BridgeError("电脑上没找到 tmux")
+    env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
+    try:
+        result = subprocess.run([binary, "-u", *args], capture_output=True, timeout=timeout, env=env,
+                                input=data.encode() if data is not None else None)
+    except subprocess.TimeoutExpired as exc:
+        raise BridgeError("tmux 没有及时回应") from exc
+    out = result.stdout.decode("utf-8", "replace")
+    if result.returncode:
+        raise TmuxFailed((result.stderr.decode("utf-8", "replace") or out or "tmux failed").strip()[:300])
+    return out
+
+
+def tmux_int(value):
+    try: return int(value)
+    except (TypeError, ValueError): return 0
+
+
+def tmux_panes():
+    """Every live pane of the user's default tmux server, in session / window / pane order."""
+    if not tmux_binary(): return None
+    try: out = tmux_run(["list-panes", "-a", "-F", TMUX_FORMAT])
+    except TmuxFailed as exc:
+        if TMUX_NO_SERVER.search(str(exc)): return []
+        raise
+    found = []
+    for line in out.split("\n"):
+        parts = line.split(TMUX_SEP)
+        if len(parts) != 16: continue
+        (server, pane_id, pane_pid, session, win, win_name, win_active, pane_index, pane_active,
+         attached, command, path, width, height, dead, win_panes) = parts
+        if not TMUX_PANE_ID.fullmatch(pane_id) or dead == "1" or command in TMUX_SKIP: continue
+        ident = hashlib.sha256(json.dumps(["tmux", server, pane_id, pane_pid]).encode()).hexdigest()
+        found.append({"pane_id": pane_id, "identity": ident, "session": session[:120], "window_index": tmux_int(win),
+                      "window_name": win_name[:120], "pane_index": tmux_int(pane_index), "window_panes": tmux_int(win_panes),
+                      "active": pane_active == "1" and win_active == "1", "attached": tmux_int(attached) > 0,
+                      "command": command[:80], "cwd": path[:400], "width": tmux_int(width), "height": tmux_int(height)})
+        if len(found) >= TMUX_MAX: break
+    return found
+
+
+def tmux_target(request):
+    """The pane the request names, re-checked against the live server; raises if it changed."""
+    target = request.get("target")
+    if not isinstance(target, str) or not TMUX_PANE_ID.fullmatch(target): raise BridgeError("Invalid tmux pane")
+    if not isinstance(request.get("identity"), str): raise BridgeError("Invalid tmux pane")
+    panes = tmux_panes()
+    if panes is None: raise BridgeError("电脑上没找到 tmux")
+    pane = next((p for p in panes if p["pane_id"] == target), None)
+    if not pane or pane["identity"] != request["identity"]:
+        raise BridgeError("这个 tmux 窗格已经关了或换了，回到列表刷新一下")
+    return pane
+
+
+def tmux_read(request):
+    pane = tmux_target(request)
+    try: raw = tmux_run(["capture-pane", "-p", "-e", "-J", "-t", pane["pane_id"], "-S", str(-TMUX_SCROLL)])
+    except TmuxFailed as exc: raise BridgeError("读不到这个 tmux 窗格：" + str(exc)) from exc
+    screen = clean_ansi(raw)
+    rows = screen.split("\n")
+    while rows and not strip_sgr(rows[-1]).strip(): rows.pop()
+    screen = "\n".join(rows)
+    while len(screen) > ANSI_LIMIT and "\n" in screen: screen = screen.split("\n", 1)[1]
+    return {"text": "\n".join(x.rstrip() for x in strip_sgr(screen).split("\n")), "ansi": screen, "pane": pane}
+
+
+def tmux_send(request, state_dir):
+    if set(request) - TMUX_SEND_KEYS: raise BridgeError("没发出去：请求里有不认识的字段")
+    req_id = request.get("id")
+    if not isinstance(req_id, str) or not re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", req_id):
+        raise BridgeError("Mutation requires a UUID request id")
+    action, text, key = request.get("action"), request.get("text"), request.get("key")
+    if action == "key":
+        if key not in TMUX_KEYS or text is not None: raise BridgeError("Unsupported key")
+    elif action in ("run", "text"):
+        if key is not None or not isinstance(text, str) or not text or len(text.encode()) > TMUX_TEXT or "\x00" in text:
+            raise BridgeError("Terminal input must contain 1–16000 UTF-8 bytes without NUL")
+    else:
+        raise BridgeError("Unsupported tmux input")
+    digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    pane = tmux_target(request)
+    db, previous = receipt_open(state_dir, req_id, digest, "上次的输入结果未知：先看一眼终端，别直接重发")
+    if previous is not None: return previous
+    target = pane["pane_id"]
+    if action == "key": steps = [(["send-keys", "-t", target, TMUX_KEYS[key]], None)]
+    elif "\n" in text or "\r" in text:
+        # Several lines: one paste (bracketed when the program asked for it), so a shell or an
+        # editor gets the lines as typed text instead of running each one. -d drops the buffer.
+        name = "herdr-pocket-" + req_id[:8]
+        steps = [(["load-buffer", "-b", name, "-"], text.replace("\r\n", "\n")),
+                 (["paste-buffer", "-p", "-d", "-b", name, "-t", target], None)]
+    else: steps = [(["send-keys", "-t", target, "-l", "--", text], None)]
+    if action == "run": steps.append((["send-keys", "-t", target, "Enter"], None))
+    try:
+        for index, (args, data) in enumerate(steps):
+            try: tmux_run(args, data=data)
+            except TmuxFailed as exc:
+                # tmux refused the first command before writing anything (pane gone): not sent.
+                # A buffer load writes nothing to the pane either.
+                if index == 0 or (index == 1 and args[0] == "paste-buffer"):
+                    receipt_save(db, req_id, {"sent": False, "rejected": "tmux"})
+                    if args[0] == "paste-buffer":
+                        try: tmux_run(["delete-buffer", "-b", args[args.index("-b") + 1]])
+                        except BridgeError: pass
+                    raise BridgeError("没发出去：tmux 拒绝了（" + str(exc)[:120] + "）") from exc
+                raise BridgeError("只发出去一部分，结果未知：先看一眼终端，别直接重发") from exc
+    except BridgeError:
+        db.close()
+        raise
+    result = {"sent": True, "receipt": req_id}
+    receipt_save(db, req_id, result)
+    db.close()
+    return result
+
+
+def tmux_request(request, state_dir):
+    op = request.get("op")
+    if op == "tmux":
+        panes = tmux_panes()
+        return {"available": panes is not None, "panes": panes or []}
+    if op == "tmuxRead": return tmux_read(request)
+    return tmux_send(request, state_dir)
+
+
 def hidden_path(state_dir):
     return state_dir / "hidden-records.json"
 
@@ -3418,6 +4010,8 @@ def handle(request, state_dir=None):
     if op == "glance": return glance(request)
     if op == "fileInfo": return file_info(request)
     if op == "fileView": return view_request(request)
+    if op in ("tmux", "tmuxRead", "tmuxSend"): return tmux_request(request, state_dir or Path.home() / ".local/state/herdr-pocket")
+    if op == "bgOutput": return bg_output_request(request)
     if op in ("catalog", "history"):
         if request.get("remote") is not None: return remote_history_request(request)
         catalog = transcript_catalog()
@@ -3479,6 +4073,7 @@ def handle(request, state_dir=None):
         # `menu: true` (after a slash command) parses a picker even when Herdr does not call it blocked.
         screen = with_menu(read_screen(prefix, agent, 160), agent, request.get("menu") is True)
         screen["modes"] = screen_modes(screen.get("text", ""), agent.get("agent"))
+        screen["bg"] = screen_bg(screen.get("text", ""))
         # `ansi: true` (the 终端 tab and the confirm screen are open): add the colored screen. Menus
         # and modes keep parsing the plain read above: Herdr's colored read is the visible rows only.
         if request.get("ansi") is True:

@@ -108,7 +108,7 @@ assert.deepEqual(await page.evaluate(()=>fx.calls.filter(c=>c.op==='openUrl').ma
 assert.equal(await page.evaluate(()=>copied.at(-1)),diag,'what is copied is exactly what was shown');
 // Nothing beyond the read-only hello/doctor was asked of the computer for the summary.
 const remoteOps=await page.evaluate(()=>[...new Set(fx.calls.filter(c=>c.op==='remote').map(c=>c.a.op))]);
-assert(remoteOps.every(o=>['hello','doctor','sessions','agents','status','account','catalog','glance','hidden'].includes(o)),remoteOps.join());
+assert(remoteOps.every(o=>['hello','doctor','sessions','agents','status','account','catalog','glance','hidden','tmux'].includes(o)),remoteOps.join());
 await page.setViewportSize({width:320,height:640});assert.equal(await overflow(),false,'feedback fits 320 px');
 console.log('PASS: diagnostics hold versions, states, counts and error codes only; copy + issue page');
 

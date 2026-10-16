@@ -1,0 +1,6 @@
+/* tmux sessions (tmux.js): a section under the agents in 会话; the screen is the 终端 view. */
+.tmux-row .card-title.term-cmd{font-size:14px}
+.tmux-row .tmux-cmd{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);flex-shrink:0;max-width:55%}
+.tmux-row .row-side{justify-content:center}
+/* 原始宽度 in 终端选项: the desktop layout, scroll sideways (colored rows: ansi.css .ansi.raw). */
+.pane-screen.raw{white-space:pre;overflow-wrap:normal;overflow-x:auto}

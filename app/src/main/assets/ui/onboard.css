@@ -81,3 +81,18 @@
 
 /* 删除 stays available but quieter than 连接设备 (a destructive action is not the primary one). */
 .device-actions .device-delete{flex:0 0 auto;min-height:44px;padding:0 12px;color:var(--danger);font-weight:600}
+
+/* Several computers connected (onboard.js LINKS): badges on device cards, the switcher row under the
+   top bar of 会话, and the count in the device chip. Tokens from app.css. */
+.device-card .card-title{display:flex;align-items:center;gap:var(--sp-2);min-width:0}
+.device-card .card-title>.truncate{min-width:0}
+.device-card.linked{border-color:var(--line-strong)}
+.link-badge{flex:0 0 auto;font-size:var(--fs-2xs);font-weight:600;line-height:20px;padding:0 7px;border-radius:999px;color:var(--success);background:var(--success-soft)}
+.link-badge.on{color:var(--accent);background:var(--soft)}
+.device-actions .device-unlink{flex:0 0 auto;min-height:44px;padding:0 12px;color:var(--ink-2);font-weight:600}
+.dev-switch{display:flex;gap:var(--sp-2);overflow-x:auto;scrollbar-width:none;padding:2px var(--sp-4) var(--sp-2);margin-top:-4px;scroll-padding:var(--sp-4)}
+.dev-switch::-webkit-scrollbar{display:none}
+.dev-pill{flex:0 1 auto;max-width:62%;min-height:36px}
+.dev-pill .dot{width:7px;height:7px;box-shadow:none;opacity:.55}
+.dev-pill.active .dot{opacity:1;box-shadow:0 0 0 3px var(--success-soft)}
+.chip-links{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--sunken);color:var(--muted);font-size:var(--fs-2xs);font-weight:600;line-height:18px;text-align:center;font-variant-numeric:tabular-nums}

@@ -41,8 +41,8 @@ private const val ASK_PHOTOS = 44
 private const val PICK_KEY = 45
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/glyphs.css", "ui/ansi.css", "ui/kids.css", "ui/mode.css", "ui/foot.css", "ui/layout.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/ansi.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/onboard.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/mode.js", "ui/foot.js", "ui/app.js", "ui/layout.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/hops.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/glyphs.css", "ui/ansi.css", "ui/kids.css", "ui/bg.css", "ui/mode.css", "ui/foot.css", "ui/tmux.css", "ui/layout.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/ansi.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/hops.js", "ui/onboard.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/bg.js", "ui/mode.js", "ui/foot.js", "ui/app.js", "ui/tmux.js", "ui/layout.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -56,11 +56,11 @@ class MainActivity : Activity() {
     private var destroyed = false
     private var started = false
     private var pendingPane: String? = null
-    // Latest Herdr session and agent states shown in the UI, handed to the watcher.
-    @Volatile private var watchSession = ""
-    @Volatile private var watchStates = "{}"
-    @Volatile private var watchKids = "{}"
-    @Volatile private var watchAsks = "{}"
+    private var pendingDevice: String? = null
+    // Latest Herdr session and agent states the UI showed, per computer, handed to the watcher:
+    // device id → {session, states, kids, asks}. A computer the UI switched away from keeps what it
+    // showed last.
+    private val watchStates = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
     private var watched = false
     // One picker at a time: the request waiting for it, how many pictures it may add, the camera target.
     private var pickId: String? = null
@@ -80,6 +80,7 @@ class MainActivity : Activity() {
         applySecure()
         SystemBars.edgeToEdge(window)
         pendingPane = intent?.getStringExtra(WatchService.EXTRA_PANE)
+        pendingDevice = intent?.getStringExtra(WatchService.EXTRA_DEVICE)
         web = WebView(this)
         web.settings.apply {
             javaScriptEnabled = true
@@ -119,8 +120,11 @@ class MainActivity : Activity() {
             .replace("/*TERMINAL_APP*/", assets.open("ui/terminals.js").bufferedReader().use { it.readText() })
             .replace("/*BUNDLED_JS*/", UI_JS.joinToString("\n") { asset(it) })
         web.loadDataWithBaseURL("https://pocket.invalid/", html, "text/html", "UTF-8", null)
-        core.listener = { type, detail -> event(JSONObject().put("type", type).put("detail", detail)) }
+        core.linkListener = { type, detail, device -> event(JSONObject().put("type", type).put("detail", detail).put("device", device)) }
     }
+
+    /** Opens the agent of a tapped alert, on the computer it came from (several can be connected). */
+    private fun openPaneJs(pane: String, device: String?) = "window.openFromNotification(${JSONObject.quote(pane)}, ${JSONObject.quote(device.orEmpty())})"
 
     private fun asset(name: String) = assets.open(name).bufferedReader().use { it.readText() }
 
@@ -128,7 +132,8 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         if (ShareIn.isShare(intent)) { receiveShare(intent); return }
         intent.getStringExtra(WatchService.EXTRA_PANE)?.let { pane ->
-            if (started) web.evaluateJavascript("window.openFromNotification(${JSONObject.quote(pane)})", null) else pendingPane = pane
+            val device = intent.getStringExtra(WatchService.EXTRA_DEVICE).orEmpty()
+            if (started) web.evaluateJavascript(openPaneJs(pane, device), null) else { pendingPane = pane; pendingDevice = device }
         }
     }
 
@@ -165,10 +170,10 @@ class MainActivity : Activity() {
     })
 
     /** A host key seen on the last connect attempt, waiting for the user's decision in the trust sheet. Memory only. */
-    private class PendingTrust(val device: String, val endpoint: Endpoint, val host: UntrustedHost)
+    private class PendingTrust(val device: String, val pin: String, val host: UntrustedHost)
     @Volatile private var pendingTrust: PendingTrust? = null
-    /** Device whose last connect was refused for a changed key; only then may its pin be forgotten. */
-    @Volatile private var changedFor: String? = null
+    /** Device (and which pin of its route) whose last connect was refused for a changed key; only then may that pin be forgotten. */
+    @Volatile private var changedFor: Pair<String, String>? = null
 
     private fun hostInfo(endpoint: Endpoint, fingerprint: String, type: String) =
         JSONObject().put("host", endpoint.host).put("port", endpoint.port).put("fingerprint", fingerprint).put("type", type)
@@ -181,11 +186,17 @@ class MainActivity : Activity() {
             core.connect(device, password) { stage -> progress(id, stage) }
         } catch (e: UntrustedHost) {
             // First use: nothing is pinned until the user taps 「信任并连接」 for exactly this key.
-            pendingTrust = PendingTrust(device.getString("id"), endpoint, e)
-            throw Friendly("hostkey_new", "第一次连这台电脑，先核对一下 SSH 指纹。", hostInfo(endpoint, e.fingerprint, e.type))
+            // With jump hosts each login is trusted on its own, one sheet per new key, in route order.
+            val route = JumpHosts.route(device)
+            pendingTrust = PendingTrust(device.getString("id"), JumpHosts.pinIds(route)[e.hop], e)
+            val jump = e.hop < route.lastIndex
+            throw Friendly("hostkey_new", if (jump) "第一次连跳板机 ${route[e.hop].host}，先核对一下 SSH 指纹。" else "第一次连这台电脑，先核对一下 SSH 指纹。",
+                JumpHosts.describe(hostInfo(route[e.hop], e.fingerprint, e.type), device, e.hop))
         } catch (e: HostKeyChanged) {
-            changedFor = device.getString("id")
-            throw Friendly("hostkey_changed", e.message ?: "", hostInfo(endpoint, e.fingerprint, e.type).put("previous", e.previous))
+            val route = JumpHosts.route(device)
+            changedFor = device.getString("id") to JumpHosts.pinIds(route)[e.hop]
+            val message = if (e.hop < route.lastIndex) "跳板机 ${route[e.hop].host} 的 SSH 指纹和上次信任的不一样，已拒绝连接。先在那台机器上核对，确认没问题再重新信任。" else e.message ?: ""
+            throw Friendly("hostkey_changed", message, JumpHosts.describe(hostInfo(route[e.hop], e.fingerprint, e.type).put("previous", e.previous), device, e.hop))
         } catch (e: Exception) {
             throw ConnectErrors.connect(e, endpoint, usingKey = core.usesKey(device))
         }
@@ -193,23 +204,29 @@ class MainActivity : Activity() {
             core.vault.save(JSONObject(device.toString()).put("password", password).put("remember", request.getBoolean("remember")))
         }
         val remembered = core.vault.get(device.getString("id")).optString("password").isNotEmpty()
-        val shown = JSONObject(core.connectedDevice.toString()).put("remember", remembered)
+        val deviceId = device.getString("id")
+        val shown = JSONObject(core.link(deviceId)!!.device.toString()).put("remember", remembered)
         progress(id, "SSH 已连接，正在检查桥接程序…")
-        val result = JSONObject().put("device", shown).put("devices", core.vault.list())
-        val hello = try { core.request(JSONObject().put("op", "hello")) } catch (e: Friendly) {
+        val result = JSONObject().put("device", shown).put("devices", core.vault.list()).put("connections", connections())
+        val hello = try { core.request(deviceId, JSONObject().put("op", "hello")) } catch (e: Friendly) {
             // Without a usable Python nothing else can work: say so instead of offering an install.
-            if (e.code == "python_missing" || e.code == "python_old") { core.disconnect(); throw e }
+            if (e.code == "python_missing" || e.code == "python_old") { core.disconnect(deviceId); throw e }
             null
         } catch (_: Exception) { null }
         val ready = hello?.optInt("protocol") == 1
         result.put("ready", ready)
-        if (ready) result.put("host", doctor()) else result.put("upgrade", core.transport.hasOtherBridge(core.bridge))
+        if (ready) result.put("host", doctor(deviceId)) else result.put("upgrade", core.hasOtherBridge(deviceId))
         success(id, result)
         runOnUiThread { askNotificationPermission() }
     }
 
     /** Is Herdr installed and running on the computer? Read-only; null if the bridge cannot tell. */
-    private fun doctor(): JSONObject? = try { core.request(JSONObject().put("op", "doctor")) } catch (_: Exception) { null }
+    private fun doctor(deviceId: String?): JSONObject? = try { core.request(deviceId, JSONObject().put("op", "doctor")) } catch (_: Exception) { null }
+
+    /** Connected computers (connection order) as the page shows them; never carries a password. */
+    private fun connections(): JSONArray = JSONArray().apply {
+        core.links().forEach { l -> put(JSONObject(l.device.toString()).put("remember", core.vault.get(l.id).optString("password").isNotEmpty())) }
+    }
 
     private fun dark(): Boolean = when (core.settings.getString("theme", "system")) {
         "dark" -> true
@@ -254,7 +271,7 @@ class MainActivity : Activity() {
         .put("seenUpdate", core.settings.getString("seenUpdate", ""))
         .put("alerts", core.alertsEnabled).put("notifications", notificationsAllowed())
         .put("keepAlive", core.keepAliveEnabled).put("keepAliveMinutes", core.keepAliveMinutes)
-        .put("conn", core.stats.json(core.transport.logins.get()))
+        .put("conn", core.stats.json(core.totalLogins()).put("links", core.links().size))
         .put("version", Updater.currentName(this)).put("versionCode", Updater.currentCode(this))
         .put("update", core.settings.getString("updateResult", null)?.let { JSONObject(it) } ?: JSONObject.NULL)
 
@@ -295,38 +312,53 @@ class MainActivity : Activity() {
                             }
                             success(id, JSONObject().put("devices", core.vault.list()).put("version", packageManager.getPackageInfo(packageName, 0).versionName)
                                 .put("alerts", core.alertsEnabled).apply {
-                                    // The activity can be recreated while the watcher kept the session.
+                                    // The activity can be recreated while the watcher kept the sessions.
                                     core.connectedDevice?.let { d -> put("connected", JSONObject(d.toString()).put("remember",
                                         core.vault.get(d.getString("id")).optString("password").isNotEmpty())) }
+                                    put("connections", connections())
                                 })
-                            pendingPane?.let { pane -> pendingPane = null; js("window.openFromNotification(${JSONObject.quote(pane)})") }
+                            pendingPane?.let { pane -> pendingPane = null; js(openPaneJs(pane, pendingDevice)); pendingDevice = null }
                         }
                         "saveDevice" -> success(id, core.vault.save(req).also { if (req.optString("auth") == "key") core.forgetSessionPassword(req.optString("id")) })
-                        "deleteDevice" -> { core.vault.delete(req.getString("id")); core.cache.drop(req.getString("id")); success(id, JSONObject().put("devices", core.vault.list())) }
+                        "deleteDevice" -> {
+                            // A connected computer is disconnected first; the others stay.
+                            core.disconnect(req.getString("id")); watchStates.remove(req.getString("id"))
+                            core.vault.delete(req.getString("id")); core.cache.drop(req.getString("id")); success(id, JSONObject().put("devices", core.vault.list()))
+                        }
                         "connect" -> { runOnUiThread { applySecure() }; connect(id, req) }
-                        "disconnect" -> { WatchService.stop(this@MainActivity); core.disconnect(); success(id, JSONObject()) }
+                        "disconnect" -> {
+                            // With a device: only that computer; without: all of them.
+                            val one = req.optString("device")
+                            if (one.isEmpty()) { core.disconnect(); watchStates.clear() } else { core.disconnect(one); watchStates.remove(one) }
+                            if (!core.hasLinks) WatchService.stop(this@MainActivity)
+                            success(id, JSONObject().put("connections", connections()))
+                        }
+                        // Switch the UI to a computer that is already connected: no reconnect, no login.
+                        "activate" -> { core.activate(req.getString("device")); success(id, JSONObject().put("connections", connections())) }
                         "trustHost" -> {
                             // Pins only the key the last attempt saw, for the same device and address.
                             val pending = pendingTrust ?: error("没有等待核对的指纹，重新连接一次")
                             val device = core.vault.get(req.getString("id"))
-                            check(pending.device == device.getString("id") && pending.endpoint == core.endpointOf(device)
+                            check(pending.device == device.getString("id") && pending.pin in JumpHosts.pinIds(device)
                                 && req.getString("fingerprint") == pending.host.fingerprint) { "指纹和刚才看到的不一致，重新连接再核对" }
                             pendingTrust = null
-                            check(core.pins.edit().putString(core.pinId(pending.endpoint), pending.host.key).commit()) { "指纹保存失败" }
+                            check(core.pins.edit().putString(pending.pin, pending.host.key).commit()) { "指纹保存失败" }
                             success(id, JSONObject())
                         }
                         "forgetHost" -> {
                             // Only after the user saw the changed-key warning for this device; the next connect asks again.
                             val device = core.vault.get(req.getString("id"))
-                            check(changedFor == device.getString("id")) { "这台设备没有指纹变化，不需要重新核对" }
+                            val changed = changedFor
+                            check(changed != null && changed.first == device.getString("id") && changed.second in JumpHosts.pinIds(device)) { "这台设备没有指纹变化，不需要重新核对" }
                             changedFor = null; pendingTrust = null
-                            check(core.pins.edit().remove(core.pinId(core.endpointOf(device))).commit()) { "操作失败" }
+                            check(core.pins.edit().remove(changed.second).commit()) { "操作失败" }
                             success(id, JSONObject())
                         }
-                        "reconnect" -> { core.retry(); success(id, JSONObject()) }
+                        "reconnect" -> { core.retry(dev(req)); success(id, JSONObject()) }
                         "install" -> {
-                            try { core.transport.install(core.bridge) } catch (e: Exception) { throw ConnectErrors.install(e) }
-                            success(id, core.request(JSONObject().put("op", "hello")).put("host", doctor() ?: JSONObject.NULL))
+                            val device = dev(req)
+                            try { core.install(device) } catch (e: Exception) { throw ConnectErrors.install(e) }
+                            success(id, core.request(device, JSONObject().put("op", "hello")).put("host", doctor(device) ?: JSONObject.NULL))
                         }
                         "protect" -> {
                             runOnUiThread { applySecure() }
@@ -373,15 +405,17 @@ class MainActivity : Activity() {
                             runOnUiThread { try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))); success(id, JSONObject()) } catch (e: Exception) { failure(id, IllegalStateException("没有可以打开链接的应用")) } }
                         }
                         "demo" -> {
-                            check(core.connectedDevice == null) { "先断开真实设备，再进入演示" }
+                            check(!core.hasLinks) { "先断开真实设备，再进入演示" }
                             runOnUiThread { window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
                             success(id, JSONObject())
                         }
                         "watchState" -> {
-                            watchSession = req.optString("session")
-                            watchStates = req.optJSONObject("states")?.toString() ?: "{}"
-                            watchKids = req.optJSONObject("kids")?.toString() ?: "{}"
-                            watchAsks = req.optJSONObject("asks")?.toString() ?: "{}"
+                            val device = dev(req).ifEmpty { core.connectedDevice?.optString("id").orEmpty() }
+                            if (core.link(device) != null) watchStates[device] = JSONObject()
+                                .put("session", req.optString("session"))
+                                .put("states", req.optJSONObject("states") ?: JSONObject())
+                                .put("kids", req.optJSONObject("kids") ?: JSONObject())
+                                .put("asks", req.optJSONObject("asks") ?: JSONObject())
                             success(id, JSONObject())
                         }
                         "setAlerts" -> {
@@ -415,7 +449,7 @@ class MainActivity : Activity() {
                         "uploadImage" -> {
                             val picture = ImagePrep.get(req.getString("id")) ?: error("这张图片已失效，删掉重新选一下")
                             val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
-                            success(id, core.upload(picture, day))
+                            success(id, core.upload(dev(req), picture, day))
                         }
                         "pickFiles" -> runOnUiThread { pickFiles(id, req.optInt("max", FileAttach.MAX_FILES).coerceIn(1, FileAttach.MAX_FILES)) }
                         "dropFiles" -> {
@@ -426,17 +460,17 @@ class MainActivity : Activity() {
                         "uploadFile" -> {
                             val file = FileAttach.get(req.getString("id")) ?: error("这个文件已失效，删掉重新选一下")
                             val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
-                            success(id, core.uploadFile(file, contentResolver, day) { sent -> progress(id, sent.toString()) })
+                            success(id, core.uploadFile(dev(req), file, contentResolver, day) { sent -> progress(id, sent.toString()) })
                         }
                         "image" -> {
                             // The bridge serves at most ~1.35 MB; the WebView only gets a small JPEG.
                             val query = JSONObject().put("op", "image")
                             for (k in listOf("kind", "name", "address", "record_id", "item", "block", "remote", "variant")) if (req.has(k)) query.put(k, req.get(k))
-                            val data = core.request(query)
+                            val data = core.request(dev(req), query)
                             val bytes = android.util.Base64.decode(data.getString("data"), android.util.Base64.DEFAULT)
                             success(id, ImagePrep.shrink(bytes, if (req.optString("variant") == "full") 1600 else 800))
                         }
-                        "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> success(id, core.terminal(op, req))
+                        "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> success(id, core.terminal(dev(req), op, req))
                         // The phone's SSH key (SshIdentity). Only the public half ever reaches the page.
                         "identity" -> success(id, core.identity.info())
                         "identityCreate" -> success(id, core.identity.create(req.optBoolean("replace")))
@@ -451,8 +485,11 @@ class MainActivity : Activity() {
                             success(id, JSONObject().put("devices", core.vault.list()))
                         }
                         "remote" -> {
-                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "fileView", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "hidden", "doctor", "glance", "hello")) { "不支持的操作" }
-                            success(id, core.request(req))
+                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "fileView", "bgOutput", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "hidden", "doctor", "glance", "hello", "tmux", "tmuxRead", "tmuxSend")) { "不支持的操作" }
+                            // `device` picks the computer; it is not part of the bridge request.
+                            val device = dev(req)
+                            req.remove("device")
+                            success(id, core.request(device, req))
                         }
                         else -> error("不支持的操作")
                     }
@@ -463,11 +500,14 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Cache scope: the connected device, or a saved device that is still connecting. Unknown ids get nothing. */
+    /** The computer a request names (empty = the active one). */
+    private fun dev(req: JSONObject): String = req.optString("device").take(80)
+
+    /** Cache scope: a connected device, or a saved device that is still connecting. Unknown ids get nothing. */
     private fun cacheDevice(req: JSONObject): String? {
         val asked = req.optString("device")
-        val connected = core.connectedDevice?.optString("id")
-        if (asked.isEmpty() || asked == connected) return connected
+        if (asked.isEmpty()) return core.connectedDevice?.optString("id")
+        if (core.link(asked) != null) return asked
         return try { core.vault.get(asked).getString("id") } catch (_: Exception) { null }
     }
     private fun cacheKey(req: JSONObject) = req.getString("key").also { require(it.length in 1..512) { "缓存键无效" } }
@@ -601,11 +641,16 @@ class MainActivity : Activity() {
         // Hand over to the service while the app is not visible. It keeps the SSH session (设置 →
         // 后台保持连接) and/or watches agents read-only (后台提醒). Alerts need notifications; keeping the
         // connection does not (Android then hides the ongoing notification but runs the service).
-        if (core.connectedDevice != null && !isChangingConfigurations) {
-            val alerts = core.alertsEnabled && watchSession.isNotEmpty() && notificationsAllowed()
+        // Every connected computer: one service, each with its own agents.
+        if (core.hasLinks && !isChangingConfigurations) {
+            val linked = core.links().map { it.id }.toSet()
+            watchStates.keys.retainAll(linked)
+            val alerts = core.alertsEnabled && notificationsAllowed() && watchStates.values.any { it.optString("session").isNotEmpty() }
             val keep = core.keepAliveEnabled
             if (alerts || keep) {
-                try { WatchService.start(this, if (alerts) watchSession else "", watchStates, watchKids, keep, core.keepAliveMinutes, watchAsks); watched = true } catch (_: Exception) {}
+                val watch = JSONObject()
+                if (alerts) watchStates.forEach { (device, state) -> if (state.optString("session").isNotEmpty()) watch.put(device, state) }
+                try { WatchService.start(this, watch.toString(), keep, core.keepAliveMinutes); watched = true } catch (_: Exception) {}
             }
         }
         core.enterBackground(kept = watched)
@@ -623,10 +668,10 @@ class MainActivity : Activity() {
     }
     override fun onDestroy() {
         destroyed = true
-        core.listener = null
-        // Swiped away from recents (back never finishes the activity): the connection stays while the
-        // service keeps it (same time limit as in the background); otherwise it ends here.
-        if (isFinishing && !(watched && core.connectedDevice != null)) { WatchService.stop(this); core.disconnect() }
+        core.linkListener = null
+        // Swiped away from recents (back never finishes the activity): the connections stay while the
+        // service keeps them (same time limit as in the background); otherwise they end here.
+        if (isFinishing && !(watched && core.hasLinks)) { WatchService.stop(this); core.disconnect() }
         if (Build.VERSION.SDK_INT >= 33) (backCallback as? OnBackInvokedCallback)?.let { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it) }
         executor.shutdownNow(); pictures.shutdownNow(); web.removeJavascriptInterface("PocketNative"); web.destroy(); super.onDestroy()
     }

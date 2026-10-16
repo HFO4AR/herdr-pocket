@@ -7,10 +7,15 @@ import java.security.MessageDigest
 import java.util.Base64
 
 data class Endpoint(val host: String, val port: Int, val user: String)
-class UntrustedHost(val key: String, val fingerprint: String, val type: String = "") : Exception("请核对服务器指纹")
+class UntrustedHost(val key: String, val fingerprint: String, val type: String = "") : Exception("请核对服务器指纹") {
+    /** Which login of the route showed this key (0 = first; the device is the last). */
+    var hop = 0
+}
 /** The server shows a different key than the pinned one; never accepted automatically. */
 class HostKeyChanged(val fingerprint: String = "", val previous: String = "", val type: String = "") :
-    Exception("电脑的 SSH 指纹和上次信任的不一样，已拒绝连接。先在电脑上核对，确认没问题再重新信任。")
+    Exception("电脑的 SSH 指纹和上次信任的不一样，已拒绝连接。先在电脑上核对，确认没问题再重新信任。") {
+    var hop = 0
+}
 
 /** "SHA256:…" as printed by `ssh-keygen -lf`, for a base64 public-key blob. */
 fun sshFingerprint(blob: ByteArray): String =
@@ -42,6 +47,8 @@ class SshTransport : AutoCloseable {
     @Volatile private var bridgePath = ""
     private val inflight = HashMap<Session, Int>() // guarded by this
     private val retiring = HashSet<Session>() // guarded by this
+    /** Jump-host sessions that carry each device session, in connection order. Guarded by this. */
+    private val carriers = HashMap<Session, List<Session>>()
     /** Every SSH login this transport started (main sessions, reconnects, key probes): for 反馈问题 counts. */
     val logins = java.util.concurrent.atomic.AtomicInteger()
 
@@ -51,13 +58,18 @@ class SshTransport : AutoCloseable {
      * Without it every existing session is dropped first.
      * With [identity] the login uses that key (public-key auth only) and [password] is ignored;
      * the key bytes are only handed to JSch for this handshake (the caller wipes them).
+     * [jumps]: jump hosts to pass through first, in order (see [JumpHosts]); key hops use [identity]
+     * too, and then [targetKey] says whether the device itself logs in with it.
      */
-    fun connect(endpoint: Endpoint, password: String, pinnedKey: String?, progress: (String) -> Unit = {}, keepOld: Boolean = false, identity: KeyMaterial? = null) {
+    fun connect(endpoint: Endpoint, password: String, pinnedKey: String?, progress: (String) -> Unit = {}, keepOld: Boolean = false, identity: KeyMaterial? = null,
+                jumps: List<Hop> = emptyList(), targetKey: Boolean = identity != null) {
         if (!keepOld) close()
-        val (candidate, path) = handshake(endpoint, password, pinnedKey, progress, identity, home = true)
+        val (chain, path) = handshake(jumps + Hop(endpoint, password, targetKey, pinnedKey), progress, identity, home = true)
+        val candidate = chain.last()
         val old = synchronized(this) {
             val previous = session
             session = candidate; home = path; generation++
+            if (chain.size > 1) carriers[candidate] = chain.dropLast(1)
             previous
         }
         // An interactive shell belongs to the session it was opened on; it is never moved.
@@ -66,12 +78,48 @@ class SshTransport : AutoCloseable {
     }
 
     /** Logs in once with [identity] on a separate session and closes it: does the computer accept this key? */
-    fun probeKey(endpoint: Endpoint, pinnedKey: String, identity: KeyMaterial) {
-        handshake(endpoint, "", pinnedKey, {}, identity, home = false).first.disconnect()
+    fun probeKey(endpoint: Endpoint, pinnedKey: String, identity: KeyMaterial, jumps: List<Hop> = emptyList()) {
+        handshake(jumps + Hop(endpoint, "", true, pinnedKey), {}, identity, home = false).first.asReversed().forEach { it.disconnect() }
     }
 
-    private fun handshake(endpoint: Endpoint, password: String, pinnedKey: String?, progress: (String) -> Unit, identity: KeyMaterial?, home: Boolean): Pair<Session, String> {
+    /**
+     * Logs in to every hop of [route] in order: the first over TCP from the phone, each next one
+     * through a direct-tcpip channel of the previous session ([HopProxy]). Every hop checks its own
+     * pinned host key; a failure closes what was opened (newest first) and names the hop. Returns
+     * all sessions (the device's last) and, with [home], the device's home folder.
+     */
+    private fun handshake(route: List<Hop>, progress: (String) -> Unit, identity: KeyMaterial?, home: Boolean): Pair<List<Session>, String> {
         SshIdentity.bc()
+        val opened = ArrayList<Session>()
+        try {
+            for ((i, hop) in route.withIndex()) {
+                val last = i == route.lastIndex
+                if (route.size > 1) progress(if (last) "正在经跳板机连 ${hop.endpoint.host}…" else "正在连跳板机 ${hop.endpoint.host}（第 ${i + 1} 跳）…")
+                val via = opened.lastOrNull()
+                try { opened.add(login(hop, if (hop.useKey) identity else null, via, if (last) progress else { _ -> })) }
+                catch (e: Exception) {
+                    if (e is UntrustedHost) { e.hop = i; throw e }
+                    if (e is HostKeyChanged) { e.hop = i; throw e }
+                    if (route.size == 1) throw e
+                    val forward = generateSequence<Throwable>(e) { it.cause }.any { it is HopProxy.ForwardRefused }
+                    throw HopFailed(i, route.size, hop.endpoint, hop.useKey, forward, route.getOrNull(i - 1)?.endpoint, e)
+                }
+            }
+            val target = opened.last()
+            if (!home) return opened to ""
+            progress("SSH 身份验证成功，正在读取远端目录…")
+            val sftp = target.openChannel("sftp") as ChannelSftp
+            return opened to try { sftp.connect(10000); sftp.realpath(".") } finally { sftp.disconnect() }
+        } catch (e: Exception) {
+            opened.asReversed().forEach { it.disconnect() }
+            throw e
+        }
+    }
+
+    /** One SSH login, straight from the phone or (with [via]) through the previous hop's session. */
+    private fun login(hop: Hop, identity: KeyMaterial?, via: Session?, progress: (String) -> Unit): Session {
+        val endpoint = hop.endpoint; val password = hop.password; val pinnedKey = hop.pinnedKey
+        check(!hop.useKey || identity != null) { "还没有登录密钥" }
         var pending: Exception? = null
         val jsch = JSch()
         jsch.setHostKeyRepository(object : HostKeyRepository {
@@ -111,13 +159,12 @@ class SshTransport : AutoCloseable {
         // 4 missed replies (~75 s); dead sessions are caught sooner when a channel fails to open.
         candidate.serverAliveInterval = KEEPALIVE_MS
         candidate.serverAliveCountMax = KEEPALIVE_MISSES
+        // Through a jump host: the TCP connection is a channel of the previous session, no agent forwarding.
+        if (via != null) candidate.setProxy(HopProxy(via, KEEPALIVE_MS))
         return try {
             progress(if (identity != null) "正在建立 SSH 连接，用密钥验证身份…" else "正在建立 SSH 连接并验证身份…")
             candidate.connect(15000)
-            if (!home) return candidate to ""
-            progress("SSH 身份验证成功，正在读取远端目录…")
-            val sftp = candidate.openChannel("sftp") as ChannelSftp
-            candidate to try { sftp.connect(10000); sftp.realpath(".") } finally { sftp.disconnect() }
+            candidate
         } catch (e: Exception) {
             candidate.disconnect()
             throw pending ?: e
@@ -333,11 +380,17 @@ class SshTransport : AutoCloseable {
             if (left <= 0) inflight.remove(ssh) else inflight[ssh] = left
             left <= 0 && retiring.remove(ssh)
         }
-        if (drop) ssh.disconnect()
+        if (drop) drop(ssh)
     }
     private fun retire(ssh: Session, graceful: Boolean) {
         val now = synchronized(this) { if (graceful && (inflight[ssh] ?: 0) > 0) { retiring.add(ssh); false } else true }
-        if (now) ssh.disconnect()
+        if (now) drop(ssh)
+    }
+    /** Closes a device session, then the jump-host sessions under it, newest first. */
+    private fun drop(ssh: Session) {
+        val under = synchronized(this) { carriers.remove(ssh) }.orEmpty()
+        ssh.disconnect()
+        under.asReversed().forEach { it.disconnect() }
     }
 
     fun request(value: JSONObject): JSONObject {
@@ -408,7 +461,7 @@ class SshTransport : AutoCloseable {
             retiring.clear(); session = null
             list
         }
-        all.forEach { it.disconnect() }
+        all.forEach { drop(it) }
     }
     private fun quote(value: String) = "'" + value.replace("'", "'\"'\"'") + "'"
 

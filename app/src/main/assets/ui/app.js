@@ -12,12 +12,18 @@ function uuid(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=
 
 // ─── Native bridge ──────────────────────────────────────────────────────────
 let seq=0;const pending=new Map();
-function rpc(op,args={},progress){return new Promise((resolve,reject)=>{const id='r'+(++seq);pending.set(id,{resolve,reject,progress});try{PocketNative.request(id,op,JSON.stringify(args));}catch(e){pending.delete(id);reject(e);}});}
+// Requests that belong to one computer name it (several can be connected, onboard.js LINKS): the one on
+// screen when the request starts, unless the caller already named one. Native routes by it.
+const RPC_DEVICE=new Set(['remote','install','reconnect','uploadImage','uploadFile','image','shellOpen','shellRead','shellWrite','shellResize','shellClose','watchState']);
+function rpc(op,args={},progress){if(RPC_DEVICE.has(op)&&args.device===undefined&&S.device&&!S.demo)args={...args,device:S.device.id};return new Promise((resolve,reject)=>{const id='r'+(++seq);pending.set(id,{resolve,reject,progress});try{PocketNative.request(id,op,JSON.stringify(args));}catch(e){pending.delete(id);reject(e);}});}
 window.nativeResult=(id,r)=>{const p=pending.get(id);if(!p)return;pending.delete(id);if(r.ok){p.resolve(r.data);return;}const e=new Error(r.error);if(r.code)e.code=r.code;if(r.info)e.info=r.info;p.reject(e);};
 window.nativeProgress=(id,stage)=>{pending.get(id)?.progress?.(stage);};
 // Connection events pushed by the native layer (silent reconnects); see onboard.js.
 window.nativeEvent=e=>netEvent(e);
-window.openFromNotification=pane=>{S.pendingPane=pane;if(!S.device)return;const a=S.agents.find(x=>x.pane_id===pane);if(a){openPending();return;}setTab('live');};
+window.openFromNotification=(pane,device)=>{
+ // An alert from a computer that is connected but not on screen: switch to it first.
+ if(device&&S.device&&!S.demo&&device!==S.device.id&&linkConnected(device)){const d=S.devices.find(x=>x.id===device)||LINKS.devs.get(device);switchDevice(d,{list:true,quiet:true}).then(()=>{if(S.device?.id===device)window.openFromNotification(pane);});return;}
+ S.pendingPane=pane;if(!S.device)return;const a=S.agents.find(x=>x.pane_id===pane);if(a){openPending();return;}setTab('live');};
 function openPending(){const pane=S.pendingPane;if(!pane||!S.device)return;S.pendingPane=null;const a=S.agents.find(x=>x.pane_id===pane);if(!a){toast('那个 Agent 已经不在这个会话里了');return;}if(typeof T!=='undefined')leaveTerminal();closeSheet();openAgent(a);}
 // The background watcher only notifies about changes after what the UI already showed.
 // "kids" counts as working there too; `kids` names each agent's record so the watcher can check
@@ -127,7 +133,8 @@ function setTab(tab){leaveTerminal();S.chat=null;S.chatStack=[];S.tab=tab;S.epoc
 function shell(){app.replaceChildren();const root=el('div','shell');app.append(root);if(S.demo)root.append(el('div','demo-banner','离线演示 · 示例数据，不连接电脑'));return root;}
 function header(root){
  const bar=el('header','topbar');const title=(TABS.find(t=>t[0]===S.tab)||[])[2]||'Herdr Pocket';bar.append(el('h1','',title));
- const chip=btn('','device-chip',()=>setTab('devices'));chip.setAttribute('aria-label','当前设备');chip.append(el('span',S.loading?'spinner':S.device?'dot':'dot offline'),el('span','truncate',S.loading?'连接中':S.device?S.device.name:'未连接'));bar.append(chip);root.append(bar);
+ const many=!S.demo&&LINKS.ids.length>1;const chip=btn('','device-chip',()=>many&&!S.loading?deviceSheet():setTab('devices'));chip.setAttribute('aria-label',many?'当前设备，共连着 '+LINKS.ids.length+' 台':'当前设备');chip.append(el('span',S.loading?'spinner':S.device?'dot':'dot offline'),el('span','truncate',S.loading?'连接中':S.device?S.device.name:'未连接'));
+ if(many){const n=el('span','chip-links',String(LINKS.ids.length));n.setAttribute('aria-hidden','true');chip.append(n);}bar.append(chip);root.append(bar);deviceSwitcher(root);
  connectionBanner(root);
 }
 function pageHead(main,kicker,title,subtitle,action){const h=el('div','page-head');const t=el('p','grow',subtitle||'');h.append(t);if(action)h.append(action);main.append(h);}
@@ -433,16 +440,17 @@ async function sendMessage(input){
  if(slashPanelCard(key)){if(S.slashChecking)return;S.slashChecking=true;let held;try{held=await slashHold(a,key);}finally{S.slashChecking=false;}if(held||slashPanelCard(key))return;return sendMessage(input);}
  // Busy, or something already waiting: it goes into the send queue (queue.js), in order.
  if(queueWants(a,key)){sendPulse(document.querySelector('#composer .send'));queueCompose(input,key,a,text,pics,docs);return;}
- const epoch=S.epoch;const button=document.querySelector('.send');sendPulse(button);button.disabled=true;
+ const epoch=S.epoch,dev=S.device?.id;const button=document.querySelector('.send');sendPulse(button);button.disabled=true;
  const item={key,text,images:pics.map(p=>({url:p.thumb})),files:docs.map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sending',row:'s'+(++sendSeq)};
  // Slash commands get a 「命令输出」 card (slash.js) instead of a pending bubble: most never reach the transcript.
  const card=!S.demo&&!pics.length&&!docs.length&&slashIs(text,a)?slashCard(key,text):null;
  if(!S.demo){if(!card)S.outbox.push(item);S.stick=true;paintTimeline();}
+ S.sendBusy=(S.sendBusy||0)+1;
  try{
   // Pictures go up first; only then is the one prompt sent (never resent automatically).
   const images=pics.length?await imgUpload(pics,stage=>{item.stage=stage;paintTimeline();}):null;
   const files=docs.length?await fileUpload(docs,a,stage=>{item.stage=stage;paintTimeline();}):null;item.stage='';
-  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:card?text.trim():text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
+  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:card?text.trim():text,id:uuid(),...(dev&&!S.demo?{device:dev}:{}),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
   if(S.demo){toast('演示模式：未发送，草稿已保留');return;}
   item.state='sent';if(card)card.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
   if(pics.length){imgSet(key,imgAttached(key).filter(p=>!pics.includes(p)));rpc('dropImages',{ids:pics.map(p=>p.id)}).catch(()=>{});}
@@ -452,7 +460,7 @@ async function sendMessage(input){
   S.stick=true;paintTimeline();if(card)slashCapture(card);if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);
   if(S.chat?.noTranscript&&!card){toast('发给 '+providerName(a.agent)+' 了，回复看终端');setTimeout(()=>{if(epoch===S.epoch)fetchTerminal(true);},900);}}
  catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
- finally{button.disabled=!input.value.trim()&&!attCount(key);}}
+ finally{S.sendBusy=Math.max(0,(S.sendBusy||1)-1);button.disabled=!input.value.trim()&&!attCount(key);}}
 // The send button answers the press at once (the haptic comes from native.js); the bubble follows.
 let sendSeq=0;
 function sendPulse(b){if(!b)return;b.classList.remove('fired');void b.offsetWidth;b.classList.add('fired');setTimeout(()=>b.classList.remove('fired'),400);}
@@ -474,7 +482,7 @@ function settleOutbox(){if(!S.outbox.length)return false;const count=S.outbox.le
 // the optimistic "working" set after sending must not flash "做完了".
 function onAgentStatus(was,now){
  const rec=S.chat?.agent?S.since.get(agentKey(S.chat.agent)):null;
- if(was==='working'&&(now==='idle'||now==='done')&&rec?.prev==='working'&&rec.status===now&&Date.now()-rec.at<15000&&!kidsRunning(S.chat.agent)){
+ if(was==='working'&&(now==='idle'||now==='done')&&rec?.prev==='working'&&rec.status===now&&Date.now()-rec.at<15000&&!kidsRunning(S.chat.agent)&&!bgHold(S.chat.agent)){
   S.chat.doneAt=Date.now();S.chat.took=rec.prevAt?rec.at-rec.prevAt:S.chat.sentAt?rec.at-S.chat.sentAt:0;
   const h=document.getElementById('chat-head');if(h){h.classList.remove('flash');void h.offsetWidth;h.classList.add('flash');}
   const doneAt=S.chat.doneAt;setTimeout(()=>{if(S.chat?.doneAt===doneAt)renderComposer();},8100);}
@@ -519,7 +527,7 @@ function agentSwitcher(){
  sortAgents(S.agents).sort((x,y)=>(order[agentState(x)]??2)-(order[agentState(y)]??2)).forEach(a=>{const k=agentKey(a),here=k===current;
   const b=btn('','menu-item agent-pick'+(here?' current':''),()=>{closeSheet();if(!here)openAgent(a);});if(here)b.setAttribute('aria-current','true');
   b.append(avatar(a.agent,stateTone(a)));const t=el('span','grow');t.append(el('span','menu-label',titleOf(a)),el('small','',(here?'当前 · ':'')+providerName(a.agent)+(projectOf(a)?' · '+projectOf(a):'')));b.append(t);
-  if(S.unread.has(k))b.append(el('span','unread-dot'));b.append(el('span','badge '+stateTone(a),agentState(a)==='kids'?'子 Agent · '+kidsRunning(a):stateLabel(a)));box.append(b);});
+  if(S.unread.has(k))b.append(el('span','unread-dot'));b.append(el('span','badge '+stateTone(a),agentState(a)==='kids'?kidsShort(a):stateLabel(a)));box.append(b);});
  // This conversation's sub-agents, running first, live while the sheet is open (kids.js).
  kidsSection(box);}
 function chatMenu(){
@@ -650,7 +658,7 @@ function pollBeat(){
  else if(S.tab==='live'&&tick%(listHot()?2:6)===0)refreshStatus().then(()=>glanceRefresh());}
 setInterval(pollBeat,POLL_BEAT);
 
-async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;settingsLoad().then(updateAutoCheck);if(r.connected&&!S.device){S.device=r.connected;setTab('live');return;}render();}catch(e){error(e);}}
+async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;settingsLoad().then(updateAutoCheck);linkBoot(r);if(r.connected&&!S.device){S.device=r.connected;setTab('live');return;}render();}catch(e){error(e);}}
 // terminals.js is a later <script>: start once every script has run, or a fast native reply
 // can reach code that is not defined yet.
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();

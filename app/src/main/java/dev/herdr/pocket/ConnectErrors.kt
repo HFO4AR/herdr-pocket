@@ -20,6 +20,7 @@ object ConnectErrors {
     /** Failures while opening the SSH session (before any request was sent). [usingKey]: it logged in with the phone's key. */
     fun connect(e: Throwable, endpoint: Endpoint, usingKey: Boolean = false): Friendly {
         if (e is Friendly) return e
+        generateSequence(e) { it.cause }.take(8).firstOrNull { it is HopFailed }?.let { return hop(it as HopFailed) }
         val where = "${endpoint.host}:${endpoint.port}"
         val chain = generateSequence(e) { it.cause }.take(8).toList()
         val text = chain.joinToString(" | ") { "${it.javaClass.simpleName}: ${it.message.orEmpty()}" }
@@ -55,6 +56,29 @@ object ConnectErrors {
                 Friendly("network", "网络出错了：${chain.last().message ?: "连接中断"}。" + reachHint(endpoint.host), cause = e)
             else -> Friendly("ssh", "SSH 没连上：${e.message ?: e.javaClass.simpleName}", cause = e)
         }
+    }
+
+    /**
+     * A login on a multi-hop route failed. A jump host's problem is named as such ("第 1 跳 跳板机 x：…",
+     * info.jump = true) so the page offers to edit the device, never the device's password prompt.
+     * Behind a jump host, network hints are about what that jump host can reach, not the phone.
+     */
+    fun hop(f: HopFailed): Friendly {
+        val at = f.endpoint; val where = "${at.host}:${at.port}"
+        val via = f.via?.host ?: ""
+        val info = JSONObject().put("hop", f.index + 1).put("hops", f.total).put("jump", f.isJump).put("host", at.host).put("port", at.port)
+        if (f.forward) return Friendly("jump_forward",
+            "跳板机 $via 连不到 $where：地址或端口不对、那台没开机，或者 $via 的 sshd 关了转发（AllowTcpForwarding）。", info, f)
+        val inner = connect(f.cause ?: f, at, f.usingKey)
+        val behind = f.index > 0
+        val message = when {
+            behind && inner.code == "timeout" -> "经 $via 连 $where 超时了。看看 $via 能不能连到它。"
+            behind && inner.code == "tunnel" -> "经 $via 连上了 $where，但那头没有 SSH 回应；端口可能填成了别的服务。"
+            behind && inner.code in setOf("dns", "refused", "unreachable", "network") -> "经 $via 连 $where 时连接断了。看看 $via 还在不在线，再试一次。"
+            else -> inner.message.orEmpty()
+        }
+        return if (f.isJump) Friendly(inner.code, "第 ${f.index + 1} 跳（跳板机 ${at.host}）：$message", info, f)
+        else Friendly(inner.code, message, info, f)
     }
 
     /** A one-line hint about how this kind of address is usually reached. */

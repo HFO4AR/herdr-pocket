@@ -12,6 +12,8 @@
 //    for. A changed conversation or an exited agent pauses the queue and says so.
 //  · The queue lives in memory for this run (per Herdr session + agent identity). Nothing here is
 //    handed to the background watcher: it never sends input.
+//  · Each item belongs to the computer it was written on (it.dev, several can be connected). It is
+//    sent only while that computer is on screen, and the request names it explicitly.
 const Q=new Map();// agentKey → {items:[], paused:'', resumable, inflight, retryAt, ackAt}
 let qSeq=0;
 const QUEUE_SETTLE=15000;// after a send whose start Herdr did not report, wait this long before the next
@@ -26,7 +28,7 @@ function queueTransient(msg){return /停在一个提问或授权框|还没准备
 // New messages queue up while the agent is busy, and behind anything already waiting (order is kept).
 function queueWants(a,key){return !!a&&(['working','blocked'].includes(a.agent_status)||queueItems(key).length>0);}
 function queueAdd(key,a,text,pics,opts={}){
- const q=queueOf(key,true);const qid='q'+(++qSeq);const item={qid,row:opts.row||qid,text,pics,docs:opts.docs||[],at:Date.now(),state:'queued',reason:opts.reason||'',record:S.chat?.record?.id||null,pane:a.pane_id,identity:a.identity};
+ const q=queueOf(key,true);const qid='q'+(++qSeq);const item={qid,row:opts.row||qid,text,pics,docs:opts.docs||[],at:Date.now(),state:'queued',reason:opts.reason||'',record:S.chat?.record?.id||null,pane:a.pane_id,identity:a.identity,dev:S.demo?'':S.device?.id||''};
  if(opts.front)q.items.unshift(item);else q.items.push(item);return item;}
 // The composer's text and pictures move into the queue; the draft is cleared.
 function queueCompose(input,key,a,text,pics,docs=[]){
@@ -73,6 +75,7 @@ function queueGo(key,now){
 async function queueNow(key,qid){
  const c=S.chat,q=Q.get(key);if(!c?.agent||!q||q.inflight)return;
  const it=q.items.find(x=>x.qid===qid);if(!it||it.state!=='queued')return;
+ if(it.dev&&it.dev!==S.device?.id)return;
  if(c.stale||c.exited){toast('窗格还没确认好，先别发');return;}
  if(S.demo){toast('演示：不会真的中断和发送');return;}
  q.items=[it,...q.items.filter(x=>x!==it)];q.paused='';q.tries=0;q.retryAt=0;q.ackAt=Date.now();it.record=c.record?.id||null;it.reason='';
@@ -81,7 +84,7 @@ async function queueNow(key,qid){
  let handed=false;
  try{
   if(busy()){
-   try{await remote('key',{session:S.session,target:c.agent.pane_id,identity:c.agent.identity,key:'esc',id:uuid()});}
+   try{await remote('key',{session:S.session,target:c.agent.pane_id,identity:c.agent.identity,key:'esc',id:uuid(),...(it.dev?{device:it.dev}:{})});}
    catch(e){const msg=e.message||String(e);it.reason=queueNotSent(msg)?msg:'中断没确认：'+msg;queuePause(q,'没能中断它，消息先没发。看一眼再点继续',true);return;}
    // Wait for Herdr to report the same agent stopped (polled, not guessed).
    const until=Date.now()+20000;
@@ -162,13 +165,15 @@ async function queueRun(c,key,q,force){
  q.checkFails=0;
  if(!ok)return;
  const a=c.agent;
- if(S.chat!==c||!S.active||draftKey()!==key||it.identity!==a.identity){it.state='queued';q.inflight=false;paintTimeline();return;}
+ if(S.chat!==c||!S.active||draftKey()!==key||it.identity!==a.identity||it.dev&&it.dev!==S.device?.id){it.state='queued';q.inflight=false;paintTimeline();return;}
  it.state='sending';paintTimeline();
  try{
   const images=it.pics.length?await imgUpload(it.pics,stage=>{it.stage=stage;paintTimeline();}):null;
   const files=it.docs?.length?await fileUpload(it.docs,a,stage=>{it.stage=stage;paintTimeline();}):null;it.stage='';
+  // Never to another computer: if the screen moved on meanwhile, it stays queued (nothing was sent).
+  if(it.dev&&it.dev!==S.device?.id){it.state='queued';return;}
   // A fresh request id for every attempt; the bridge refuses a reused one.
-  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?it.text.trim():it.text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
+  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,...(it.dev?{device:it.dev}:{}),text:!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?it.text.trim():it.text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
   q.items=q.items.filter(x=>x!==it);q.tries=0;q.retryAt=0;
   const card=!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?slashCard(key,it.text):null;
   if(card)card.state='sent';else S.outbox.push({key,text:it.text,images:it.pics.map(p=>({url:p.thumb})),files:(it.docs||[]).map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sent',qid:it.qid,row:it.row});

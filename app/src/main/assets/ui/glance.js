@@ -25,7 +25,7 @@ async function glanceRefresh(all=false){
  if(!items.length)return;GL.busy=true;GL.at=Date.now();const session=S.session,status=new Map(S.agents.map(a=>[agentKey(a),a.agent_status||'']));
  try{const r=await remote('glance',{items});if(session!==S.session||dev!==GL.dev)return;let changed=false;
   for(const [k,v] of Object.entries(r?.previews||{})){
-   if(!v||typeof v!=='object')continue;kidsTake(k,v.kids);if(v.kids_only)continue;const old=GL.map.get(k);
+   if(!v||typeof v!=='object')continue;kidsTake(k,v.kids);bgTake(k,v.bg);if(v.kids_only)continue;const old=GL.map.get(k);
    if(v.same){if(old)old.status=status.get(k)||'';continue;}
    // Nothing to show (yet): remember that too, so an idle agent is not asked every poll.
    if(v.missing){if(old&&!old.missing)changed=true;GL.map.set(k,{missing:true,status:status.get(k)||''});continue;}

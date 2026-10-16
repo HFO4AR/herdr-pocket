@@ -34,12 +34,20 @@ pull requests cannot publish. Publication waits for build, lint, bridge tests an
 - 「装公钥」 writes to the connected computer only after a confirmation sheet that shows the exact line and what will be done; native code re-checks that the line is still the phone's current key. Over SFTP on the existing password session it creates `~/.ssh` (0700) if missing, appends that one line to `~/.ssh/authorized_keys` unless the same key type and blob are already present (no duplicates), gives a new file 0600 and only removes group/other write bits from an existing `~/.ssh` or file. It reads the file back to confirm the line, never edits or removes other lines and touches no other file. It then tries one key login on a separate session and reports the result; switching the device to key login (and deleting its saved password) is a separate, explicit choice.
 - A rejected key reports `key_rejected` with the next step (install the public key; check `~/.ssh` 700, `authorized_keys` 600, home not writable by others); a computer without public-key auth reports `key_method`. Anyone with this unlocked phone and the app can log in to computers that trust its key, exactly as with a saved password.
 
+## Jump hosts (跳板机)
+
+- A device can be reached through up to three jump hosts, like `ssh -J`. The phone logs in to the first one over TCP; every next login runs inside a `direct-tcpip` channel of the previous SSH session. Nothing listens on the phone (no local port forwarding), agent and X11 forwarding stay off, and only the last login (the device) runs the bridge, SFTP and the terminal.
+- Every login checks its own pinned host key with the same rules as a direct device: a new key needs an explicit 「信任并连接」 for exactly that key (one sheet per hop, in route order), a changed key is refused, and silent reconnects never trust a new key. The first hop keeps the plain `host:port` pin; a later hop is pinned by the whole path (`a:22>b:22`), because the same address behind a different jump host can be another machine.
+- Each jump host logs in with its own password or with the phone's SSH key. A jump host's password is entered in the device form and stored only in the encrypted device vault (same AES-GCM / Keystore protection as a remembered device password); the device list returns only whether one is saved. It is kept only while that hop's address, user and everything in front of it stay the same; changing the route also drops the device's own saved password.
+- Errors name the hop that failed. A reconnect, keepalive failure or disconnect rebuilds or closes the whole chain (innermost session first); requests follow the same never-replay rules as a direct connection.
+
 ## Reconnects and background alerts
 
 - A silent reconnect only uses the host key already pinned for that host and port; a changed key stops reconnecting and is reported. It never shows a new trust prompt on its own.
 - The password for a reconnect comes from the encrypted vault, or, if the device does not remember it, from memory for the current app process only. It is cleared on disconnect. Key devices reconnect with the Keystore-sealed key and need no password.
 - A request is re-sent after reconnecting only when it provably never reached the host: the session was already down, or the exec channel failed to open (stdin is streamed only after the channel opens). Anything that failed after being written keeps the "outcome unknown" error and is never replayed.
 - Reconnecting ends the previous interactive SSH shell; it is not resumed.
+- Several computers can be connected at the same time (at most 4). Each has its own SSH session, pinned host key, password-in-memory and reconnect state; nothing is shared between them, and the rules above apply to each one separately. Every device-bound request from the page names its computer and is refused if that computer is not connected; a queued message is bound to the computer it was written on and is only sent while that computer is on screen. Disconnecting one computer leaves the others connected; 断开 on the notification ends all of them.
 - The background watcher is a foreground service with a visible notification and a stop action. It only runs the read-only `status` operation, never sends prompts or keys, and stops when the app returns to the foreground, on disconnect, after five consecutive failures or after eight hours. Notifications contain the agent title and state only, not message content.
 
 ## Pictures and files sent from the phone
@@ -94,12 +102,32 @@ The `fileView` operation enforces, on the computer that has the file:
 
 For a pane on another computer (ch-cli route), the same request goes through the remote read path described above (the stored, hash-checked adapter over the bridge's own SSH connection, request on stdin), and the same checks run on that computer against that SSH user's home folder, the route's workspace folder and the transcript's working directory there.
 
+## Background tasks: status and output (read-only, 0.6)
+
+The app shows which background shells, monitors and terminals an agent started (「后台任务」) and whether they still run. The **status** comes from the agent's own transcript, read incrementally like sub-agents (the `glance` and `history` operations; a small bounded state file in `~/.local/state/herdr-pocket/kids-v1.json` remembers the read offset, at most 80 tasks per conversation and 64 conversations). To tell a Claude shell that was stopped from Claude's UI (which writes no record) from one that still runs, the bridge lists which `*.output` files the SSH user's own processes hold open (`/proc/<pid>/fd` link targets of processes with the same uid; nothing else about those processes is read or kept).
+
+The **output** of one task is read only when the person taps it (and while that viewer stays open on a running task, again every 5 s, or on 「刷新」), with the `bgOutput` operation. It never writes, stops, signals or lists anything, and the text is not written to the phone's cache. It enforces, on the computer that has the transcript:
+
+- **Only this task's own file:** the request names a conversation record (provider, thread, record ID, as for `history`) and a task id. The bridge reads the output path that this transcript itself recorded for that task id (Claude's "Output is being written to: …" or the task notification's `<output-file>`); a path sent by the app is never used. That path must be exactly `<tmp>/claude-<the SSH user's uid>/<project>/<this conversation's session id>/tasks/<this task id>.output`, the `claude-<uid>` folder must be a real folder (not a symlink) owned by that user, and the `realpath` of the file must equal that same path below it, so no symlink anywhere from `claude-<uid>` down (a link to another file, or a linked `tasks` folder, is refused). A task id from another conversation is "这段对话里没有这个后台任务".
+- **Only a regular file of that user:** opened with `O_NOFOLLOW | O_NONBLOCK`; it must be a regular file owned by the SSH user.
+- **Bounded and plain:** only the last 64 KB are read and sent (from a line start); colour/cursor escape sequences and control characters are removed and the text is shown as text.
+- A running Claude monitor has no recorded output file yet: its viewer shows the newest event text from the transcript (kept, at most 1.5 KB, in the state file). Codex writes no output files: its viewer shows the newest output Codex itself received for that terminal, re-read from the one rollout line whose byte offset the scan recorded (at most 64 KB sent).
+
+For a pane on another computer (ch-cli route), `bgOutput` goes through the same remote read path as history (stored, hash-checked adapter, request on stdin) and the same checks run there with that SSH user's uid and transcripts. The background watcher only asks for counts (`bg.hold`), never output.
+
 ## Permissions and pane input (0.6)
 
 - Photos: pictures come from the system photo picker, which grants access to what was picked; no storage permission is used. Some galleries (seen on MIUI) return a storage path or a provider that checks the photos permission instead. Only when reading such a picked picture is refused does the app ask for the standard photos permission (`READ_MEDIA_IMAGES`, or `READ_EXTERNAL_STORAGE` up to Android 12) and retry just those pictures. "All files access" is never requested.
 - ch panes: the agent runs on another computer behind ch's local relay, so Herdr lists it but refuses its agent commands (`agent_not_ready`: not the pane foreground process). Only after that refusal (nothing was written) and only when the pane's process tree shows a ch route and no local agent process, the same input goes to the pane instead: `pane run` for one line, a single bracketed paste plus Enter for several lines, `pane send-keys` for keys. It is the one write for that request id; an unknown outcome is still never retried.
 - 立即发送 sends Esc to a busy agent (Esc stops a turn in Claude Code and Codex and never quits them), waits until Herdr reports the same agent stopped, then sends the message through the normal checked path. If the agent does not stop within 20 s, nothing is sent.
 
+
+## tmux sessions (0.6)
+
+- The 会话 list also shows the SSH user's own tmux panes, read from the **default** tmux server only (no `-L`/`-S`; `$TMUX` is dropped so a bridge started inside tmux does not pick another server). tmux on another computer behind a ch-cli route is not listed. Panes running the Herdr client are left out. Nothing starts a tmux server: only `list-panes`, `capture-pane`, `send-keys`, `load-buffer`/`paste-buffer` are run, as argv lists, never through a shell.
+- A pane is addressed by tmux's id (`%N`, checked strictly) plus an identity hash of the server pid, pane id and pane pid; the bridge re-lists the panes before every read or write, so a closed pane whose id comes back is never written to.
+- The screen is `capture-pane -p -e -J` with up to 200 lines of scrollback, reduced to SGR colors like agent screens (no OSC, cursor moves or other escapes reach the UI).
+- Input is a real keypress in that pane, like typing on the computer: text is sent literally (`send-keys -l --`), several lines as one paste (a temporary named buffer, deleted after pasting), keys from a fixed list (arrows, Enter, Esc, Tab, Backspace, Ctrl+C, Ctrl+D). Each send needs a UUID with a receipt committed first; a failure after the first write is reported as unknown and never retried.
 
 ## Feedback diagnostics
 

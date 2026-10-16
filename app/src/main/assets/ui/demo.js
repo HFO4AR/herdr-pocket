@@ -47,6 +47,8 @@ async function demoRequest(op,r){
   'demo-claude':{activity:{kind:'tool',verb:'run',text:'python3 -m unittest discover -s tests',open:true,at},at},
   'demo-review':{activity:{kind:'tool',verb:'run',text:'rm -rf dist .cache',open:true,at},at}};
   // Sub-agents (kids.js): the Codex session's layout check, finished.
+  // Background work (bg.js): Claude's test run and CI monitor still going, two finished.
+  p['demo-claude'].bg=bgDemoReport();
   p['demo-codex'].kids={total:1,running:0,items:demoRecords.filter(x=>x.parent==='demo-root').map(x=>({...x,running:false,state:'done'})),stamp:'demo'};
   const previews={};for(const it of r.items||[]){const id=String(it.key).split('/').pop();if(p[id])previews[it.key]=p[id];}return{previews};}
  throw Error('演示不支持此操作');}
