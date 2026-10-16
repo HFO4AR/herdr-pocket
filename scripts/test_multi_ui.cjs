@@ -121,11 +121,12 @@ await page.getByRole('textbox',{name:'消息输入框',exact:true}).fill('给 A 
 await page.getByRole('button',{name:'发送消息',exact:true}).click();
 await page.locator('.message.queued').filter({hasText:'给 A 的排队消息'}).waitFor();
 assert.equal(await page.evaluate(()=>[...Q.values()][0].items[0].dev),'A','the queued item remembers its computer');
-// A stops working, but the screen moves to B first.
-await page.evaluate(()=>{fx.S.A.agent.agent_status='idle';});
+// The screen moves to B, then A stops working. (Making A idle while its chat is still open would
+// let the pump send there legitimately before the switch; that race is not what this checks.)
 await page.getByRole('button',{name:'返回列表',exact:true}).click();
 await page.evaluate(()=>switchDevice(LINKS.devs.get('B')));
 await agentRow('Beta 任务').first().waitFor();
+await page.evaluate(()=>{fx.S.A.agent.agent_status='idle';});
 assert.equal(await page.evaluate(()=>Q.size),0,'B has no queue of its own');
 await agentRow('Beta 任务').first().click();
 await page.getByText('Beta 任务 的回答。').first().waitFor();
