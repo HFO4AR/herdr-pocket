@@ -69,6 +69,7 @@ function settingsPage(main){
  look.append(seg('文字大小',ZOOMS,p.textZoom,v=>settingsSet('textZoom',v)));
 
  const conn=group(main,'连接');
+ conn.append(toggle('启动时自动重连','打开 App 时自动连上关掉前连着的电脑',p.autoResume!==false,async on=>{const r=await settingsSet('autoResume',on);if(!r)return false;if(!on)resumeStop();toast(on?'下次打开会自动连上这次连着的电脑':'下次打开不再自动连接');return true;}));
  const keepOn=p.keepAlive!==false,minutes=KEEPS.some(k=>k[0]===p.keepAliveMinutes)?p.keepAliveMinutes:60;
  conn.append(toggle('后台保持连接','切到后台或划掉 App 后继续连着，回来不用重新登录',keepOn,async on=>{const r=await settingsSet('keepAlive',on);if(!r)return false;toast(on?'切到后台时会保持连接 '+keepText(r.keepAliveMinutes):'切到后台后不再保持连接');paintSettings();return true;}));
  if(keepOn){

@@ -1,0 +1,10 @@
+/* 启动时自动重连 (resume.js): a quiet row on a device card. Tokens only. */
+.resume-line{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 10px;border-radius:var(--radius-control);background:var(--sunken);color:var(--ink-2);font-size:var(--fs-xs);line-height:1.45;text-align:left;width:100%}
+.resume-line>.grow{min-width:0}
+.resume-line svg{width:15px;height:15px;flex:0 0 auto;color:var(--muted)}
+.resume-line.tap{min-height:44px;border:0;font:inherit;font-size:var(--fs-xs);cursor:pointer}
+.resume-line.tap:active{background:var(--press)}
+.resume-line.danger{background:var(--danger-soft);color:var(--ink)}
+.resume-line.danger svg{color:var(--danger)}
+.resume-cta{flex:0 0 auto;color:var(--accent);font-weight:600;white-space:nowrap}
+.resume-line.danger .resume-cta{color:var(--danger)}

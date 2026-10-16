@@ -77,8 +77,8 @@ function deviceCard(d){
  text.append(title,el('div','card-meta truncate',d.user+' @ '+d.host+':'+d.port));row.append(text,ib('edit','编辑 '+d.name,()=>deviceForm(d)));card.append(row);
  const line=el('div','device-line');line.append(icon(d.auth==='key'?'key':'lock'),document.createTextNode(d.auth==='key'?'用这台手机的密钥登录':d.remember?'密码已加密保存':'连接时输入密码'));card.append(line);
  if(d.jumps?.length)card.append(hopLine(d));
- const actions=el('div','device-actions');const busy=S.loading&&S.connecting?.id===d.id;
- const connect=btn(busy?'正在连接…':current?'已连接':linked?'切换到这台':'连接设备',current?'secondary':'primary',()=>linked&&!current?switchDevice(d):connectDevice(d));connect.disabled=S.loading;
+ const actions=el('div','device-actions');const busy=S.loading&&S.connecting?.id===d.id||resumeBusy(d.id);resumeLine(card,d);
+ const connect=btn(busy?'正在连接…':current?'已连接':linked?'切换到这台':'连接设备',current?'secondary':'primary',()=>linked&&!current?switchDevice(d):connectDevice(d));connect.disabled=S.loading||busy;
  actions.append(connect);
  if(linked&&LINKS.ids.length>1)actions.append(btn('断开','link-btn device-unlink',()=>confirmAction('断开 '+d.name+'？','只断开这台电脑，其他连着的不受影响。电脑上的 Agent 会继续运行。','断开',()=>disconnectDevice(d.id,false).then(render).catch(error),true)));
  actions.append(btn('删除','link-btn danger device-delete',()=>confirmAction('删除设备？',linked?'会先断开这台电脑，再移除它和保存的密码。':'会移除这台设备及其保存的密码。','删除',async()=>{try{const was=linked;const r=await rpc('deleteDevice',{id:d.id});if(was)await linkGone(d.id);S.devices=r.devices;if(S.connectFail?.device===d.id)S.connectFail=null;render();}catch(e){error(e);}},true)));
@@ -141,13 +141,14 @@ function connectionPassword(d,problem=''){
  pass.onkeydown=e=>{if(e.key==='Enter')go();};actions.append(btn('取消','secondary',closeSheet),btn('连接','primary',go));box.append(actions);obAutofocus(box,pass);}
 
 // ─── Connecting ─────────────────────────────────────────────────────────────
-function connectDevice(d){if(S.loading){toast('正在连接，请稍候');return;}if(S.device?.id===d.id&&!S.demo){setTab('live');return;}if(!S.demo&&linkConnected(d.id)){switchDevice(d);return;}if(d.auth!=='key'&&!d.remember)connectionPassword(d);else doConnect(d);}
+function connectDevice(d){if(!resumeAllow(d))return;if(S.loading){toast('正在连接，请稍候');return;}if(S.device?.id===d.id&&!S.demo){setTab('live');return;}if(!S.demo&&linkConnected(d.id)){switchDevice(d);return;}if(d.auth!=='key'&&!d.remember)connectionPassword(d);else doConnect(d);}
 // Titles and next steps for the error codes the native layer sends (ConnectErrors.kt).
 const OB_FAIL={auth:'密码不对',auth_method:'这台电脑不让用密码登录',dns:'找不到这台电脑',refused:'端口没开',timeout:'连不上，超时了',unreachable:'手机到不了这台电脑',
  tunnel:'转发通了，电脑没回应',algorithm:'SSH 握手失败',network:'网络出错了',python_missing:'电脑上还差 Python',python_old:'电脑上的 Python 太旧',
  install_failed:'桥接程序没装上',hostkey_new:'等你核对指纹',hostkey_changed:'电脑指纹变了，已拒绝',
  key_rejected:'电脑没接受密钥',key_method:'这台电脑不让用密钥登录',key_missing:'还没有登录密钥',too_many:'连着的电脑太多了',jump_forward:'跳板机转不过去'};
-async function doConnect(d,password='',remember){
+// o.auto: 启动时自动重连 (resume.js); never opens a password, fingerprint or install sheet.
+async function doConnect(d,password='',remember,o={}){
  if(S.loading)return;
  // Another computer stays connected: its view is parked (viewPark) and this one starts blank.
  let back='';
@@ -157,7 +158,7 @@ async function doConnect(d,password='',remember){
   back=S.device.id;viewPark();viewTake(d.id);}
  S.loading=true;S.connecting=d;S.connectError='';S.connectFail=null;S.hostIssue=null;S.connectStage='正在建立 SSH 连接并验证身份…';netBanner(null);render();cacheConnecting(d);
  try{if(S.demo){S.demo=false;S.device=null;}
-  const r=await rpc('connect',{id:d.id,password,...(remember===undefined?{}:{remember})},stage=>{S.connectStage=stage;render();});
+  const r=await rpc('connect',{id:d.id,password,...(remember===undefined?{}:{remember}),...(o.auto?{auto:true}:{})},stage=>{S.connectStage=stage;render();});
   S.loading=false;clearTerminals();S.device=r.device;if(r.devices)S.devices=r.devices;S.account=null;S.records=[];S.statusSupported=true;hostCheck(r.host);linkAdd(r.device);
   if(r.ready){if(!cacheResume())setTab('live');}else{render();setupBridge({upgrade:!!r.upgrade,fromConnect:true});}
  }catch(e){S.loading=false;S.device=null;S.connectError=e.message||String(e);S.connectFail={device:d.id,d,code:e.code||'',info:e.info||null,password,remember};cacheAbandon();
@@ -166,6 +167,7 @@ async function doConnect(d,password='',remember){
   // The computer shown before is still connected: back to it, with the failure on the devices page.
   if(back&&linkConnected(back)){viewTake(back);S.tab='devices';}
   render();
+  if(o.auto)return;
   if(e.code==='hostkey_new')trustSheet(S.connectFail);
   else if(e.code==='hostkey_changed')changedSheet(S.connectFail);
   else if(!e.info?.jump&&(e.code==='auth'||(!e.code&&/auth fail|authentication/i.test(S.connectError))))connectionPassword(d,'密码不对，再试一次');}
@@ -215,12 +217,13 @@ async function installBridge(){
 
 // ─── Herdr on the computer ──────────────────────────────────────────────────
 // `doctor` (bridge) says whether Herdr is installed and running; problems show as a calm banner.
-function hostCheck(h){if(!h){S.hostIssue=null;return;}
- if(h.herdr===false)S.hostIssue={title:'电脑上没找到 Herdr',text:'这个 SSH 用户的 PATH 和 ~/.local/bin 里都没有 herdr。装好后点「重新检查」。'};
- else if(h.error)S.hostIssue={title:'Herdr 读不到',text:h.error};
+// No Herdr is not a problem: the computer is used for its tmux sessions only (tmux.js), no banner.
+function hostCheck(h){if(!h){S.hostIssue=null;return;}if('tmux' in h)S.hostTmux=h.tmux;
+ if(h.herdr===false){S.herdr=false;S.hostIssue=null;return;}
+ S.herdr=true;if(h.error)S.hostIssue={title:'Herdr 读不到',text:h.error};
  else if(h.running===0)S.hostIssue={title:'Herdr 没在运行',text:'在电脑上打开 Herdr（至少开一个会话），再点「重新检查」。'};
  else S.hostIssue=null;}
-async function recheckHost(b){if(b)b.disabled=true;try{hostCheck(await remote('doctor'));if(!S.hostIssue){toast('Herdr 正常');if(S.tab==='live')loadLive();}else toast(S.hostIssue.title);}catch(e){error(e);}finally{if(b)b.disabled=false;if(!S.chat)render();}}
+async function recheckHost(b){if(b)b.disabled=true;try{hostCheck(await remote('doctor'));if(!S.hostIssue){toast(S.herdr===false?(S.hostTmux===false?'还是没找到 Herdr 和 tmux':'没装 Herdr，只用 tmux'):'Herdr 正常');if(S.tab==='live')loadLive();}else toast(S.hostIssue.title);}catch(e){error(e);}finally{if(b)b.disabled=false;if(!S.chat)render();}}
 
 // ─── Banners ────────────────────────────────────────────────────────────────
 // Under the top bar of list pages: connecting progress, a failed connect, or a host problem.
@@ -275,7 +278,7 @@ function netEvent(e){
 function netForeground(){if(S.net==='failed')netRetry();}
 
 // ─── Disconnect ─────────────────────────────────────────────────────────────
-async function disconnect(show=true){await rpc('disconnect');clearTerminals();netBanner(null);[...LINKS.views.keys()].forEach(viewDrop);LINKS.ids=[];LINKS.devs.clear();Object.assign(S,{device:null,loading:false,connecting:null,connectError:'',connectFail:null,hostIssue:null,liveLoading:false,liveError:'',demo:false,records:[],agents:[],account:null,chat:null,outbox:[],activity:'',fromCache:false});S.drafts.clear();S.bindings.clear();queueClear();S.epoch++;if(show)setTab('devices');}
+async function disconnect(show=true){await rpc('disconnect');clearTerminals();netBanner(null);[...LINKS.views.keys()].forEach(viewDrop);LINKS.ids=[];LINKS.devs.clear();Object.assign(S,{device:null,loading:false,connecting:null,connectError:'',connectFail:null,hostIssue:null,herdr:null,hostTmux:null,liveLoading:false,liveError:'',demo:false,records:[],agents:[],account:null,chat:null,outbox:[],activity:'',fromCache:false});S.drafts.clear();S.bindings.clear();queueClear();S.epoch++;if(show)setTab('devices');}
 
 // ─── Several computers at once ──────────────────────────────────────────────
 // Every connected computer keeps its own SSH session (native PocketCore links, at most LINK_MAX).
@@ -287,11 +290,11 @@ const LINK_MAX=4;
 const LINKS={ids:[],devs:new Map(),views:new Map()};
 // Per-computer state on S. Everything else on S is global (tab, devices, settings, connect banner).
 const VIEW_KEYS=['device','account','agents','session','sessions','records','next','total','catalogQuery','catalogCached','catalogPending','chat','chatMode','messages','children','before','more','chatStack',
- 'drafts','bindings','outbox','activity','since','unread','stick','unseen','liveAt','liveProject','fromCache','hostIssue','statusSupported','liveError','terminalText','terminalAnsi',
+ 'drafts','bindings','outbox','activity','since','unread','stick','unseen','liveAt','liveProject','fromCache','hostIssue','herdr','hostTmux','statusSupported','liveError','terminalText','terminalAnsi',
  'qaHidden','qaShown','qaBar','qaMenu','qaAsked','historyNote','search','pendingPane','net','reconnecting'];
 function viewBlank(){return {device:null,account:null,agents:[],session:'',sessions:[],records:[],next:null,total:0,catalogQuery:'',catalogCached:false,catalogPending:undefined,chat:null,chatMode:'conversation',
  messages:[],children:[],before:0,more:false,chatStack:[],drafts:new Map(),bindings:new Map(),outbox:[],activity:'',since:new Map(),unread:new Set(),stick:true,unseen:0,liveAt:0,liveProject:'',
- fromCache:false,hostIssue:null,statusSupported:true,liveError:'',terminalText:'',terminalAnsi:'',qaHidden:'',qaShown:'',qaBar:'',qaMenu:null,qaAsked:'',historyNote:'',search:'',pendingPane:null,net:null,reconnecting:false};}
+ fromCache:false,hostIssue:null,herdr:null,hostTmux:null,statusSupported:true,liveError:'',terminalText:'',terminalAnsi:'',qaHidden:'',qaShown:'',qaBar:'',qaMenu:null,qaAsked:'',historyNote:'',search:'',pendingPane:null,net:null,reconnecting:false};}
 // Keyed by draft key (session/agent identity): queue, attached pictures and files, slash command cards.
 function viewMaps(){return [Q,IMG,FILES,SL.cards];}
 function linkConnected(id){return !!id&&LINKS.ids.includes(id);}

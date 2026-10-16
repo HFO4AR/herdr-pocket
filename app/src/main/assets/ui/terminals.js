@@ -49,7 +49,8 @@ function terminalsPage(main){
  const info=el('div','grow');info.append(el('div','card-title','SSH 终端'),el('div','card-meta truncate',(S.device?.user||'')+'@'+(S.device?.host||'')));
  const side=el('div','row-side');side.append(el('span','badge '+(live?'ok':T.shell?'muted':'plain'),live?'已打开':T.shell?'已结束':'打开'));
  open.append(av,info,side);sshCard.append(open);main.append(sshCard);
- // 2. Herdr's plain panes (not agents), grouped by workspace.
+ // 2. Herdr's plain panes (not agents), grouped by workspace. No Herdr: tmux lives in 会话.
+ if(S.herdr===false){main.append(el('p','fine','这台电脑没装 Herdr。tmux 会话在「会话」里打开；这里的 SSH 终端是手机自己开的 shell。'));pullRefresh(main,loadPanes);return;}
  const label=el('div','section-label group-label');label.append(el('span','','电脑上的 Herdr 窗格'),el('span','group-count',T.loading&&!T.panes.length?'…':String(T.panes.length)));main.append(label);
  if(!T.panes.length){if(T.loading)skeleton(main,2);else{const n=el('div','empty small');n.append(el('h2','','没有普通窗格'),el('p','','Agent 在「会话」里；这里只列出 Herdr 里没跑 Agent 的终端。'));main.append(n);}}
  const groups=new Map();for(const p of T.panes){const k=p.workspace_label||'工作区';if(!groups.has(k))groups.set(k,[]);groups.get(k).push(p);}
@@ -64,7 +65,7 @@ function terminalsPage(main){
 }
 async function loadPanes(){
  if(!S.device||T.loading)return;T.loading=true;const epoch=S.epoch;if(S.tab==='terminals'&&!T.view&&!S.chat)render();
- try{const sessions=await remote('sessions');if(epoch!==S.epoch)return;S.sessions=sessions.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';
+ try{const sessions=await remote('sessions');if(epoch!==S.epoch)return;S.herdr=sessions.herdr!==false;S.sessions=sessions.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';
  const result=S.session?await remote('panes',{session:S.session}):{panes:[]};if(epoch!==S.epoch)return;T.panes=result.panes;
  }catch(e){if(epoch===S.epoch){T.panes=[];error(e);}}finally{T.loading=false;if(epoch===S.epoch&&S.tab==='terminals'&&!T.view)render();}
 }

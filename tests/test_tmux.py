@@ -31,8 +31,8 @@ UUID = "12345678-1234-4234-8234-123456789012"
 
 
 def row(pane, session="main", win="0", name="bash", wactive="1", index="0", pactive="1", attached="1",
-        cmd="bash", path="/home/u/proj", dead="0", panes="1", pid="4242", ppid="100"):
-    return [pid, pane, ppid, session, win, name, wactive, index, pactive, attached, cmd, path, "120", "40", dead, panes]
+        cmd="bash", path="/home/u/proj", dead="0", panes="1", pid="4242", ppid="100", title="host", sid="$0"):
+    return [pid, pane, ppid, session, win, name, wactive, index, pactive, attached, cmd, path, "120", "40", dead, panes, title, sid]
 
 
 class TmuxTests(unittest.TestCase):

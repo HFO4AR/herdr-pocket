@@ -69,7 +69,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_sessions_only_exposes_public_fields(self):
         self.assertEqual(bridge.handle({"v": 1, "op": "sessions"}),
-                         {"sessions": [{"name": "default", "running": True, "default": None}]})
+                         {"herdr": True, "sessions": [{"name": "default", "running": True, "default": None}]})
 
     def test_duplicate_prompt_is_sent_once_and_text_is_one_argument(self):
         req = self.request()

@@ -26,6 +26,8 @@ async function openCreate(){
  if(!S.session&&!S.demo){toast('还没读到 Herdr 会话，刷新一下');return;}
  if(NEW.busy){toast('上一个还在新建，稍等一下');return;}
  const box=sheet('新建会话');box.classList.add('new-sheet');
+ // Just a terminal: a new tmux session instead of an agent (tmux.js).
+ if(!S.demo&&typeof tmuxCan==='function'&&tmuxCan()){const t=menuItem(box,'新建 tmux 会话',tmuxNewSheet,'terminal','不开 Agent，只开一个终端');t.classList.add('new-tmux');}
  const body=el('div','new-body');box.append(body);
  const cached=NEW.infoSession===S.session?NEW.info:null;
  if(cached)createForm(body,cached);else body.append(el('div','loading','读取目录和工作区…'));

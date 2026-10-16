@@ -142,7 +142,7 @@ assert.equal(await page.getByText(/Unknown operation/).count(),0,'no error for a
 console.log('PASS: no tmux, no section; an old bridge stays quiet');
 
 // ── 8. Small screen ──
-await page.evaluate(()=>{fx.tmuxKnown=true;fx.tmux=[{pane_id:'%7',identity:'tm-7',session:'a-very-long-session-name-for-testing',window_index:3,window_name:'an-equally-long-window-name',pane_index:0,window_panes:1,active:true,attached:true,command:'python3',cwd:'/home/u/some/really/deep/project/folder/that/goes/on',width:200,height:50}];TX.supported=true;TX.dev='';});
+await page.evaluate(()=>{fx.tmuxKnown=true;fx.tmux=[{pane_id:'%7',identity:'tm-7',session:'a-very-long-session-name-for-testing',window_index:3,window_name:'an-equally-long-window-name',pane_index:0,window_panes:1,active:true,attached:true,command:'python3',cwd:'/home/u/some/really/deep/project/folder/that/goes/on',width:200,height:50}];TX.by.clear();});
 await page.setViewportSize({width:320,height:640});
 await page.evaluate(()=>loadLive());await rows.first().waitFor();
 assert.equal(await overflow(),false,'no sideways scroll at 320 px');

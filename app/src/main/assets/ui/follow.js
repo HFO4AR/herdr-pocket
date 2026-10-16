@@ -25,7 +25,7 @@ function followHint(cur){
  if(titleOf(cur)!==titleOf(c.agent))followNow(1500);}
 function followNow(delay=0){clearTimeout(FOLLOW.timer);FOLLOW.timer=setTimeout(()=>{if(FOLLOW.busy||Date.now()-FOLLOW.last<3000)followNow(3000);else followRun();},delay);}
 async function followRun(){
- const c=S.chat;if(!c?.agent||FOLLOW.busy||!FOLLOW.supported||S.demo||!S.device||!S.session||c.exited?.gone)return;
+ const c=S.chat;if(!c?.agent||FOLLOW.busy||!FOLLOW.supported||S.demo||!S.device||!(S.session||c.agent.tmux)||c.exited?.gone)return;
  FOLLOW.busy=true;FOLLOW.last=Date.now();
  try{const r=await remote('agents',{session:S.session,target:c.agent.pane_id,identity:c.agent.identity});
   if(S.chat!==c)return;

@@ -60,7 +60,12 @@ const HELP=[
  {id:'sessions',title:'新建和关闭会话',parts:[
   {id:'sessions-new',h:'新建',body:[
    '「会话」页右上角的「新建」：选 Codex、Claude 或 Claude · ch（电脑上装了 Herdr 能启动的其他 Agent，比如 OpenCode，也会列出来），选目录（这台手机最近用过的排在前面），选放进已有工作区的新标签页还是新工作区，还可以顺手写第一条消息。',
-   '不会抢走电脑上的焦点。结果不确定时 App 不会自己重试，回列表刷新看看。']},
+   '不会抢走电脑上的焦点。结果不确定时 App 不会自己重试，回列表刷新看看。',
+   '只要一个终端：选「新建 tmux 会话」，名字可不填，选个目录，开好直接打开它的终端。电脑上没装 Herdr 时，「新建」就是新建 tmux 会话。']},
+  {id:'sessions-tmux',h:'tmux',body:[
+   '电脑上的 tmux 会话列在「会话」里（只读你这个 SSH 用户的默认 tmux）。窗格里跑着 Claude Code 或 Codex 时，它按 Agent 显示，能看对话、发消息；能确认是哪段记录才显示对话，确认不了就先看终端。',
+   '还没做的：tmux 里的 Agent 不排队、不带图片和文件，提问请在「终端」里用按键回答，也不会在后台提醒。',
+   '左滑或长按一行可以关闭：只关这个窗格（窗口），或者结束整个 tmux 会话。开着 Herdr 的会话只能单独关窗格。']},
   {id:'sessions-close',h:'关闭',body:[
    '在列表里左滑或长按一行，或者在对话里点「更多操作 → 关闭会话」。有两种：',
    ['「结束 Agent，保留终端」：Agent 空闲时，用它自己的退出命令退出，窗格留下。','「关闭整个窗格」：窗格里的进程都会结束。'],
@@ -122,7 +127,8 @@ const HELP=[
    'App 被系统杀掉后，连接、草稿和排队的消息会丢，保存的设备和密码不受影响，重新打开再连就行。']},
   {id:'faq-herdr',h:'提示 Herdr 没找到或没在运行',body:[
    ['「电脑上没找到 Herdr」：桥接程序在这个 SSH 用户的 PATH 和 `~/.local/bin` 里找 `herdr`。装在别处的话，在 `~/.local/bin` 放一个链接。','「Herdr 没在运行」：在电脑上打开 Herdr，至少开一个会话。','Herdr 要用你 SSH 登录的同一个用户运行。'],
-   '处理好后点横幅上的「重新检查」。']}]}];
+   '处理好后点横幅上的「重新检查」。',
+   '没装 Herdr 也能用：App 不提示错误，「会话」里只显示这台电脑的 tmux 会话；装好 Herdr 后刷新一下就回来了。']}]}];
 
 // Error codes from the native layer (ConnectErrors.kt) → the part that explains them.
 const HELP_TOPIC={hostkey_new:'start-fingerprint',hostkey_changed:'start-fingerprint',python_missing:'start-bridge',python_old:'start-bridge',install_failed:'start-bridge',key_rejected:'keys-fail',key_method:'keys-fail',key_missing:'keys-make'};

@@ -64,6 +64,9 @@ object PocketCore {
         private set
     lateinit var identity: SshIdentity
         private set
+    /** Computers to reconnect on the next launch (启动时自动重连). */
+    lateinit var resume: ResumeSet
+        private set
     // Connected computers in connection order; guarded by [linksLock].
     private val links = LinkedHashMap<String, Link>()
     private val linksLock = Any()
@@ -77,6 +80,7 @@ object PocketCore {
     /** Events for the UI with the computer they are about: (type, detail, device id). */
     @Volatile var linkListener: ((String, String, String) -> Unit)? = null
     @Volatile private var network: Network? = null
+    private var connectivity: ConnectivityManager? = null
     // Background bookkeeping is process-wide: the activity can be destroyed (swiped from recents)
     // while the keep-alive service holds the sessions, and a new activity resumes them.
     @Volatile private var backgroundAt = 0L
@@ -93,6 +97,8 @@ object PocketCore {
         settings = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
         cache = LocalCache(app)
         identity = SshIdentity(app)
+        resume = ResumeSet(app.getSharedPreferences(ResumeSet.FILE, Context.MODE_PRIVATE))
+        connectivity = try { app.getSystemService(ConnectivityManager::class.java) } catch (_: Exception) { null }
         bridge = app.assets.open("pocket_bridge.py").use { it.readBytes() }
         watchNetwork(app)
     }
@@ -145,10 +151,17 @@ object PocketCore {
                     val before = network
                     network = available
                     if (before != null && before != available) links().forEach { it.suspect = true }
+                    // A launch that found no network waits for this before reconnecting (resume.js).
+                    linkListener?.invoke("online", "", "")
                 }
             })
         } catch (_: Exception) { }
     }
+
+    /** The phone has a default network right now (true when that cannot be read). */
+    fun online(): Boolean = try { connectivity?.let { it.activeNetwork != null } ?: true } catch (_: Exception) { true }
+
+    val autoResumeEnabled get() = settings.getBoolean("autoResume", true)
 
     /** The sessions may be stale: replace them make-before-break before their next request. */
     fun markSuspect() { links().forEach { it.suspect = true } }
@@ -207,9 +220,10 @@ object PocketCore {
     /**
      * First connection from the UI; host-key trust is decided by the caller. Other connected computers
      * stay connected; connecting one that is already connected replaces only its own session. The new
-     * computer becomes the active one.
+     * computer becomes the active one, unless [background] (reconnected at launch while another one is
+     * on screen): then it only becomes active when nothing else is.
      */
-    fun connect(device: JSONObject, password: String, progress: (String) -> Unit) {
+    fun connect(device: JSONObject, password: String, background: Boolean = false, progress: (String) -> Unit) {
         val id = device.getString("id")
         synchronized(linksLock) {
             if (!links.containsKey(id) && links.size >= MAX_LINKS)
@@ -226,7 +240,11 @@ object PocketCore {
         val old = synchronized(linksLock) {
             // Another connect may have filled the last slot meanwhile.
             if (!links.containsKey(id) && links.size >= MAX_LINKS) { full = true; null }
-            else { val previous = links.remove(id); links[id] = link; activeId = id; previous }
+            else {
+                val previous = links.remove(id); links[id] = link
+                if (!background || activeId == null || !links.containsKey(activeId)) activeId = id
+                previous
+            }
         }
         if (full) { link.transport.close(); throw Friendly("too_many", "最多同时连 $MAX_LINKS 台电脑，先断开一台再连这台") }
         old?.let { synchronized(it.lock) { retire(it) } }

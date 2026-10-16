@@ -114,6 +114,8 @@ class WatchService : Service() {
             // 断开 on the notification: end every session for real; the app shows the devices page.
             PocketCore.stats.notificationDisconnects.incrementAndGet()
             if (PocketCore.hasLinks) { PocketCore.disconnect(); PocketCore.announce("disconnected") }
+            // Disconnected on purpose: nothing is reconnected on the next launch.
+            PocketCore.resume.clear()
             end(); return START_NOT_STICKY
         }
         if (!PocketCore.hasLinks) { end(); return START_NOT_STICKY }

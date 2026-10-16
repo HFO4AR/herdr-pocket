@@ -129,7 +129,7 @@ setInterval(()=>{if(!S.active)return;document.querySelectorAll('[data-since]').f
 
 // ─── App shell & navigation ─────────────────────────────────────────────────
 const TABS=[['live','chat','会话'],['history','history','历史'],['terminals','terminal','终端'],['devices','device','设备'],['settings','settings','设置']];
-function setTab(tab){leaveTerminal();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();if(tab==='settings')settingsLoad().then(()=>{if(S.tab==='settings'&&!S.chat&&!overlay.childElementCount)paintSettings();});}
+function setTab(tab){if(tab==='history'&&noHerdr())tab='live';leaveTerminal();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();if(tab==='settings')settingsLoad().then(()=>{if(S.tab==='settings'&&!S.chat&&!overlay.childElementCount)paintSettings();});}
 function shell(){app.replaceChildren();const root=el('div','shell');app.append(root);if(S.demo)root.append(el('div','demo-banner','离线演示 · 示例数据，不连接电脑'));return root;}
 function header(root){
  const bar=el('header','topbar');const title=(TABS.find(t=>t[0]===S.tab)||[])[2]||'Herdr Pocket';bar.append(el('h1','',title));
@@ -147,7 +147,8 @@ function render(){
  if(S.tab==='live')livePage(main);else if(S.tab==='history')historyPage(main);else if(S.tab==='terminals')terminalsPage(main);else if(S.tab==='settings')settingsPage(main);else devicesPage(main);
  const nav=el('nav','bottom-nav');nav.setAttribute('aria-label','主导航');
  const waiting=S.agents.filter(a=>a.agent_status==='blocked'||glanceAsks(a)).length;
- TABS.forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waiting){const badge=el('span','nav-badge',String(waiting));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waiting+' 个 Agent 等你确认';}if(tab==='settings'&&settingsBadge()){n.append(el('span','nav-dot'));n.title='有新版本';}nav.append(n);});
+ // Without Herdr there are no transcripts to browse here: 历史 is left out.
+ TABS.filter(([tab])=>tab!=='history'||!noHerdr()).forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waiting){const badge=el('span','nav-badge',String(waiting));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waiting+' 个 Agent 等你确认';}if(tab==='settings'&&settingsBadge()){n.append(el('span','nav-dot'));n.title='有新版本';}nav.append(n);});
  root.append(nav);}
 function requireDevice(main){if(S.device||cacheBrowsing())return true;if(S.loading){loadingCard(main,'连接正在进行','连接成功后会自动读取会话，请稍候。');return false;}empty(main,'先连接你的电脑','连接后，在线会话、历史记录和终端会出现在这里。',btn('选择设备','primary',()=>setTab('devices')));return false;}
 function searchBox(placeholder,change,value=''){const box=el('div','search');const input=el('input');input.type='search';input.placeholder=placeholder;input.value=value;input.setAttribute('aria-label',placeholder);input.setAttribute('enterkeyhint','search');
@@ -234,7 +235,7 @@ function livePage(main){
  function draw(){list.replaceChildren();const q=S.agents.length>8?S.search.trim().toLowerCase():'';const matches=S.agents.filter(a=>liveMatch(a,q)&&(!S.liveProject||(projectOf(a)||'其他')===S.liveProject));
   if(!matches.length){
    if(q||S.liveProject)empty(list,'没有匹配的 Agent','换个关键词，或者看看全部会话。',btn('清除筛选','secondary',()=>{S.search='';S.liveProject='';render();}));
-   else empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&S.session?createButton():undefined);
+   else empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&(S.session||tmuxCan())?createButton():undefined);
    return;}
   // 子 Agent 运行中 (kids.js) sits with 执行中: the agent is not done while its sub-agents work.
   // An idle Codex with an unanswered question (glance.js) waits for you too.
@@ -253,7 +254,10 @@ function switchSession(name){
  if(S.tab==='terminals')loadPanes();else loadLive();toast('切到 Herdr 会话「'+name+'」');}
 async function loadLive(){
  if(!S.device)return;const epoch=++S.epoch;S.liveLoading=S.agents.length?'agents':'sessions';S.liveError='';if(!S.agents.length)cacheShowLive();if(S.tab==='live'&&!S.chat)render();
- try{const r=await remote('sessions');if(epoch!==S.epoch)return;S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];S.fromCache=false;return;}
+ try{const r=await remote('sessions');if(epoch!==S.epoch)return;
+  // No Herdr on this computer (bridge flag): no sessions, no agents, no error; tmux.js shows tmux only.
+  S.herdr=r.herdr!==false;if(r.herdr===false){S.hostIssue=null;S.sessions=[];S.session='';S.agents=[];S.fromCache=false;if('tmux' in r)S.hostTmux=r.tmux;return;}
+  S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];S.fromCache=false;return;}
   S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
   const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();glanceRefresh(true);if(S.pendingPane){S.liveLoading=false;openPending();return;}}
  catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
@@ -266,7 +270,7 @@ async function refreshStatus(){
   if(next.length!==S.agents.length)changed=true;
   const fresh=next.filter(a=>!known.has(a.pane_id)||known.get(a.pane_id).identity!==a.identity);
   noteStatus(next);S.agents=next;S.liveAt=Date.now();document.querySelectorAll('[data-fmt="upd"]').forEach(n=>{n.dataset.since=S.liveAt;});if(changed){syncWatch();cacheLive();}
-  if(S.chat?.agent){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);followHint(cur);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status};onAgentStatus(was,cur.agent_status);}}
+  if(S.chat?.agent&&!S.chat.agent.tmux){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);followHint(cur);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status};onAgentStatus(was,cur.agent_status);}}
   if(fresh.length&&S.tab==='live'&&!S.chat){loadLive();return;}
   if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}
  catch(e){if(/Unknown operation|不支持的操作/.test(e.message))S.statusSupported=false;}
@@ -397,8 +401,9 @@ function renderComposer(){
  const key=draftKey();let live=document.getElementById('live-state'),compose=footer.querySelector('.composer');
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
  if(offline){live.replaceChildren(el('div','compose-note','正在连接 · 显示的是上次的缓存，连上后才能发送'));}else renderLiveState(live,a);
- const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status,later=!offline&&(st==='working'||st==='blocked');
- input.placeholder=offline?'可以先写，连上再发':st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':S.chat.noTranscript?'发给 '+providerName(a.agent)+'…'+(slashKnown(a)?'（/ 看命令）':''):'说点什么，继续这段对话…（/ 看命令）';
+ const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status,later=!offline&&!a.tmux&&(st==='working'||st==='blocked');
+ // An agent in tmux has no send queue here: it takes what is typed while it works (tmux.js).
+ input.placeholder=offline?'可以先写，连上再发':a.tmux&&st==='working'?'它在忙，发出去会进它的输入框':a.tmux&&st==='blocked'?'它在等你确认，先在「终端」里回答':st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':S.chat.noTranscript?'发给 '+providerName(a.agent)+'…'+(slashKnown(a)?'（/ 看命令）':''):'说点什么，继续这段对话…（/ 看命令）';
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
  // Busy agent: the button says it will queue, so sending never looks like it failed.
  send.classList.toggle('later',later);send.querySelector('.send-label').textContent=later?'排队':'';send.title=offline?'连上后才能发送':later?'先排队，它停下就发':'发送';
@@ -459,7 +464,7 @@ async function sendMessage(input){
   if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;if(!card)S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
   S.stick=true;paintTimeline();if(card)slashCapture(card);if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);
   if(S.chat?.noTranscript&&!card){toast('发给 '+providerName(a.agent)+' 了，回复看终端');setTimeout(()=>{if(epoch===S.epoch)fetchTerminal(true);},900);}}
- catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
+ catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&!a.tmux&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
  finally{S.sendBusy=Math.max(0,(S.sendBusy||1)-1);button.disabled=!input.value.trim()&&!attCount(key);}}
 // The send button answers the press at once (the haptic comes from native.js); the bubble follows.
 let sendSeq=0;
@@ -658,7 +663,7 @@ function pollBeat(){
  else if(S.tab==='live'&&tick%(listHot()?2:6)===0)refreshStatus().then(()=>glanceRefresh());}
 setInterval(pollBeat,POLL_BEAT);
 
-async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;settingsLoad().then(updateAutoCheck);linkBoot(r);if(r.connected&&!S.device){S.device=r.connected;setTab('live');return;}render();}catch(e){error(e);}}
+async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;settingsLoad().then(updateAutoCheck);linkBoot(r);if(r.connected&&!S.device){S.device=r.connected;setTab('live');resumeBoot(r);return;}render();resumeBoot(r);}catch(e){error(e);}}
 // terminals.js is a later <script>: start once every script has run, or a fast native reply
 // can reach code that is not defined yet.
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();

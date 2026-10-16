@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import shlex
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -77,6 +78,13 @@ def herdr_error(raw):
     return None
 
 
+HERDR_MISSING = "电脑上没找到 Herdr（这个 SSH 用户的 PATH 和 ~/.local/bin 里都没有）。装好 Herdr 再刷新。"
+
+
+class HerdrMissing(BridgeError):
+    """No herdr executable: every Herdr op fails with this, before anything runs."""
+
+
 def call(args, timeout=20):
     binary = shutil.which("herdr") or str(Path.home() / ".local/bin/herdr")
     env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
@@ -86,7 +94,8 @@ def call(args, timeout=20):
     except subprocess.TimeoutExpired as exc:
         raise BridgeError("Herdr timeout; mutation outcome may be unknown. Do not resend blindly.") from exc
     except OSError as exc:
-        raise BridgeError("电脑上没找到 Herdr（这个 SSH 用户的 PATH 和 ~/.local/bin 里都没有）。装好 Herdr 再刷新。") from exc
+        # Not installed (or not executable): a clean refusal, nothing ran.
+        raise HerdrMissing(HERDR_MISSING) from exc
     if result.returncode:
         raise herdr_error(result.stdout) or herdr_error(result.stderr) or BridgeError((result.stderr or result.stdout or "Herdr command failed")[:2000])
     # Herdr 0.8.x agent read emits plain text, while list/control emit JSON.
@@ -120,9 +129,11 @@ def herdr_binary():
 
 
 def doctor():
-    """Read-only first-run check: is Herdr installed for this user, and is any session running?"""
+    """Read-only first-run check: is Herdr installed for this user, is any session running, and is
+    tmux there (a computer without Herdr is used for its tmux sessions only)?"""
     import platform
-    result = {"python": platform.python_version(), "herdr": herdr_binary() is not None, "running": None}
+    result = {"python": platform.python_version(), "herdr": herdr_binary() is not None, "running": None,
+              "tmux": tmux_binary() is not None}
     if result["herdr"]:
         try: result["running"] = sum(1 for s in sessions() if s.get("running"))
         except BridgeError as exc: result["error"] = str(exc)[:300]
@@ -3534,6 +3545,20 @@ def receipt_open(state_dir, req_id, digest, unknown="上次新建的结果未知
     return db, None
 
 
+def receipt_peek(state_dir, req_id, digest):
+    """The stored result of a request already handled, without claiming the id; None if new.
+    An id whose outcome is unknown or that came with other content raises like receipt_open."""
+    path = state_dir / "receipts.sqlite"
+    if not path.exists(): return None
+    with closing(sqlite3.connect(path, timeout=5)) as db:
+        try: previous = db.execute("SELECT digest, result FROM receipts WHERE id=?", (req_id,)).fetchone()
+        except sqlite3.Error: return None
+    if not previous: return None
+    if previous[0] != digest: raise BridgeError("Request id reused with different content")
+    if previous[1] is None: raise BridgeError("上次的结果未知：先刷新列表看看，别直接重试")
+    return json.loads(previous[1])
+
+
 def receipt_save(db, req_id, result):
     db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
     db.commit()
@@ -3799,34 +3824,53 @@ def close_pane(request, prefix, state_dir):
         db.close()
 
 
-# ─── tmux (0.6): the SSH user's own tmux sessions, shown as terminal screens ─────────────────
+# ─── tmux (0.6): the SSH user's own tmux sessions ─────────────────────────────────────────────
 # Only the user's default tmux server is used (no -L/-S; $TMUX is dropped so a bridge started
 # inside tmux does not pick that server by accident; TMUX_TMPDIR is honored like tmux itself
-# does). Commands are argv lists, never shell strings, and none of them can start a server:
-# list-panes, capture-pane (reads) and send-keys / load-buffer / paste-buffer (input).
+# does). Commands are argv lists, never shell strings. Only tmuxNew can start a server (the
+# person asked for a new session); every other command needs one already running.
 #  · tmux: list panes (no server running → empty, not an error). Panes running the Herdr client
-#    are left out: those agents are already in the app.
+#    are left out: those agents are already in the app. A pane whose process tree holds exactly
+#    one Claude Code / Codex process is listed as that agent (`agent`), with its state read
+#    from the screen; `resolve: true` also locates its transcript the way Herdr panes are
+#    resolved (process FDs, native session dir, argv, title; never a guess).
 #  · tmuxRead: one pane's screen plus recent scrollback, colors as SGR only (clean_ansi).
 #  · tmuxSend: text, text + Enter, or one named key into one pane. Same rules as Herdr pane
 #    input: a UUID receipt is committed before anything is written, a request is never run
 #    twice, and a failure after the first write leaves the outcome unknown.
+#  · tmuxInfo / tmuxNew: directories to offer, then `tmux new-session -d -s NAME -c DIR`.
+#  · tmuxKill: close one pane or one whole session (never one holding the Herdr client).
+#  · Agent ops (agents with a target, read, prompt, key, commands) aimed at a tmux pane id are
+#    served here for a detected agent; prompts go in through tmuxSend's receipts.
 # Panes are addressed by tmux's own id (%N) plus an identity hash (server pid, pane id, pane
 # pid), so a pane that was closed and whose id came back in a new server is never written to.
+# An agent in a pane is addressed by a second identity that adds the agent process (pid, start
+# time): when it exits or is replaced, input aimed at it is refused.
 # tmux on another computer behind a ch-cli route is not listed: local only.
 TMUX_PANE_ID = re.compile(r"%\d{1,9}")
 TMUX_SEP = "\x1f"
-TMUX_FORMAT = TMUX_SEP.join("#{%s}" % f for f in (
-    "pid", "pane_id", "pane_pid", "session_name", "window_index", "window_name", "window_active",
-    "pane_index", "pane_active", "session_attached", "pane_current_command", "pane_current_path",
-    "pane_width", "pane_height", "pane_dead", "window_panes"))
+TMUX_FIELDS = ("pid", "pane_id", "pane_pid", "session_name", "window_index", "window_name", "window_active",
+               "pane_index", "pane_active", "session_attached", "pane_current_command", "pane_current_path",
+               "pane_width", "pane_height", "pane_dead", "window_panes", "pane_title", "session_id")
+TMUX_FORMAT = TMUX_SEP.join("#{%s}" % f for f in TMUX_FIELDS)
 TMUX_MAX = 64
 TMUX_SCROLL = 200
 TMUX_TEXT = 16000
 TMUX_KEYS = {"up": "Up", "down": "Down", "left": "Left", "right": "Right", "enter": "Enter", "esc": "Escape",
-             "ctrl+c": "C-c", "ctrl+d": "C-d", "tab": "Tab", "backspace": "BSpace"}
+             "ctrl+c": "C-c", "ctrl+d": "C-d", "tab": "Tab", "backspace": "BSpace", "shift+tab": "BTab"}
 TMUX_SEND_KEYS = {"v", "op", "id", "target", "identity", "action", "text", "key"}
 TMUX_SKIP = ("herdr",)
 TMUX_NO_SERVER = re.compile(r"(?i)no server running|error connecting to|no such file or directory|server exited")
+# Foreground commands that cannot be an agent: no process walk for these panes.
+TMUX_SHELLS = {"bash", "zsh", "sh", "fish", "dash", "ksh", "tcsh", "csh", "login", "tmux", "less", "man", "top", "htop", "vim", "nvim", "vi", "nano", "emacs"}
+TMUX_AGENTS = ("claude", "codex")
+TMUX_AGENT_SCREENS = 24        # agent panes whose screen is read for their state, per list
+TMUX_WORKING = re.compile(r"(?i)\besc to interrupt\b")
+TMUX_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}")
+TMUX_SESSION_ID = re.compile(r"\$\d{1,9}")
+TMUX_NEW_KEYS = {"v", "op", "id", "name", "cwd"}
+TMUX_KILL_KEYS = {"v", "op", "id", "target", "identity", "scope"}
+UUID_ID = re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
 
 
 class TmuxFailed(BridgeError):
@@ -3857,8 +3901,13 @@ def tmux_int(value):
     except (TypeError, ValueError): return 0
 
 
+def tmux_public(pane):
+    return {k: v for k, v in pane.items() if not k.startswith("_")}
+
+
 def tmux_panes():
-    """Every live pane of the user's default tmux server, in session / window / pane order."""
+    """Every live pane of the user's default tmux server, in session / window / pane order.
+    Private keys (_pid, _sid, _title) stay in the bridge; tmux_public strips them."""
     if not tmux_binary(): return None
     try: out = tmux_run(["list-panes", "-a", "-F", TMUX_FORMAT])
     except TmuxFailed as exc:
@@ -3867,48 +3916,157 @@ def tmux_panes():
     found = []
     for line in out.split("\n"):
         parts = line.split(TMUX_SEP)
-        if len(parts) != 16: continue
+        if len(parts) != len(TMUX_FIELDS): continue
         (server, pane_id, pane_pid, session, win, win_name, win_active, pane_index, pane_active,
-         attached, command, path, width, height, dead, win_panes) = parts
+         attached, command, path, width, height, dead, win_panes, title, session_id) = parts
         if not TMUX_PANE_ID.fullmatch(pane_id) or dead == "1" or command in TMUX_SKIP: continue
         ident = hashlib.sha256(json.dumps(["tmux", server, pane_id, pane_pid]).encode()).hexdigest()
         found.append({"pane_id": pane_id, "identity": ident, "session": session[:120], "window_index": tmux_int(win),
                       "window_name": win_name[:120], "pane_index": tmux_int(pane_index), "window_panes": tmux_int(win_panes),
                       "active": pane_active == "1" and win_active == "1", "attached": tmux_int(attached) > 0,
-                      "command": command[:80], "cwd": path[:400], "width": tmux_int(width), "height": tmux_int(height)})
+                      "command": command[:80], "cwd": path[:400], "width": tmux_int(width), "height": tmux_int(height),
+                      "_pid": tmux_int(pane_pid), "_sid": session_id if TMUX_SESSION_ID.fullmatch(session_id) else "",
+                      "_title": title[:200]})
         if len(found) >= TMUX_MAX: break
     return found
 
 
-def tmux_target(request):
-    """The pane the request names, re-checked against the live server; raises if it changed."""
+# ─── Agents inside tmux panes ───────────────────────────────────────────────
+def tmux_agent_in(pane):
+    """The one Claude Code / Codex process in a pane's process tree (argv, cwd and FD links only,
+    like probe_pane). None for a shell, for nothing found, or for more than one agent."""
+    if pane.get("command") in TMUX_SHELLS or pane.get("_pid", 0) <= 0: return None
+    queue, seen, found = [pane["_pid"]], set(), []
+    while queue and len(seen) < 64:
+        pid = queue.pop(0)
+        if pid in seen: continue
+        seen.add(pid)
+        snapshot = process_snapshot(pid)
+        if not snapshot: continue
+        kind = next((k for k in TMUX_AGENTS if is_agent_process(snapshot["argv"], k)), None)
+        # A nested agent belongs to its parent, not to this pane.
+        if kind: found.append({"kind": kind, "pid": pid, "snap": snapshot}); continue
+        queue.extend(snapshot["children"])
+    return found[0] if len(found) == 1 else None
+
+
+def tmux_agent_identity(pane, found):
+    return hashlib.sha256(json.dumps(["tmux-agent", pane["identity"], found["pid"], str(found["snap"].get("start"))]).encode()).hexdigest()
+
+
+def tmux_screen_state(text, kind):
+    """blocked (a menu waits), working (the footer offers to interrupt) or idle, from the screen."""
+    if parse_menu(text, kind): return "blocked"
+    tail = [x for x in str(text or "").split("\n") if x.strip()][-12:]
+    return "working" if any(TMUX_WORKING.search(x) for x in tail) else "idle"
+
+
+def tmux_visible(pane_id):
+    try: return tmux_run(["capture-pane", "-p", "-J", "-t", pane_id])
+    except BridgeError: return None
+
+
+def tmux_probe(found):
+    snap, kind = found["snap"], found["kind"]
+    return {"ids": explicit_session_ids(snap["argv"], kind), "paths": set(snap.get("paths", [])),
+            "active": set(snap.get("active_threads", [])) if kind == "claude" else set(),
+            "route": None, "cwd": snap.get("cwd", ""), "remote": False, "ok": True, "native": True}
+
+
+def tmux_agent_row(pane, found, status=None, history_ref=None):
+    """The pane as the app's agent row (the same fields as a Herdr agent the list and chat use)."""
+    cwd = found["snap"].get("cwd") or pane["cwd"]
+    # tmux's default pane title is the host name: only a title the agent set says anything.
+    title = pane.get("_title", "")
+    if title.split(".")[0] in (socket.gethostname(), socket.gethostname().split(".")[0]): title = ""
+    row = {"pane_id": pane["pane_id"], "identity": tmux_agent_identity(pane, found), "agent": found["kind"],
+           "agent_status": status, "terminal_id": "tmux:" + pane["identity"], "terminal_title": title,
+           "cwd": pane["cwd"], "foreground_cwd": cwd, "tmux": True, "tmux_session": pane["session"]}
+    if history_ref is not None: row["history_ref"] = history_ref
+    return row
+
+
+def tmux_history(pane, found, catalog_cache):
+    """Same evidence as a Herdr pane (resolve_one); no ch route here (local agents only)."""
+    kind, probe = found["kind"], tmux_probe(found)
+    agent = {"agent": kind, "pane_id": pane["pane_id"], "terminal_title": pane.get("_title", ""),
+             "cwd": pane["cwd"], "foreground_cwd": probe["cwd"] or pane["cwd"]}
+    if kind == "claude" and len(probe["active"]) == 1:
+        thread = next(iter(probe["active"]))
+        entry = locate_thread(kind, thread, agent["foreground_cwd"])
+        if entry: return dict(matched(entry, "native-process"), record=public_record(entry))
+        return {"status": "pending", "thread": thread, "source": "native-process", "reason": "会话刚开始，历史文件还没写出"}
+    if "catalog" not in catalog_cache: catalog_cache["catalog"] = transcript_catalog()
+    catalog = catalog_cache["catalog"]
+    index = None
+    if kind == "codex":
+        if "codex" not in catalog_cache: catalog_cache["codex"] = (codex_thread_names(), codex_loaded_threads())
+        index = catalog_cache["codex"]
+    return with_record(resolve_agent_history(agent, [], catalog, index, probe), catalog)
+
+
+def tmux_list(request):
+    panes = tmux_panes()
+    if panes is None: return {"available": False, "panes": []}
+    resolve, cache, screens, out = request.get("resolve") is True, {}, 0, []
+    for pane in panes:
+        entry = tmux_public(pane)
+        found = tmux_agent_in(pane)
+        if found:
+            status = None
+            if screens < TMUX_AGENT_SCREENS:
+                screens += 1
+                text = tmux_visible(pane["pane_id"])
+                if text is not None: status = tmux_screen_state(text, found["kind"])
+            ref = None
+            if resolve:
+                try: ref = tmux_history(pane, found, cache)
+                except (OSError, BridgeError) as exc: ref = {"status": "unavailable", "reason": str(exc)[:200]}
+            entry["agent"] = tmux_agent_row(pane, found, status, ref)
+        out.append(entry)
+    return {"available": True, "panes": out}
+
+
+def tmux_target(request, agent=False):
+    """The pane the request names, re-checked against the live server; raises if it changed.
+    agent=True: the identity must be the agent's, and that same agent process must still run there."""
     target = request.get("target")
     if not isinstance(target, str) or not TMUX_PANE_ID.fullmatch(target): raise BridgeError("Invalid tmux pane")
     if not isinstance(request.get("identity"), str): raise BridgeError("Invalid tmux pane")
     panes = tmux_panes()
     if panes is None: raise BridgeError("电脑上没找到 tmux")
     pane = next((p for p in panes if p["pane_id"] == target), None)
+    if agent:
+        found = tmux_agent_in(pane) if pane else None
+        if not found or tmux_agent_identity(pane, found) != request["identity"]:
+            raise BridgeError("Agent changed or disappeared; reload the agent list")
+        return pane, found
     if not pane or pane["identity"] != request["identity"]:
         raise BridgeError("这个 tmux 窗格已经关了或换了，回到列表刷新一下")
     return pane
 
 
-def tmux_read(request):
-    pane = tmux_target(request)
-    try: raw = tmux_run(["capture-pane", "-p", "-e", "-J", "-t", pane["pane_id"], "-S", str(-TMUX_SCROLL)])
+def tmux_capture(pane_id):
+    try: raw = tmux_run(["capture-pane", "-p", "-e", "-J", "-t", pane_id, "-S", str(-TMUX_SCROLL)])
     except TmuxFailed as exc: raise BridgeError("读不到这个 tmux 窗格：" + str(exc)) from exc
     screen = clean_ansi(raw)
     rows = screen.split("\n")
     while rows and not strip_sgr(rows[-1]).strip(): rows.pop()
     screen = "\n".join(rows)
     while len(screen) > ANSI_LIMIT and "\n" in screen: screen = screen.split("\n", 1)[1]
-    return {"text": "\n".join(x.rstrip() for x in strip_sgr(screen).split("\n")), "ansi": screen, "pane": pane}
+    return "\n".join(x.rstrip() for x in strip_sgr(screen).split("\n")), screen
+
+
+def tmux_read(request):
+    pane = tmux_target(request)
+    text, screen = tmux_capture(pane["pane_id"])
+    return {"text": text, "ansi": screen, "pane": tmux_public(pane)}
 
 
 def tmux_send(request, state_dir):
     if set(request) - TMUX_SEND_KEYS: raise BridgeError("没发出去：请求里有不认识的字段")
     req_id = request.get("id")
-    if not isinstance(req_id, str) or not re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", req_id):
+    if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id):
         raise BridgeError("Mutation requires a UUID request id")
     action, text, key = request.get("action"), request.get("text"), request.get("key")
     if action == "key":
@@ -3934,6 +4092,8 @@ def tmux_send(request, state_dir):
     if action == "run": steps.append((["send-keys", "-t", target, "Enter"], None))
     try:
         for index, (args, data) in enumerate(steps):
+            # An agent's input box may take a paste's end and the Enter as one burst: let it settle.
+            if args[-1] == "Enter" and index and steps[index - 1][0][0] == "paste-buffer": time.sleep(0.15)
             try: tmux_run(args, data=data)
             except TmuxFailed as exc:
                 # tmux refused the first command before writing anything (pane gone): not sent.
@@ -3954,12 +4114,154 @@ def tmux_send(request, state_dir):
     return result
 
 
+# ─── New and closed tmux sessions ───────────────────────────────────────────
+def tmux_known_dirs():
+    found = set()
+    for pane in tmux_panes() or []:
+        if pane["cwd"].startswith("/"): found.add(pane["cwd"])
+    return found
+
+
+def tmux_info(request):
+    """Directories to offer for a new session: where tmux panes are now, then recent history."""
+    available = tmux_binary() is not None
+    dirs, seen = [], set()
+    for pane in (tmux_panes() or []) if available else []:
+        path = pane["cwd"]
+        try: real = os.path.realpath(path)
+        except (OSError, ValueError): continue
+        if real in seen or not path.startswith("/") or not Path(path).is_dir(): continue
+        seen.add(real); dirs.append({"path": path, "source": "tmux"})
+    try: recent = history_dirs()
+    except OSError: recent = []
+    for d in recent:
+        real = os.path.realpath(d["path"])
+        if real in seen: continue
+        seen.add(real); dirs.append({"path": d["path"], "source": "history", "modified": d["modified"]})
+    sessions = sorted({p["session"] for p in (tmux_panes() or [])}) if available else []
+    return {"available": available, "home": str(Path.home()), "dirs": dirs[:16], "sessions": sessions[:TMUX_MAX]}
+
+
+def tmux_new(request, state_dir):
+    """`tmux new-session -d [-s NAME] -c DIR`, detached (nothing on the computer's screen changes).
+    Starts the user's default tmux server when none runs: that is what the person asked for."""
+    if set(request) - TMUX_NEW_KEYS: raise BridgeError("没创建：请求里有不认识的字段")
+    req_id = request.get("id")
+    if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
+    name = request.get("name")
+    if name is not None and (not isinstance(name, str) or not TMUX_NAME.fullmatch(name)):
+        raise BridgeError("没创建：名字只能用英文字母、数字、- 和 _（最多 64 个）")
+    if not tmux_binary(): raise BridgeError("没创建：这台电脑上没找到 tmux")
+    digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    # A request already handled answers from its receipt before any check against today's state.
+    done = receipt_peek(state_dir, req_id, digest)
+    if done is not None: return done
+    panes = tmux_panes() or []
+    if name and any(p["session"] == name for p in panes): raise BridgeError("没创建：已经有叫 " + name + " 的 tmux 会话了")
+    cwd = create_dir(request.get("cwd"), lambda: tmux_known_dirs() | {d["path"] for d in history_dirs(40)})
+    db, previous = receipt_open(state_dir, req_id, digest, "上次新建的结果未知：先刷新列表看看，别直接重试")
+    if previous is not None: return previous
+    try:
+        args = ["new-session", "-d"] + (["-s", name] if name else []) + ["-c", cwd, "-P", "-F", "#{pane_id}" + TMUX_SEP + "#{session_name}"]
+        try: out = tmux_run(args, timeout=10)
+        except TmuxFailed as exc:
+            receipt_save(db, req_id, {"created": False})
+            raise BridgeError("没创建：tmux 没接受（" + str(exc)[:160] + "）") from exc
+        except BridgeError as exc:
+            raise BridgeError("新建结果未知：tmux 没及时回应。先刷新列表看看，别直接重试") from exc
+        parts = out.strip().split(TMUX_SEP)
+        pane_id = parts[0] if parts and TMUX_PANE_ID.fullmatch(parts[0]) else ""
+        result = {"created": True, "session": parts[1][:120] if len(parts) > 1 else (name or ""), "cwd": cwd, "pane": None}
+        pane = next((p for p in tmux_panes() or [] if p["pane_id"] == pane_id), None) if pane_id else None
+        if pane: result["pane"] = tmux_public(pane)
+        receipt_save(db, req_id, result)
+        return result
+    finally:
+        db.close()
+
+
+def tmux_kill(request, state_dir):
+    """Close exactly one pane (kill-pane) or its whole session (kill-session by session id)."""
+    if set(request) - TMUX_KILL_KEYS: raise BridgeError("没关：请求里有不认识的字段")
+    req_id = request.get("id")
+    if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
+    scope = request.get("scope")
+    if scope not in ("pane", "session"): raise BridgeError("没关：不支持的关闭方式")
+    digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    done = receipt_peek(state_dir, req_id, digest)
+    if done is not None: return done
+    pane = tmux_target(request)
+    if scope == "session":
+        if not pane["_sid"]: raise BridgeError("没关：读不到这个会话的编号，刷新一下")
+        try: commands = tmux_run(["list-panes", "-s", "-t", pane["_sid"], "-F", "#{pane_current_command}"]).split("\n")
+        except TmuxFailed as exc: raise BridgeError("没关：读不到这个会话（" + str(exc)[:120] + "）") from exc
+        if any(c.strip() in TMUX_SKIP for c in commands): raise BridgeError("没关：这个会话里开着 Herdr，只能单独关窗格")
+    db, previous = receipt_open(state_dir, req_id, digest, "上次关闭的结果未知：先刷新列表看看，别直接再点")
+    if previous is not None: return previous
+    try:
+        args = ["kill-pane", "-t", pane["pane_id"]] if scope == "pane" else ["kill-session", "-t", pane["_sid"]]
+        try: tmux_run(args)
+        except TmuxFailed as exc:
+            receipt_save(db, req_id, {"closed": False})
+            raise BridgeError("没关：tmux 没接受（" + str(exc)[:160] + "）") from exc
+        except BridgeError as exc:
+            raise BridgeError("关闭结果未知：tmux 没及时回应。刷新看看，别直接再点") from exc
+        result = {"closed": True, "scope": scope, "session": pane["session"]}
+        receipt_save(db, req_id, result)
+        return result
+    finally:
+        db.close()
+
+
+# ─── Agent ops aimed at a tmux pane ─────────────────────────────────────────
+TMUX_AGENT_OPS = ("agents", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent")
+
+
+def tmux_agent_request(request, state_dir):
+    op = request.get("op")
+    if op == "agents":
+        # Following a chat: what runs in the pane now ("same", "changed", "exited", "gone").
+        target = request.get("target")
+        pane = next((p for p in tmux_panes() or [] if p["pane_id"] == target), None)
+        if not pane: return {"follow": True, "state": "gone", "agents": [], "pane": None}
+        found = tmux_agent_in(pane)
+        if not found: return {"follow": True, "state": "exited", "agents": [], "pane": dict(tmux_public(pane), tmux=True)}
+        text = tmux_visible(pane["pane_id"])
+        row = tmux_agent_row(pane, found, tmux_screen_state(text, found["kind"]) if text is not None else None, tmux_history(pane, found, {}))
+        row["tmux_pane"] = tmux_public(pane)
+        return {"follow": True, "state": "same" if row["identity"] == request.get("identity") else "changed", "agents": [row], "pane": None}
+    if op == "answer": raise BridgeError("没发出去：tmux 里的提问先在「终端」里用按键回答")
+    if op == "stageFile": raise BridgeError("没发出去：tmux 里的 Agent 暂时不能带文件")
+    if op == "exitAgent": raise BridgeError("没关：tmux 里的 Agent 用「关闭」关掉窗格")
+    pane, found = tmux_target(request, agent=True)
+    if op == "commands": return custom_commands(tmux_agent_row(pane, found))
+    if op == "read":
+        text, screen = tmux_capture(pane["pane_id"])
+        result = {"text": text, "agent_status": tmux_screen_state(text, found["kind"]),
+                  "modes": screen_modes(text, found["kind"]), "bg": screen_bg(text)}
+        if request.get("ansi") is True: result["ansi"] = screen
+        return result
+    base = {"v": 1, "op": "tmuxSend", "id": request.get("id"), "target": pane["pane_id"], "identity": pane["identity"]}
+    if op == "key":
+        if request.get("key") not in AGENT_KEYS: raise BridgeError("Unsupported key")
+        return tmux_send(dict(base, action="key", key=request["key"]), state_dir)
+    # prompt
+    if request.get("images") is not None or request.get("files") is not None:
+        raise BridgeError("没发出去：tmux 里的 Agent 暂时不能带图片或文件")
+    text = request.get("text")
+    if not isinstance(text, str) or not text.strip(): raise BridgeError("Prompt must not be empty")
+    screen = tmux_visible(pane["pane_id"])
+    if screen is not None and tmux_screen_state(screen, found["kind"]) == "blocked": raise BridgeError(NOT_SENT["agent_blocked"])
+    return tmux_send(dict(base, action="run", text=text), state_dir)
+
+
 def tmux_request(request, state_dir):
     op = request.get("op")
-    if op == "tmux":
-        panes = tmux_panes()
-        return {"available": panes is not None, "panes": panes or []}
+    if op == "tmux": return tmux_list(request)
     if op == "tmuxRead": return tmux_read(request)
+    if op == "tmuxInfo": return tmux_info(request)
+    if op == "tmuxNew": return tmux_new(request, state_dir)
+    if op == "tmuxKill": return tmux_kill(request, state_dir)
     return tmux_send(request, state_dir)
 
 
@@ -4015,7 +4317,10 @@ def handle(request, state_dir=None):
     if op == "glance": return glance(request)
     if op == "fileInfo": return file_info(request)
     if op == "fileView": return view_request(request)
-    if op in ("tmux", "tmuxRead", "tmuxSend"): return tmux_request(request, state_dir or Path.home() / ".local/state/herdr-pocket")
+    if op in ("tmux", "tmuxRead", "tmuxSend", "tmuxInfo", "tmuxNew", "tmuxKill"):
+        return tmux_request(request, state_dir or Path.home() / ".local/state/herdr-pocket")
+    if op in TMUX_AGENT_OPS and isinstance(request.get("target"), str) and TMUX_PANE_ID.fullmatch(request["target"]):
+        return tmux_agent_request(request, state_dir or Path.home() / ".local/state/herdr-pocket")
     if op == "bgOutput": return bg_output_request(request)
     if op in ("catalog", "history"):
         if request.get("remote") is not None: return remote_history_request(request)
@@ -4030,7 +4335,10 @@ def handle(request, state_dir=None):
         if thread: catalog = [x for x in catalog if x["thread"] == thread]
         return {"records": [public_record(x) for x in catalog[offset:offset+100]], "total": len(catalog), "next": offset+100 if len(catalog)>offset+100 else None}
     if op == "sessions":
-        return {"sessions": [{k: s.get(k) for k in ("name", "running", "default")} for s in sessions()]}
+        # No Herdr on this computer: an empty list and a flag, so the app shows tmux only.
+        try: found = sessions()
+        except HerdrMissing: return {"sessions": [], "herdr": False, "tmux": tmux_binary() is not None}
+        return {"herdr": True, "sessions": [{k: s.get(k) for k in ("name", "running", "default")} for s in found]}
     if op in ("panes", "paneRead", "paneRun", "paneText", "paneKey"):
         prefix = select_session(request)
         if op == "panes": return {"panes": panes(prefix)}

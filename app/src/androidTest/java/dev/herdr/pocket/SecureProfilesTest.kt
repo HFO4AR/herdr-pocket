@@ -20,8 +20,9 @@ class SecureProfilesTest : Instrumentation() {
             testIdentity()
             testWatchRules()
             testJumpVault()
+            testResumeSet()
             if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeepAlive(); testKeyLogin(); testSeveralLinks(); testJumpChain() }
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\nwatch-rules: PASS\njump-vault: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS\nssh-jump: PASS" else "ssh-pty: SKIPPED") })
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\nwatch-rules: PASS\njump-vault: PASS\nresume-set: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS\nssh-jump: PASS" else "ssh-pty: SKIPPED") })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
@@ -203,6 +204,42 @@ class SecureProfilesTest : Instrumentation() {
      * only while the hop and the path in front of it are unchanged; at most three; a changed path also
      * drops the device's own saved password. Fixture names only.
      */
+    /** 启动时自动重连: ids only, explicit disconnect removes, and what a quiet reconnect would still need. */
+    private fun testResumeSet() {
+        val prefs = targetContext.getSharedPreferences("resume-test", 0)
+        prefs.edit().clear().commit()
+        try {
+            val set = ResumeSet(prefs)
+            set.add("a", shown = true); set.add("b", shown = true); set.add("c", shown = false)
+            check(set.ids() == listOf("a", "b", "c") && set.active() == "b") { "add order / active" }
+            set.add("a", shown = false)
+            check(set.ids() == listOf("b", "c", "a") && set.active() == "b") { "re-add keeps active" }
+            set.activate("c"); check(set.active() == "c") { "activate" }
+            set.activate("zz"); check(set.active() == "c") { "unknown id is not activated" }
+            // Survives a new instance (process death).
+            check(ResumeSet(prefs).ids() == listOf("b", "c", "a")) { "persisted" }
+            set.remove("c", next = "a"); check(set.ids() == listOf("b", "a") && set.active() == "a") { "remove active hands over" }
+            set.remove("b"); check(set.ids() == listOf("a") && set.active() == "a") { "remove other keeps active" }
+            set.clear(); check(set.ids().isEmpty() && set.active() == "") { "clear" }
+            prefs.edit().putString("ids", "not json").commit(); check(ResumeSet(prefs).ids().isEmpty()) { "damaged list is ignored" }
+            // Only ids are stored: no names, hosts or secrets.
+            set.add("dev-1", shown = true)
+            check(prefs.all.values.joinToString().let { "dev-1" in it && "invalid" !in it }) { "ids only" }
+            val pins = mapOf("pin:home.invalid:22" to "k1", "pin:jump.invalid:22" to "k2", "pin:jump.invalid:22>inner.invalid:22" to "k3")
+            val direct = JSONObject().put("host", "home.invalid").put("port", 22).put("user", "u")
+            check(ResumeSet.need(JSONObject(direct.toString()).put("auth", "password").put("password", "s"), pins::get) == "") { "saved password" }
+            check(ResumeSet.need(JSONObject(direct.toString()).put("auth", "password").put("password", ""), pins::get) == "password") { "typed password" }
+            check(ResumeSet.need(JSONObject(direct.toString()).put("auth", "key"), pins::get) == "") { "key" }
+            check(ResumeSet.need(JSONObject(direct.toString()).put("host", "new.invalid").put("auth", "key"), pins::get) == "trust") { "unpinned" }
+            val hop = JSONObject().put("host", "jump.invalid").put("port", 22).put("user", "j").put("auth", "password").put("password", "")
+            val behind = JSONObject().put("host", "inner.invalid").put("port", 22).put("user", "u").put("auth", "key").put("jumps", org.json.JSONArray().put(hop))
+            check(ResumeSet.need(behind, pins::get) == "password") { "jump host without saved password" }
+            hop.put("password", "j-secret"); behind.put("jumps", org.json.JSONArray().put(hop))
+            check(ResumeSet.need(behind, pins::get) == "") { "jump host with saved password" }
+            check(ResumeSet.need(behind) { if (it.contains(">")) null else pins[it] } == "trust") { "inner pin missing" }
+        } finally { prefs.edit().clear().commit() }
+    }
+
     private fun testJumpVault() {
         val vault = SecureProfiles(targetContext)
         fun hop(host: String, user: String, password: String = "", auth: String = "password") =

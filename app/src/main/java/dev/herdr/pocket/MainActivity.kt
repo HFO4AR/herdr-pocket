@@ -41,8 +41,8 @@ private const val ASK_PHOTOS = 44
 private const val PICK_KEY = 45
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/hops.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/glyphs.css", "ui/ansi.css", "ui/kids.css", "ui/bg.css", "ui/mode.css", "ui/foot.css", "ui/tmux.css", "ui/layout.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/ansi.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/hops.js", "ui/onboard.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/bg.js", "ui/mode.js", "ui/foot.js", "ui/app.js", "ui/tmux.js", "ui/layout.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/resume.css", "ui/hops.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/glyphs.css", "ui/ansi.css", "ui/kids.css", "ui/bg.css", "ui/mode.css", "ui/foot.css", "ui/tmux.css", "ui/layout.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/ansi.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/hops.js", "ui/onboard.js", "ui/resume.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/bg.js", "ui/mode.js", "ui/foot.js", "ui/app.js", "ui/tmux.js", "ui/layout.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -181,10 +181,23 @@ class MainActivity : Activity() {
     private fun connect(id: String, request: JSONObject) {
         val device = core.vault.get(request.getString("id"))
         val endpoint = core.endpointOf(device)
-        val password = request.optString("password").ifEmpty { device.optString("password") }
+        // 启动时自动重连 (resume.js): never asks anything. Only a computer still on the list, with every
+        // password saved (or key login) and every host key already pinned; nothing is typed or trusted here.
+        val auto = request.optBoolean("auto")
+        if (auto) {
+            if (!core.autoResumeEnabled || !core.resume.contains(device.getString("id"))) throw Friendly("resume_off", "不再自动重连这台电脑")
+            when (ResumeSet.need(device) { core.pins.getString(it, null) }) {
+                "trust" -> throw Friendly("resume_trust", "还没核对过这台电脑的指纹，点一下连接时核对")
+                "password" -> throw Friendly("resume_password", "这台电脑要输入密码，点一下连接")
+            }
+        }
+        val background = auto && request.optBoolean("background")
+        val password = if (auto) device.optString("password") else request.optString("password").ifEmpty { device.optString("password") }
         try {
-            core.connect(device, password) { stage -> progress(id, stage) }
+            core.connect(device, password, background) { stage -> progress(id, stage) }
         } catch (e: UntrustedHost) {
+            // A quiet reconnect never offers a trust prompt; the user connects by hand to check the key.
+            if (auto) throw Friendly("resume_trust", "还没核对过这台电脑的指纹，点一下连接时核对")
             // First use: nothing is pinned until the user taps 「信任并连接」 for exactly this key.
             // With jump hosts each login is trusted on its own, one sheet per new key, in route order.
             val route = JumpHosts.route(device)
@@ -214,10 +227,19 @@ class MainActivity : Activity() {
             null
         } catch (_: Exception) { null }
         val ready = hello?.optInt("protocol") == 1
+        // Installing or updating the bridge needs the user's OK: a quiet reconnect stops here instead.
+        if (auto && !ready) { core.disconnect(deviceId); throw Friendly("resume_bridge", "电脑上的桥接程序要更新，点一下连接后确认") }
+        core.resume.add(deviceId, shown = !background)
         result.put("ready", ready)
         if (ready) result.put("host", doctor(deviceId)) else result.put("upgrade", core.hasOtherBridge(deviceId))
         success(id, result)
-        runOnUiThread { askNotificationPermission() }
+        if (!auto) runOnUiThread { askNotificationPermission() }
+    }
+
+    /** 启动时自动重连: the list with what each computer would still need; ids of deleted devices are dropped. */
+    private fun resumeInfo(): JSONObject {
+        val saved = core.vault.list().let { l -> (0 until l.length()).map { l.getJSONObject(it).getString("id") }.toSet() }
+        return core.resume.info(core.autoResumeEnabled, core.online(), { id -> if (id in saved) try { core.vault.get(id) } catch (_: Exception) { null } else null }) { core.pins.getString(it, null) }
     }
 
     /** Is Herdr installed and running on the computer? Read-only; null if the bridge cannot tell. */
@@ -270,6 +292,7 @@ class MainActivity : Activity() {
         .put("autoUpdate", core.settings.getBoolean("autoUpdate", true))
         .put("seenUpdate", core.settings.getString("seenUpdate", ""))
         .put("alerts", core.alertsEnabled).put("notifications", notificationsAllowed())
+        .put("autoResume", core.autoResumeEnabled)
         .put("keepAlive", core.keepAliveEnabled).put("keepAliveMinutes", core.keepAliveMinutes)
         .put("conn", core.stats.json(core.totalLogins()).put("links", core.links().size))
         .put("version", Updater.currentName(this)).put("versionCode", Updater.currentCode(this))
@@ -316,6 +339,8 @@ class MainActivity : Activity() {
                                     core.connectedDevice?.let { d -> put("connected", JSONObject(d.toString()).put("remember",
                                         core.vault.get(d.getString("id")).optString("password").isNotEmpty())) }
                                     put("connections", connections())
+                                    // Computers connected when the app went away, to reconnect quietly (resume.js).
+                                    put("resume", resumeInfo())
                                 })
                             pendingPane?.let { pane -> pendingPane = null; js(openPaneJs(pane, pendingDevice)); pendingDevice = null }
                         }
@@ -323,6 +348,7 @@ class MainActivity : Activity() {
                         "deleteDevice" -> {
                             // A connected computer is disconnected first; the others stay.
                             core.disconnect(req.getString("id")); watchStates.remove(req.getString("id"))
+                            core.resume.remove(req.getString("id"), core.connectedDevice?.optString("id"))
                             core.vault.delete(req.getString("id")); core.cache.drop(req.getString("id")); success(id, JSONObject().put("devices", core.vault.list()))
                         }
                         "connect" -> { runOnUiThread { applySecure() }; connect(id, req) }
@@ -330,11 +356,13 @@ class MainActivity : Activity() {
                             // With a device: only that computer; without: all of them.
                             val one = req.optString("device")
                             if (one.isEmpty()) { core.disconnect(); watchStates.clear() } else { core.disconnect(one); watchStates.remove(one) }
+                            // Disconnected on purpose: not reconnected on the next launch (启动时自动重连).
+                            if (one.isEmpty()) core.resume.clear() else core.resume.remove(one, core.connectedDevice?.optString("id"))
                             if (!core.hasLinks) WatchService.stop(this@MainActivity)
                             success(id, JSONObject().put("connections", connections()))
                         }
                         // Switch the UI to a computer that is already connected: no reconnect, no login.
-                        "activate" -> { core.activate(req.getString("device")); success(id, JSONObject().put("connections", connections())) }
+                        "activate" -> { core.activate(req.getString("device")); core.resume.activate(req.getString("device")); success(id, JSONObject().put("connections", connections())) }
                         "trustHost" -> {
                             // Pins only the key the last attempt saw, for the same device and address.
                             val pending = pendingTrust ?: error("没有等待核对的指纹，重新连接一次")
@@ -374,6 +402,7 @@ class MainActivity : Activity() {
                                 "autoUpdate" -> edit.putBoolean("autoUpdate", req.getBoolean("value"))
                                 "seenUpdate" -> edit.putString("seenUpdate", req.getString("value").take(64))
                                 "keepAlive" -> edit.putBoolean("keepAlive", req.getBoolean("value"))
+                                "autoResume" -> edit.putBoolean("autoResume", req.getBoolean("value"))
                                 "keepAliveMinutes" -> edit.putInt("keepAliveMinutes", req.getInt("value").also { require(it in PocketCore.KEEP_MINUTES) { "不支持的时长" } })
                                 else -> error("不支持的设置")
                             }
@@ -485,7 +514,7 @@ class MainActivity : Activity() {
                             success(id, JSONObject().put("devices", core.vault.list()))
                         }
                         "remote" -> {
-                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "fileView", "bgOutput", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "hidden", "doctor", "glance", "hello", "tmux", "tmuxRead", "tmuxSend")) { "不支持的操作" }
+                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "fileView", "bgOutput", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "hidden", "doctor", "glance", "hello", "tmux", "tmuxRead", "tmuxSend", "tmuxInfo", "tmuxNew", "tmuxKill")) { "不支持的操作" }
                             // `device` picks the computer; it is not part of the bridge request.
                             val device = dev(req)
                             req.remove("device")

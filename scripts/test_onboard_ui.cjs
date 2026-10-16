@@ -21,7 +21,7 @@ await page.addInitScript(()=>{
   if(op==='connect'){const r=queued(fx.connect);if(r.ok&&!r.data.device)r.data={device:devices[0],devices,ready:true,...r.data};return reply(id,r);}
   if(op==='install')return reply(id,queued(fx.install));
   if(op==='reconnect')return reply(id,queued(fx.reconnect));
-  if(op==='remote'){if(a.op==='doctor')return reply(id,queued(fx.doctor));if(a.op==='sessions')return reply(id,{ok:true,data:{sessions:[]}});if(a.op==='account')return reply(id,{ok:true,data:{ssh_user:'yuki',hostname:'box'}});
+  if(op==='remote'){if(a.op==='doctor')return reply(id,queued(fx.doctor));if(a.op==='sessions')return reply(id,{ok:true,data:fx.noHerdr?{sessions:[],herdr:false,tmux:true}:{sessions:[]}});if(a.op==='tmux')return reply(id,{ok:true,data:{available:true,panes:[]}});if(a.op==='account')return reply(id,{ok:true,data:{ssh_user:'yuki',hostname:'box'}});
    throw Error('Forbidden remote op in onboarding test: '+a.op);}
   if(['protect','settings','disconnect','trustHost','forgetHost','cacheGet','cachePut','demo'].includes(op))return reply(id,{ok:true,data:op==='cacheGet'?{value:null}:{}});
   throw Error('Unexpected native op '+op);}};
@@ -95,15 +95,25 @@ assert.deepEqual((await calls('trustHost')).map(a=>a.fingerprint),[FP],'pins exa
 const connects=await calls('connect');assert.equal(connects.length,3);assert.equal(connects[2].password,connects[1].password,'retry after trusting reuses the same credentials');
 console.log('PASS: host key shown with how-to-check, cancel pins nothing, explicit trust pins exactly that key');
 
-// ── Bridge update → Herdr missing banner → recheck ──
-await page.evaluate(()=>{fx.install.push({ok:true,data:{protocol:1,host:{herdr:false,running:null}}});fx.doctor.push({ok:true,data:{herdr:true,running:1}});});
+// ── Bridge update → no Herdr: tmux only, no banner → Herdr installed, refresh brings it back ──
+// (Changed in 0.6: a computer without Herdr is used for its tmux sessions; see test_tmuxonly_ui.cjs.)
+await page.evaluate(()=>{fx.noHerdr=true;fx.install.push({ok:true,data:{protocol:1,host:{herdr:false,running:null,tmux:true}}});});
 await page.getByRole('button',{name:'更新并进入',exact:true}).click();
-await page.getByText('电脑上没找到 Herdr',{exact:true}).waitFor();
+await page.getByText('这台电脑没装 Herdr，只显示 tmux',{exact:true}).waitFor();
 assert.equal(await page.evaluate(()=>S.tab),'live');
+assert.equal(await page.locator('.connection-status').count(),0,'no banner for a missing Herdr');
+assert.equal(await page.getByRole('button',{name:'历史',exact:true}).count(),0);
+await page.evaluate(()=>{fx.noHerdr=false;});
+await page.getByRole('button',{name:'刷新会话',exact:true}).click();
+await page.getByText('暂时没有会话',{exact:true}).waitFor();
+assert.equal(await page.getByRole('button',{name:'历史',exact:true}).count(),1);
+// A Herdr that is installed but not running still gets its calm banner and recheck.
+await page.evaluate(()=>{fx.doctor.push({ok:true,data:{herdr:true,running:0}});fx.doctor.push({ok:true,data:{herdr:true,running:1}});recheckHost();});
+await page.locator('.connection-status strong').filter({hasText:'Herdr 没在运行'}).waitFor();
 await page.getByRole('button',{name:'重新检查',exact:true}).click();
 await page.getByText('Herdr 正常',{exact:true}).waitFor();
-assert.equal(await page.getByText('电脑上没找到 Herdr',{exact:true}).count(),0);
-console.log('PASS: bridge update sheet, Herdr-missing banner, recheck clears it');
+assert.equal(await page.locator('.connection-status').count(),0);
+console.log('PASS: bridge update sheet, no Herdr = tmux only without a banner, recheck clears a stopped Herdr');
 
 // ── Reconnect pill ──
 await page.evaluate(()=>nativeEvent({type:'reconnecting',detail:'box'}));
