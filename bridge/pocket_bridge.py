@@ -2338,7 +2338,7 @@ IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "g
 UPLOAD_LIMIT = 8_000_000
 # Largest picture sent back in one response: base64 of it must stay under the app's 2 MB cap.
 SERVE_LIMIT = 1_350_000
-THUMB_EDGE = 480
+THUMB_EDGE = 800
 UPLOAD_KEEP_DAYS = 14
 
 

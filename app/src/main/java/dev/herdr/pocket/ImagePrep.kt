@@ -31,7 +31,7 @@ object ImagePrep {
     const val MAX_EDGE = 2048
     // Uploads must also come back whole in one bridge response (base64 under its 2 MB cap).
     const val MAX_BYTES = 1_300_000
-    private const val THUMB_EDGE = 360
+    private const val THUMB_EDGE = 720
     private const val MAX_SOURCE_PIXELS = 80_000_000L
     private const val KEEP = 12
 
@@ -78,7 +78,7 @@ object ImagePrep {
                 bytes = encode(image, Bitmap.CompressFormat.JPEG, quality)
             }
         }
-        val thumb = encode(opaque(fit(upright, THUMB_EDGE, ExifInterface.ORIENTATION_NORMAL)), Bitmap.CompressFormat.JPEG, 78)
+        val thumb = encode(opaque(fit(upright, THUMB_EDGE, ExifInterface.ORIENTATION_NORMAL)), Bitmap.CompressFormat.JPEG, 82)
         return Prepared(UUID.randomUUID().toString(), bytes, ext, thumb, upright.width, upright.height).also { keep(it) }
     }
 

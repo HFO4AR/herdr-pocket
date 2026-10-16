@@ -54,9 +54,14 @@ function imgRef(ref){
  let m=ref.match(/\/\.herdr-pocket\/uploads\/(\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}\.(?:jpg|png))$/);if(m)return {kind:'upload',name:m[1]};
  if(/^ch-file:\/\/[a-f0-9]{64}\.(?:png|jpe?g|gif|webp)$/.test(ref))return {kind:'ch',address:ref};return null;}
 // A prompt's own words, and the pictures it carries (reference lines and embedded transcript pictures).
+// Claude Code wraps pasted blocks as <pasted_content id="…">…</pasted_content id="…">: show the words only.
+const PASTE_TAG=/<\/?pasted_content(?:\s+id="[^"]{0,40}")?\s*>/g;
+function cleanUserText(t){return String(t||'').replace(PASTE_TAG,'');}
+// What two copies of one message share: the words without wrappers, picture/file lines or spacing.
+function msgSig(text){return cleanUserText(text).replace(/\s+/g,' ').trim();}
 function imgSplit(m){
  const specs=[],files=[];const rec=S.chat?.record;
- const text=String(m.text||'').split('\n').filter(line=>{const f=fileLine(line);if(f){files.push(f);return false;}const x=line.match(IMG_LINE);const spec=x&&imgRef(x[1]);if(spec)specs.push(spec);return !spec;}).join('\n').trim();
+ const text=cleanUserText(m.text).split('\n').filter(line=>{const f=fileLine(line);if(f){files.push(f);return false;}const x=line.match(IMG_LINE);const spec=x&&imgRef(x[1]);if(spec)specs.push(spec);return !spec;}).join('\n').replace(/\n{3,}/g,'\n\n').trim();
  if(Array.isArray(m.images)&&rec)m.images.forEach(i=>specs.push({kind:'transcript',record_id:rec.id,item:m.id,block:i.block,...(rec.remote?{remote:rec.remote}:{})}));
  return {text,specs,files};}
 // Reassignable on purpose: offline tests serve fixture pictures.

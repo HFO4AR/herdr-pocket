@@ -434,7 +434,7 @@ class MainActivity : Activity() {
                             for (k in listOf("kind", "name", "address", "record_id", "item", "block", "remote", "variant")) if (req.has(k)) query.put(k, req.get(k))
                             val data = core.request(query)
                             val bytes = android.util.Base64.decode(data.getString("data"), android.util.Base64.DEFAULT)
-                            success(id, ImagePrep.shrink(bytes, if (req.optString("variant") == "full") 1600 else 360))
+                            success(id, ImagePrep.shrink(bytes, if (req.optString("variant") == "full") 1600 else 800))
                         }
                         "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> success(id, core.terminal(op, req))
                         // The phone's SSH key (SshIdentity). Only the public half ever reaches the page.

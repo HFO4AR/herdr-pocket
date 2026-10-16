@@ -64,7 +64,7 @@ function stateTone(a){return (STATUS[agentState(a)]||['','muted'])[1];}
 function providerName(p){return p==='claude'?'Claude':p==='codex'?'Codex':'Agent';}
 // Prefer names that tell agents apart: Herdr's agent title, a meaningful terminal
 // title (not the generic "<dir>: ch" / "<dir>: claude"), then the first prompt.
-function cleanTitle(t){return String(t||'').replace(/^[\s✳✻✽✶⠀-⣿·•*]+/,'').replace(/\s*\|\s*[^|]+$/,'').trim();}
+function cleanTitle(t){return String(t||'').replace(/<\/?pasted_content(?:\s+id="[^"]{0,40}")?\s*>/g,' ').replace(/^[\s✳✻✽✶⠀-⣿·•*]+/,'').replace(/\s*\|\s*[^|]+$/,'').trim();}
 function genericTitle(t,a){return !t||/^[^:]{1,60}:\s*(ch|claude|codex|bash|zsh|sh|ssh)$/i.test(t)||t===a.agent||/^(claude|codex)( code)?$/i.test(t);}
 function titleOf(a){for(const raw of [a.title,a.terminal_title_stripped,a.terminal_title]){const t=cleanTitle(raw);if(!genericTitle(t,a))return t;}
  const first=cleanTitle(a.history_ref?.record?.title);if(first&&!/^This session is being continued/.test(first))return first.slice(0,60);
@@ -436,8 +436,8 @@ function sendPulse(b){if(!b)return;b.classList.remove('fired');void b.offsetWidt
 function scrollBottom(){const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
 // A pending bubble disappears once the transcript shows the same user text.
 function settleOutbox(){if(!S.outbox.length)return false;const count=S.outbox.length;
- const users=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>{const x=imgSplit(m);return {id:m.id,sig:x.text+'\u0000'+(x.specs.length?1:0),at:toDate(m.timestamp)?.getTime()||0};});
- const sig=o=>o.text.trim()+'\u0000'+(o.images?.length?1:0);
+ const users=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>{const x=imgSplit(m);return {id:m.id,sig:msgSig(x.text)+'\u0000'+(x.specs.length?1:0),at:toDate(m.timestamp)?.getTime()||0};});
+ const sig=o=>msgSig(o.text)+'\u0000'+(o.images?.length?1:0);
  // A send whose outcome was unknown, and whose text then shows up in the transcript (written after it
  // was sent, allowing for clock skew), did arrive. Anything still queued with the same words waits
  // for the person instead of going out a second time.

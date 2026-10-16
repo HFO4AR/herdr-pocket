@@ -126,6 +126,12 @@ await status('idle');await page.waitForTimeout(3500);
 assert.equal(await page.evaluate(()=>fx.attempts.length),tries,'the duplicate never goes out by itself');
 console.log('PASS: an unknown send seen in the transcript becomes delivered; a queued duplicate waits for the person');
 
+// Claude Code wraps pasted text as <pasted_content id=…>: the transcript copy (with a ch picture line)
+// must match the phone's own copy, so the pending bubble settles instead of showing twice.
+assert.deepEqual(await page.evaluate(()=>{const h='a'.repeat(64);const t='<pasted_content id="b39b">\n终端界面，没有颜色，不好看\n\n</pasted_content id="b39b">\n\n[图片 · ch-local fetch] ch-file://'+h+'.jpg';const x=imgSplit({text:t});return [x.text,msgSig(x.text)===msgSig('终端界面，没有颜色，不好看'),x.specs.length,cleanTitle(t).includes('pasted_content')];}),
+ ['终端界面，没有颜色，不好看',true,1,false]);
+console.log('PASS: pasted-content wrappers are hidden and do not block settling');
+
 const ids=await page.evaluate(()=>[...fx.attempts,...fx.keys].map(x=>x.id));
 assert.equal(new Set(ids).size,ids.length,'every request has its own id');
 assert.deepEqual(errors,[]);
