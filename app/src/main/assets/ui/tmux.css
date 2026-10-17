@@ -7,6 +7,10 @@
 /* An agent found inside a tmux pane: a Herdr-style row with a small tmux tag. */
 .card-meta .tmux-tag{font-family:var(--mono);font-weight:500}
 .tmux-agents+.tmux-list{margin-top:8px}
+/* A named tmux server (tmux -L work): its name, quietly, after the row's other facts. */
+.card-meta .tmux-server{color:var(--faint)}
+/* With Herdr and no tmux pane: where the bridge looked, one quiet line under the list. */
+.tmux-none-note{margin:12px 4px 4px;color:var(--faint);line-height:1.5;overflow-wrap:anywhere}
 /* No Herdr on this computer: a quiet line above the tmux list, not a warning. */
 .tmux-only-note{display:flex;align-items:center;gap:8px;margin:2px 2px 12px;color:var(--muted);font-size:var(--fs-sm);line-height:1.5}
 .tmux-only-note svg{width:16px;height:16px;flex-shrink:0;color:var(--faint)}

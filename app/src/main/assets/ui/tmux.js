@@ -1,5 +1,7 @@
 'use strict';
-// tmux sessions on the connected computer (the SSH user's default tmux server, bridge op `tmux`).
+// tmux sessions on the connected computer (bridge op `tmux`): every tmux server of the SSH user,
+// the default one and named ones (`tmux -L work`, found as sockets in the user's tmux directories).
+// A pane of a named server has the id %N@<server key> and a `server` name, shown as 「服务器 work」.
 //  · With Herdr they are a section under the Herdr agents in 会话. Without Herdr (S.herdr===false,
 //    from `doctor` / `sessions`) they are the whole 会话 page: a quiet note, no Herdr-only parts.
 //  · A plain pane opens straight on a terminal screen. Its screen and input reuse the 终端 view
@@ -16,17 +18,25 @@
 //    Its state comes from its screen (bridge tmux_state): blocked (a menu), working ("esc to
 //    interrupt", Claude's spinner, or a reply still streaming under its prompt) or idle.
 //  · 新建 tmux 会话 (tmuxNew) and 关闭 a pane or a whole session (tmuxKill), both behind a sheet.
-// Local panes only: tmux on another computer behind a ch-cli route is not listed.
+// Local panes only: tmux on another computer is not listed (add that computer as a device). An
+// empty list says where the bridge looked (`looked`), what it refused (`skipped`) and which
+// server did not answer (`servers`), and the list follows new sessions within a few seconds.
 const TX={by:new Map()};
 function tmuxDevice(){return S.device&&!S.demo?S.device.id:'';}
 // Per computer (several can be connected): the last list, whether the bridge knows tmux, transcript refs.
 function tmuxState(dev=tmuxDevice()){if(!dev)return null;let st=TX.by.get(dev);
- if(!st){st={panes:[],available:null,supported:true,loading:false,loaded:false,sig:'',refs:new Map(),resolveAt:0};TX.by.set(dev,st);}return st;}
+ if(!st){st={panes:[],available:null,supported:true,loading:false,loaded:false,sig:'',refs:new Map(),resolveAt:0,looked:[],skipped:[],servers:[]};TX.by.set(dev,st);}return st;}
 function tmuxPanes(){return tmuxState()?.panes||[];}
 function noHerdr(){return !S.demo&&!!S.device&&S.herdr===false;}
 // tmux can be offered (新建): not known to be missing, and the bridge knows the op.
 function tmuxCan(){const st=tmuxState();return !!st&&st.supported&&st.available!==false&&S.hostTmux!==false;}
 function tmuxSig(list){return list.map(p=>{const a=p.agent;return [p.pane_id,p.identity,p.active,p.command,p.session,p.window_name,p.window_panes,a?a.identity+a.agent_status+(a.history_ref?.status||''):''].join('/');}).join(',');}
+// %N on the default server, %N@<12 hex> on a named one (every tmux server counts from %0).
+const TMUX_PANE_RE=/^%\d{1,9}(@[0-9a-f]{12})?$/;
+// Same tmux session = same name on the same server.
+function tmuxSameSession(a,b){return !!a&&!!b&&a.session===b.session&&(a.server||'')===(b.server||'');}
+function tmuxRawId(p){return String(p?.pane_id||'').split('@')[0];}
+function tmuxServer(p){return typeof p?.server==='string'&&p.server?p.server.slice(0,40):'';}
 function tmuxAgent(p){if(!p?.agent)return null;const st=tmuxState();const ref=p.agent.history_ref||st?.refs.get(p.agent.identity);
  const pane={...p};delete pane.agent;return {...p.agent,...(ref?{history_ref:ref}:{}),tmux_pane:pane};}
 function tmuxAgents(){return tmuxPanes().map(tmuxAgent).filter(Boolean);}
@@ -34,8 +44,11 @@ async function tmuxLoad(resolve=false){
  const dev=tmuxDevice(),st=tmuxState(dev);if(!st||!st.supported||st.loading)return;st.loading=true;
  try{const r=await remote('tmux',resolve?{resolve:true}:{});
   st.available=r?.available!==false;
-  st.panes=Array.isArray(r?.panes)?r.panes.filter(p=>/^%\d+$/.test(p?.pane_id)&&typeof p.identity==='string').map(p=>p.agent&&(typeof p.agent.identity!=='string'||!p.agent.agent)?{...p,agent:undefined}:p):[];
-  st.loaded=true;if(resolve)st.resolveAt=Date.now();
+  st.looked=Array.isArray(r?.looked)?r.looked.filter(x=>typeof x==='string').slice(0,6):[];
+  st.skipped=Array.isArray(r?.skipped)?r.skipped.filter(x=>typeof x?.path==='string'&&typeof x.reason==='string').slice(0,4):[];
+  st.servers=Array.isArray(r?.servers)?r.servers.filter(x=>typeof x?.name==='string'):[];
+  st.panes=Array.isArray(r?.panes)?r.panes.filter(p=>TMUX_PANE_RE.test(p?.pane_id)&&typeof p.identity==='string').map(p=>p.agent&&(typeof p.agent.identity!=='string'||!p.agent.agent)?{...p,agent:undefined}:p):[];
+  st.loaded=true;st.failed='';if(resolve)st.resolveAt=Date.now();
   for(const p of st.panes)if(p.agent?.history_ref)st.refs.set(p.agent.identity,p.agent.history_ref);
   const agents=st.panes.map(tmuxAgent).filter(Boolean);
   if(dev===tmuxDevice()&&agents.length){noteStatus(agents);syncWatch();if(typeof glanceRefresh==='function')glanceRefresh();}
@@ -45,10 +58,11 @@ async function tmuxLoad(resolve=false){
   if(!resolve&&agents.some(a=>!a.history_ref||a.history_ref.status==='pending')&&Date.now()-st.resolveAt>15000){st.resolveAt=Date.now();setTimeout(()=>tmuxLoad(true),0);}}
  // An older bridge does not know the op: stop asking until the next device. Other failures
  // (tmux hung, a slow link) keep the last list; tmux is a side dish here, never an error card.
- catch(e){if(/Unknown operation|不支持的操作|unexpected remote op/.test(e?.message||''))st.supported=false;st.loaded=true;if(dev===tmuxDevice()&&noHerdr())tmuxRepaint();return;}
+ catch(e){if(/Unknown operation|不支持的操作|unexpected remote op/.test(e?.message||''))st.supported=false;else st.failed=String(e?.message||e).slice(0,120);
+  st.loaded=true;if(dev===tmuxDevice()&&(noHerdr()||!st.panes.length))tmuxRepaint();return;}
  finally{st.loading=false;}
  if(dev!==tmuxDevice())return;
- const sig=tmuxSig(st.panes)+'|'+st.available;if(sig===st.sig)return;st.sig=sig;tmuxRepaint();}
+ const sig=tmuxSig(st.panes)+'|'+st.available+'|'+st.looked.join(':')+'|'+st.skipped.length+'|'+st.servers.map(x=>x.name+x.state).join(':');if(sig===st.sig)return;st.sig=sig;tmuxRepaint();}
 // Repaint the list only when nothing is in the way: a sheet, a chat, a terminal, or typing in search.
 function tmuxRepaint(){
  if(S.tab!=='live'||S.chat||(typeof T!=='undefined'&&T.view)||overlay.childElementCount)return;
@@ -57,27 +71,42 @@ function tmuxRepaint(){
  const next=app.querySelector('.main');if(next){next.classList.remove('pane-enter');next.scrollTop=top;}}
 function tmuxTitle(p){return (p.session||'tmux')+':'+(p.window_name||p.window_index);}
 function tmuxWhere(p){return shortPath(p.cwd||'');}
-function tmuxPlace(p){return 'tmux '+p.session+':'+p.window_index+'.'+p.pane_index;}
+function tmuxPlace(p){const sv=tmuxServer(p);return 'tmux '+p.session+':'+p.window_index+'.'+p.pane_index+(sv?' · 服务器 '+sv:'');}
+// An empty list in plain words: where the bridge looked, what it skipped, which server did not answer.
+function tmuxNoneText(st){
+ // The last read failed (tmux hung, a slow link): say that, not "nothing is running".
+ if(st?.failed)return '这次没读到 tmux（'+st.failed+'），下拉刷新再试一次。';
+ const dirs=(st?.looked||[]).slice(0,4),bad=st?.skipped||[],down=(st?.servers||[]).filter(x=>x.state==='error');
+ let t='没找到正在运行的 tmux'+(dirs.length?'（看过 '+dirs.join('、')+'）':'')+'。';
+ if(down.length)t+='有 tmux 服务器读不了：'+down.slice(0,3).map(x=>x.default?'默认':x.name.slice(0,40)).join('、')+'。';
+ if(bad.length)t+='跳过了 '+bad.slice(0,2).map(x=>x.path+'（'+x.reason+'）').join('、')+'。';
+ return t;}
+const TMUX_ELSEWHERE='tmux 开在别的电脑上的话，先在「设备」页把那台电脑加进来。';
 function tmuxRow(p){
  const b=btn('','card-button term-row tmux-row',()=>tmuxOpen(p));b.setAttribute('aria-label','tmux '+tmuxTitle(p)+(p.command?' · '+p.command:'')+(p.active?' · 活动':''));
  const av=el('div','avatar term-av');av.append(icon('terminal'));
  const t=el('div','grow');t.append(el('div','card-title term-cmd',tmuxTitle(p)));
  const meta=el('div','card-meta');meta.append(el('span','tmux-cmd',p.command||'shell'));const where=tmuxWhere(p);if(where)meta.append(el('span','sep',where));
- if(p.window_panes>1)meta.append(el('span','sep','窗格 '+p.pane_index));t.append(meta);
+ if(p.window_panes>1)meta.append(el('span','sep','窗格 '+p.pane_index));const sv=tmuxServer(p);if(sv)meta.append(el('span','sep tmux-server','服务器 '+sv));t.append(meta);
  b.append(av,t);if(p.active){const side=el('div','row-side');side.append(el('span','badge ok','活动'));b.append(side);}
  closeHold(b,()=>tmuxActions(p));
  return closeSwipe(b,[['关闭','x','danger',()=>tmuxClose(p)],['更多','more','',()=>tmuxActions(p)]]);}
 // An agent in a pane: the same row as a Herdr agent (agentRow), tagged tmux; its actions are tmux's.
-function tmuxAgentRow(a){const row=agentRow(a);const meta=row.querySelector('.card-meta');if(meta){const tag=el('span','tag tmux-tag','tmux');const first=meta.firstChild;first?first.after(tag):meta.append(tag);}return row;}
+function tmuxAgentRow(a){const row=agentRow(a);const meta=row.querySelector('.card-meta');if(meta){const tag=el('span','tag tmux-tag','tmux');const first=meta.firstChild;first?first.after(tag):meta.append(tag);
+  const sv=tmuxServer(a.tmux_pane);if(sv)meta.append(el('span','sep tmux-server','服务器 '+sv));}return row;}
 // 会话 list: a section after the agents (only when tmux has panes), or the whole page without Herdr.
 function tmuxSection(main,only=false){
- const list=tmuxPanes();if(!list.length)return;
+ const list=tmuxPanes();if(!list.length){if(!only)tmuxNoneNote(main);return;}
  const agents=list.filter(p=>p.agent),plain=list.filter(p=>!p.agent);
  // Their preview lines (glance.js); with Herdr agents on the page livePage already asked.
  if(agents.length&&!S.agents.length&&typeof glanceKick==='function')glanceKick();
  const label=el('div','section-label group-label tmux-label');label.append(el('span','',only?'tmux 会话':'tmux'),el('span','group-count',String(list.length)));main.append(label);
  if(agents.length){const card=el('div','card list-card tmux-list tmux-agents');agents.forEach(p=>card.append(tmuxAgentRow(tmuxAgent(p))));main.append(card);}
  if(plain.length){const card=el('div','card list-card tmux-list');plain.forEach(p=>card.append(tmuxRow(p)));main.append(card);}}
+// With Herdr and no tmux pane: one quiet line, so a tmux the person expected here is not a mystery.
+function tmuxNoneNote(main){const st=tmuxState();if(!st?.loaded||!st.supported||S.demo)return;
+ const text=st.available===false||S.hostTmux===false?'tmux：这台电脑上没装。':'tmux：'+tmuxNoneText(st)+(st.failed?'':TMUX_ELSEWHERE);
+ main.append(el('p','fine tmux-none-note',text));}
 // No Herdr on this computer: tmux is the page.
 function tmuxOnlyPage(main){
  const st=tmuxState(),list=tmuxPanes(),none=S.hostTmux===false||st?.available===false;
@@ -94,7 +123,7 @@ function tmuxOnlyPage(main){
    .forEach(([k,v])=>{const li=el('li');li.append(el('strong','',k),el('span','',v));ul.append(li);});
   box.append(ul);const again=btn('重新检查','primary',()=>recheckHost(again),'refresh');box.append(again);main.append(box);return;}
  if(!st?.loaded){skeleton(main,3);return;}
- if(!list.length){empty(main,'还没有 tmux 会话','新建一个，或者在电脑上运行 tmux，这里会自动出现。',tmuxCan()?tmuxNewButton('新建 tmux 会话','primary'):undefined,'terminal');pullRefresh(main,loadLive);return;}
+ if(!list.length){empty(main,'还没有 tmux 会话',tmuxNoneText(st)+(st.failed?'':'新建一个，或者在这台电脑上运行 tmux，几秒内会自动出现。'+TMUX_ELSEWHERE),tmuxCan()?tmuxNewButton('新建 tmux 会话','primary'):undefined,'terminal');pullRefresh(main,loadLive);return;}
  tmuxSection(main,true);
  closeHint(main,'左滑或长按一行：关闭、更多操作');
  pullRefresh(main,loadLive);}
@@ -132,7 +161,7 @@ function tmuxActions(p,a=tmuxAgent(p)){
  box.append(el('p','fine close-sub',[a?stateLabel(a):'',a?providerName(a.agent):p.command||'shell',tmuxPlace(p),tmuxWhere(p)].filter(Boolean).join(' · ')));
  if(a){menuItem(box,'打开对话',()=>openAgent(a),'chat');if(a.history_ref?.record)menuItem(box,'只读查看历史',()=>openRecord(a.history_ref.record),'history','只看记录');}
  menuItem(box,a?'只看终端':'打开终端',()=>tmuxOpen(p),'terminal');
- menuItem(box,'复制位置',()=>copyText(p.session+':'+p.window_index+'.'+p.pane_index),'copy',p.session+':'+p.window_index+'.'+p.pane_index+' · '+p.pane_id);
+ menuItem(box,'复制位置',()=>copyText(p.session+':'+p.window_index+'.'+p.pane_index),'copy',p.session+':'+p.window_index+'.'+p.pane_index+' · '+tmuxRawId(p)+(tmuxServer(p)?' · 服务器 '+tmuxServer(p):''));
  menuItem(box,'关闭…',()=>tmuxClose(p),'x','关掉这个窗格，或者结束整个会话');}
 
 // ─── Close a pane or a session ───────────────────────────────────────────────
@@ -145,13 +174,13 @@ function tmuxClose(p){
  const card=el('div','close-who');if(a)card.append(avatar(a.agent,stateTone(a)));else{const av=el('div','avatar term-av');av.append(icon('terminal'));card.append(av);}
  const t=el('div','grow');t.append(el('div','close-title',a?titleOf(a):tmuxTitle(p)));
  const meta=el('div','close-meta');meta.append(el('span','',a?providerName(a.agent):p.command||'shell'));const where=tmuxWhere(p);if(where)meta.append(el('span','sep',where));t.append(meta);
- t.append(el('div','close-place',tmuxPlace(p)+' · '+p.pane_id));card.append(t);box.append(card);
+ t.append(el('div','close-place',tmuxPlace(p)+' · '+tmuxRawId(p)));card.append(t);box.append(card);
  const warns=el('div','close-warns');box.append(warns);
  const warn=(text,strong)=>{const w=el('div','close-warn'+(strong?' strong':''));w.append(icon('alert'),el('span','grow',text));warns.append(w);};
  if(a&&['working','blocked'].includes(a.agent_status))warn(providerName(a.agent)+(a.agent_status==='blocked'?' 在等你确认':' 还在干活')+'，关闭会直接结束它',true);
  else if(p.command&&!/^(bash|zsh|sh|fish|dash|ksh|tcsh|login)$/.test(p.command))warn('里面正在运行 '+p.command+'，关闭会结束它',!!a);
  if(p.attached)warn('电脑上有终端正连着这个会话');
- const others=tmuxPanes().filter(x=>x.session===p.session).length;
+ const others=tmuxPanes().filter(x=>tmuxSameSession(x,p)).length;
  box.append(el('div','section-label','怎么关'));
  const opts=el('div','close-opts');opts.setAttribute('role','radiogroup');opts.setAttribute('aria-label','关闭方式');box.append(opts);
  const foot=el('div','close-foot');const status=el('div','close-status hidden');status.setAttribute('role','status');status.setAttribute('aria-live','polite');foot.append(status);
@@ -181,8 +210,8 @@ async function tmuxKillRun(p,scope,go,status,lock){
   if(status.isConnected){closeStatus(status,'error','结果未知：'+m.replace(/^关闭结果未知：/,'')+'。刷新看看，别直接再点',look);lock();}
   else toast('关闭结果未知，刷新列表看看，别直接再点');}}
 function tmuxAfterClose(p,scope){
- const st=tmuxState();if(st){st.panes=st.panes.filter(x=>scope==='session'?x.session!==p.session:x.pane_id!==p.pane_id);st.sig='';}
- const gone=x=>x&&(scope==='session'?x.session===p.session:x.pane_id===p.pane_id);
+ const st=tmuxState();if(st){st.panes=st.panes.filter(x=>scope==='session'?!tmuxSameSession(x,p):x.pane_id!==p.pane_id);st.sig='';}
+ const gone=x=>x&&(scope==='session'?tmuxSameSession(x,p):x.pane_id===p.pane_id);
  if(typeof T!=='undefined'&&T.view?.kind==='tmux'&&gone(T.view.pane)){leaveTerminal();}
  if(S.chat?.agent?.tmux&&gone(S.chat.agent.tmux_pane)){S.chat=null;S.chatStack=[];S.epoch++;}
  render();setTimeout(()=>tmuxLoad(),400);}
@@ -205,7 +234,8 @@ async function tmuxNewSheet(){
  name.setAttribute('aria-label','会话名字');name.setAttribute('autocapitalize','off');name.setAttribute('enterkeyhint','done');
  name.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();name.blur();}};
  const nameNote=el('p','fine tmux-name-note','英文字母、数字、- 和 _');body.append(name,nameNote);
- const nameOk=()=>{const v=name.value.trim();const used=v&&tmuxPanes().some(p=>p.session===v);const bad=v&&!TMUX_NAME_RE.test(v);
+ // A new session goes on the default server: only its names are taken (a named server may have the same).
+ const nameOk=()=>{const v=name.value.trim();const used=v&&tmuxPanes().some(p=>!p.server&&p.session===v);const bad=v&&!TMUX_NAME_RE.test(v);
   nameNote.textContent=bad?'只能用英文字母、数字、- 和 _，不能以 - 开头':used?'已经有叫 '+v+' 的会话了，换个名字':'英文字母、数字、- 和 _';nameNote.classList.toggle('bad',!!(bad||used));return !bad&&!used;};
  name.oninput=()=>{f.name=name.value.trim();nameOk();};
  // Directory: home first, then where tmux panes are and recent projects.
@@ -315,9 +345,10 @@ async function tmuxChatPoll(){
  // 新建 without Herdr (or before a Herdr session is known) is a tmux session.
  openCreate=function(){if(!S.demo&&S.device&&(noHerdr()||!S.session)&&tmuxCan()){tmuxNewSheet();return;}return baseCreate();};
 })();
-// The list follows tmux while it is on screen (new sessions, windows renamed, commands changing):
-// every 4 s while a tmux agent works or waits, else every 8 s. An open chat follows its pane on the
-// status beat (refreshStatus above).
-TX.tick=0;
-setInterval(()=>{if(!S.active||(typeof T!=='undefined'&&T.view)||S.chat)return;const hot=tmuxAgents().some(a=>['working','blocked'].includes(a.agent_status));
- if((hot||++TX.tick%2===0)&&S.tab==='live')tmuxLoad();},4000);
+// The list follows tmux while it is on screen (a session started on the computer, windows renamed,
+// commands changing): every 4 s, at once when the app comes back to the foreground, and on 刷新 /
+// pull-to-refresh (loadLive). Nothing while the app is in the background (S.active false) or a chat
+// or terminal covers the list; an open chat follows its pane on the status beat (refreshStatus above).
+function tmuxListShown(){return S.active&&S.tab==='live'&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!S.demo&&!!S.device;}
+setInterval(()=>{if(tmuxListShown())tmuxLoad();},4000);
+(function(){const fg=window.setForeground;if(typeof fg!=='function')return;window.setForeground=v=>{fg(v);if(v&&tmuxListShown())tmuxLoad();};})();

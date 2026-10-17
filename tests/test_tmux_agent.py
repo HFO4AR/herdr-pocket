@@ -84,7 +84,8 @@ class TmuxAgentTests(unittest.TestCase):
         env = {"PATH": str(self.home / "nothing"), "HOME": str(self.home)}
         p = patch.dict(os.environ, env, clear=True); p.start(); self.addCleanup(p.stop)
         h = patch.object(bridge.Path, "home", return_value=self.home); h.start(); self.addCleanup(h.stop)
-        for name, value in (("tmux_binary", lambda: "/fake/tmux"), ("tmux_run", self.tmux)):
+        # Only the default server: this machine's own tmux sockets are never looked at.
+        for name, value in (("tmux_binary", lambda: "/fake/tmux"), ("tmux_run", self.tmux), ("tmux_socket_dirs", lambda: [])):
             q = patch.object(bridge, name, side_effect=value); q.start(); self.addCleanup(q.stop)
         for name, value in (("ANSWER_PAUSE", 0), ("ANSWER_PATIENCE", 0.05)):
             q = patch.object(bridge, name, value); q.start(); self.addCleanup(q.stop)
@@ -95,7 +96,7 @@ class TmuxAgentTests(unittest.TestCase):
         s = patch.object(bridge, "process_snapshot", side_effect=lambda pid: self.procs.get(pid)); s.start(); self.addCleanup(s.stop)
         c = patch.object(bridge, "transcript_catalog", return_value=[]); c.start(); self.addCleanup(c.stop)
 
-    def tmux(self, args, timeout=6, data=None):
+    def tmux(self, args, timeout=6, data=None, sock=None):
         """list-panes, capture-pane and send-keys against the per-pane TUIs."""
         self.log.append(list(args))
         cmd = args[0]

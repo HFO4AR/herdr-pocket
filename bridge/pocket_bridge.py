@@ -4125,15 +4125,25 @@ def close_pane(request, prefix, state_dir):
 
 
 # ─── tmux (0.6): the SSH user's own tmux sessions ─────────────────────────────────────────────
-# Only the user's default tmux server is used (no -L/-S; $TMUX is dropped so a bridge started
-# inside tmux does not pick that server by accident; TMUX_TMPDIR is honored like tmux itself
-# does). Commands are argv lists, never shell strings. Only tmuxNew can start a server (the
-# person asked for a new session); every other command needs one already running.
-#  · tmux: list panes (no server running → empty, not an error). Panes running the Herdr client
-#    are left out: those agents are already in the app. A pane whose process tree holds exactly
-#    one Claude Code / Codex process is listed as that agent (`agent`), with its state read
-#    from the screen; `resolve: true` also locates its transcript the way Herdr panes are
-#    resolved (process FDs, native session dir, argv, title; never a guess).
+# Every tmux server the SSH user runs is listed: the default one (no -L/-S; $TMUX is dropped so a
+# bridge started inside tmux does not pick that server by accident; TMUX_TMPDIR is honored like
+# tmux itself does) and the named ones (`tmux -L work`) whose sockets sit in the user's tmux socket
+# directories ($TMUX_TMPDIR/tmux-UID, /tmp/tmux-UID, /private/tmp/tmux-UID on macOS,
+# $XDG_RUNTIME_DIR/tmux-UID, /run/user/UID/tmux-UID). Only a directory owned by the user, not a
+# symlink and not group/world-writable, is read; in it only real sockets owned by the user (never
+# a symlink) are used, addressed as `-S <path>` (argv). A dead socket answers "no server" at once
+# and is skipped; a hung server times out on its own (the servers are read in parallel).
+# ch's native-route servers (/tmp/ch-native-UID-*/tmux.sock, status bar off, one Claude per
+# `ch-<uuid>` session) are not in these directories: they are ch's plumbing behind the Herdr pane
+# that attaches to them, not sessions the person opened, and are never read.
+# Commands are argv lists, never shell strings. Only tmuxNew can start a server (the person asked
+# for a new session; always the default one); every other command needs one already running.
+#  · tmux: list panes (no server running → empty, not an error; `looked` says which directories
+#    were read, `skipped` what was refused and why, `servers` each server's state). Panes running
+#    the Herdr client are left out: those agents are already in the app. A pane whose process tree
+#    holds exactly one Claude Code / Codex process is listed as that agent (`agent`), with its
+#    state read from the screen; `resolve: true` also locates its transcript the way Herdr panes
+#    are resolved (process FDs, native session dir, argv, title; never a guess).
 #  · tmuxRead: one pane's screen plus recent scrollback, colors as SGR only (clean_ansi).
 #  · tmuxSend: text, text + Enter, or one named key into one pane. Same rules as Herdr pane
 #    input: a UUID receipt is committed before anything is written, a request is never run
@@ -4142,12 +4152,15 @@ def close_pane(request, prefix, state_dir):
 #  · tmuxKill: close one pane or one whole session (never one holding the Herdr client).
 #  · Agent ops (agents with a target, read, prompt, key, commands) aimed at a tmux pane id are
 #    served here for a detected agent; prompts go in through tmuxSend's receipts.
-# Panes are addressed by tmux's own id (%N) plus an identity hash (server pid, pane id, pane
-# pid), so a pane that was closed and whose id came back in a new server is never written to.
+# Panes are addressed by tmux's own id (%N; on a named server %N@<12 hex of the socket path's
+# hash>, since every server counts from %0) plus an identity hash (server pid, pane id, pane pid,
+# and the socket path for a named server), so a pane that was closed and whose id came back in a
+# new server is never written to. Every read or write re-lists that one server first.
 # An agent in a pane is addressed by a second identity that adds the agent process (pid, start
 # time): when it exits or is replaced, input aimed at it is refused.
-# tmux on another computer behind a ch-cli route is not listed: local only.
-TMUX_PANE_ID = re.compile(r"%\d{1,9}")
+# tmux on another computer (behind a ch-cli route or not) is not listed: local only.
+TMUX_PANE_ID = re.compile(r"%\d{1,9}(?:@[0-9a-f]{12})?")
+TMUX_RAW_ID = re.compile(r"%\d{1,9}")
 TMUX_SEP = "\x1f"
 # Some tmux builds do not pass control characters through -F output: they print \x1f as the
 # four characters "\037" (read back as is) or as "_" (utf8_sanitize). For the latter the list is
@@ -4191,13 +4204,14 @@ def tmux_binary():
     return find_executable("tmux")
 
 
-def tmux_run(args, timeout=6, data=None):
+def tmux_run(args, timeout=6, data=None, sock=None):
+    """One tmux command as argv; `sock` names a server by its socket path (-S), None = the default."""
     binary = tmux_binary()
     if not binary: raise BridgeError("电脑上没找到 tmux")
     env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
     try:
-        result = subprocess.run([binary, "-u", *args], capture_output=True, timeout=timeout, env=env,
-                                input=data.encode() if data is not None else None)
+        result = subprocess.run([binary, "-u", *(["-S", sock] if sock else []), *args], capture_output=True,
+                                timeout=timeout, env=env, input=data.encode() if data is not None else None)
     except subprocess.TimeoutExpired as exc:
         raise BridgeError("tmux 没有及时回应") from exc
     out = result.stdout.decode("utf-8", "replace")
@@ -4218,16 +4232,17 @@ def tmux_public(pane):
 _tmux_sep = {}
 
 
-def tmux_rows(args, fields):
+def tmux_rows(args, fields, sock=None, timeout=6):
     """Run a tmux -F list with one field per name and split its lines into fields, coping with
     builds that escape the 0x1f separator (see TMUX_SEP_ESCAPED). Lines that do not split into
-    exactly len(fields) parts are dropped."""
+    exactly len(fields) parts are dropped. Each server remembers its own separator (servers of
+    different tmux builds can run side by side)."""
     count = len(fields)
-    cached = _tmux_sep.get("sep")
+    cached = _tmux_sep.get(sock or "")
     order = [cached] if cached else []
     order += [x for x in (TMUX_SEP, TMUX_SEP_PRINTABLE, TMUX_SEP_PLAIN) if x != cached]
     for sep in order:
-        out = tmux_run(args + ["-F", sep.join("#{%s}" % f for f in fields)])
+        out = tmux_run(args + ["-F", sep.join("#{%s}" % f for f in fields)], timeout=timeout, sock=sock)
         lines = [x for x in out.split("\n") if x.strip()]
         if not lines: return []
         for split in ((sep, TMUX_SEP_ESCAPED) if sep == TMUX_SEP else (sep,)):
@@ -4235,33 +4250,143 @@ def tmux_rows(args, fields):
             if rows:
                 # Control characters came back as "_": the next list asks with a printable one
                 # right away (the plain one for builds that also turn non-ASCII into "_").
-                if sep != TMUX_SEP: _tmux_sep["sep"] = sep
+                if sep != TMUX_SEP: _tmux_sep[sock or ""] = sep
                 return rows
     return []
 
 
-def tmux_panes():
-    """Every live pane of the user's default tmux server, in session / window / pane order.
-    Private keys (_pid, _sid, _title) stay in the bridge; tmux_public strips them."""
-    if not tmux_binary(): return None
-    try: rows = tmux_rows(["list-panes", "-a"], TMUX_FIELDS)
+# ─── Which tmux servers ─────────────────────────────────────────────────────
+TMUX_SOCKETS_MAX = 16          # named servers read per list
+TMUX_NAMED_TIMEOUT = 3         # a named server that does not answer in time is reported, not waited for
+TMUX_SOCKET_NAME = re.compile(r"[^\x00-\x1f\x7f/]{1,100}")
+
+
+def tmux_socket_dirs():
+    """The directories tmux keeps this user's sockets in, the default server's first (tmux uses
+    $TMUX_TMPDIR when set, else /tmp). Paths only; tmux_servers checks them."""
+    name = "tmux-%d" % os.getuid()
+    base = os.environ.get("TMUX_TMPDIR") or ""
+    out = [os.path.join(base, name)] if base.startswith("/") else []
+    out.append("/tmp/" + name)
+    if sys.platform == "darwin": out.append("/private/tmp/" + name)
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or ""
+    if runtime.startswith("/"): out.append(os.path.join(runtime, name))
+    out.append("/run/user/%d/%s" % (os.getuid(), name))
+    seen, dirs = set(), []
+    for d in out:
+        d = os.path.normpath(d)
+        if d not in seen: seen.add(d); dirs.append(d)
+    return dirs
+
+
+def tmux_server_key(path):
+    return hashlib.sha256(("tmux-socket:" + path).encode()).hexdigest()[:12]
+
+
+def tmux_servers():
+    """(servers, looked, skipped). servers[0] is the default server ({sock: None}); the others are
+    named servers found as sockets: {sock: path, key, name}. `looked` = the directories read,
+    `skipped` = [{path, reason}] for what was refused (wrong owner, unsafe mode, a symlink).
+    Nothing here talks to a server; lstat only, so no symlink is ever followed."""
+    uid, dirs = os.getuid(), tmux_socket_dirs()
+    servers = [{"sock": None, "key": "", "name": "default", "default": True}]
+    looked, skipped, seen_dirs, seen_socks = [], [], set(), set()
+    if dirs:
+        # The default server's socket (no -S) must not come back as a named one.
+        try:
+            st = os.lstat(os.path.join(dirs[0], "default"))
+            seen_socks.add((st.st_dev, st.st_ino))
+        except OSError: pass
+    for index, d in enumerate(dirs):
+        try: st = os.lstat(d)
+        except FileNotFoundError:
+            if index == 0: looked.append(d)
+            continue
+        except OSError:
+            skipped.append({"path": d, "reason": "读不了"}); continue
+        if (st.st_dev, st.st_ino) in seen_dirs: continue
+        seen_dirs.add((st.st_dev, st.st_ino)); looked.append(d)
+        if stat_module.S_ISLNK(st.st_mode): skipped.append({"path": d, "reason": "是符号链接，没跟过去"}); continue
+        if not stat_module.S_ISDIR(st.st_mode): skipped.append({"path": d, "reason": "不是目录"}); continue
+        if st.st_uid != uid: skipped.append({"path": d, "reason": "不是这个用户的"}); continue
+        if st.st_mode & 0o022: skipped.append({"path": d, "reason": "权限太宽，别人也能写"}); continue
+        try: names = sorted(os.listdir(d))
+        except OSError: skipped.append({"path": d, "reason": "读不了"}); continue
+        for name in names:
+            path = os.path.join(d, name)
+            try: s = os.lstat(path)
+            except OSError: continue
+            if stat_module.S_ISLNK(s.st_mode): skipped.append({"path": path, "reason": "是符号链接，没跟过去"}); continue
+            if not stat_module.S_ISSOCK(s.st_mode): continue
+            if s.st_uid != uid: skipped.append({"path": path, "reason": "不是这个用户的"}); continue
+            if not TMUX_SOCKET_NAME.fullmatch(name) or (s.st_dev, s.st_ino) in seen_socks: continue
+            seen_socks.add((s.st_dev, s.st_ino))
+            if len(servers) > TMUX_SOCKETS_MAX: skipped.append({"path": path, "reason": "tmux 服务器太多，没读"}); continue
+            servers.append({"sock": path, "key": tmux_server_key(path), "name": name[:64], "default": False})
+    return servers, looked, skipped[:8]
+
+
+def tmux_server_panes(server, strict=False):
+    """(rows, state, error) of one server: state "running", "none" (no server on that socket) or
+    "error", reported. strict=True: a failing server raises instead (a read, write or create aimed
+    at the default server stops there, as before)."""
+    named = server["sock"] is not None
+    try: rows = tmux_rows(["list-panes", "-a"], TMUX_FIELDS, server["sock"], timeout=TMUX_NAMED_TIMEOUT if named else 6)
     except TmuxFailed as exc:
-        if TMUX_NO_SERVER.search(str(exc)): return []
-        raise
-    found = []
-    for parts in rows:
-        (server, pane_id, pane_pid, session, win, win_name, win_active, pane_index, pane_active,
-         attached, command, path, width, height, dead, win_panes, title, session_id) = parts
-        if not TMUX_PANE_ID.fullmatch(pane_id) or dead == "1" or command in TMUX_SKIP: continue
-        ident = hashlib.sha256(json.dumps(["tmux", server, pane_id, pane_pid]).encode()).hexdigest()
-        found.append({"pane_id": pane_id, "identity": ident, "session": session[:120], "window_index": tmux_int(win),
-                      "window_name": win_name[:120], "pane_index": tmux_int(pane_index), "window_panes": tmux_int(win_panes),
-                      "active": pane_active == "1" and win_active == "1", "attached": tmux_int(attached) > 0,
-                      "command": command[:80], "cwd": path[:400], "width": tmux_int(width), "height": tmux_int(height),
-                      "_pid": tmux_int(pane_pid), "_sid": session_id if TMUX_SESSION_ID.fullmatch(session_id) else "",
-                      "_title": title[:200]})
-        if len(found) >= TMUX_MAX: break
+        if TMUX_NO_SERVER.search(str(exc)): return [], "none", None
+        if strict: raise
+        return [], "error", str(exc)[:160]
+    except BridgeError as exc:
+        if strict: raise
+        return [], "error", str(exc)[:160]
+    return rows, "running", None
+
+
+def tmux_panes(only=None, report=None):
+    """Every live pane of the user's tmux servers (default first), in session / window / pane order.
+    `only`: just the server with that key ("" = default; a failing default server then raises).
+    `report` (a dict) gets looked / skipped / servers. Private keys (_pid, _sid, _title, _tid, _sock) stay in the bridge; tmux_public strips them."""
+    if not tmux_binary(): return None
+    servers, looked, skipped = tmux_servers()
+    if only is not None: servers = [s for s in servers if s["key"] == only]
+    results = {}
+    named = [s for s in servers if s["sock"]]
+    if named:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(8, len(named))) as pool:
+            for server, value in zip(named, pool.map(tmux_server_panes, named)): results[server["key"]] = value
+    # Listing every server: a failing default one is reported like a named one, so the others still show.
+    if servers and servers[0]["default"]: results[""] = tmux_server_panes(servers[0], strict=only is not None)
+    found, states = [], []
+    for server in servers:
+        rows, state, error = results[server["key"]]
+        count = 0
+        for parts in rows:
+            (pid, tid, pane_pid, session, win, win_name, win_active, pane_index, pane_active,
+             attached, command, path, width, height, dead, win_panes, title, session_id) = parts
+            if not TMUX_RAW_ID.fullmatch(tid) or dead == "1" or command in TMUX_SKIP: continue
+            if len(found) >= TMUX_MAX: break
+            parts = ["tmux", pid, tid, pane_pid] + ([server["sock"]] if server["sock"] else [])
+            ident = hashlib.sha256(json.dumps(parts).encode()).hexdigest()
+            pane = {"pane_id": tid + ("@" + server["key"] if server["key"] else ""), "identity": ident, "session": session[:120],
+                    "window_index": tmux_int(win), "window_name": win_name[:120], "pane_index": tmux_int(pane_index),
+                    "window_panes": tmux_int(win_panes), "active": pane_active == "1" and win_active == "1",
+                    "attached": tmux_int(attached) > 0, "command": command[:80], "cwd": path[:400],
+                    "width": tmux_int(width), "height": tmux_int(height),
+                    "_pid": tmux_int(pane_pid), "_sid": session_id if TMUX_SESSION_ID.fullmatch(session_id) else "",
+                    "_title": title[:200], "_tid": tid, "_sock": server["sock"]}
+            if server["sock"]: pane["server"] = server["name"]
+            found.append(pane); count += 1
+        entry = {"name": server["name"], "default": server["default"], "state": state, "panes": count}
+        if error: entry["error"] = error
+        states.append(entry)
+    if report is not None: report.update(looked=looked, skipped=skipped, servers=states)
     return found
+
+
+def tmux_key(target):
+    """The server key a public pane id names ("" = the default server)."""
+    return target.split("@", 1)[1] if "@" in target else ""
 
 
 # ─── Agents inside tmux panes ───────────────────────────────────────────────
@@ -4381,9 +4506,9 @@ def tmux_state(pane, found, text):
     return "idle" if done else "working"
 
 
-def tmux_visible(pane_id):
+def tmux_visible(pane):
     # Some scrollback: a long reply may have pushed its prompt above the visible rows.
-    try: return tmux_run(["capture-pane", "-p", "-J", "-t", pane_id, "-S", "-120"])
+    try: return tmux_run(["capture-pane", "-p", "-J", "-t", pane["_tid"], "-S", "-120"], sock=pane["_sock"])
     except BridgeError: return None
 
 
@@ -4427,7 +4552,8 @@ def tmux_history(pane, found, catalog_cache):
 
 
 def tmux_list(request):
-    panes = tmux_panes()
+    report = {}
+    panes = tmux_panes(report=report)
     if panes is None: return {"available": False, "panes": []}
     resolve, cache, screens, out = request.get("resolve") is True, {}, 0, []
     for pane in panes:
@@ -4437,7 +4563,7 @@ def tmux_list(request):
             status = None
             if screens < TMUX_AGENT_SCREENS:
                 screens += 1
-                text = tmux_visible(pane["pane_id"])
+                text = tmux_visible(pane)
                 if text is not None: status = tmux_state(pane, found, text)
             ref = None
             if resolve:
@@ -4445,7 +4571,9 @@ def tmux_list(request):
                 except (OSError, BridgeError) as exc: ref = {"status": "unavailable", "reason": str(exc)[:200]}
             entry["agent"] = tmux_agent_row(pane, found, status, ref)
         out.append(entry)
-    return {"available": True, "panes": out}
+    # Where it looked, so an empty list can say so (and a refused directory or a silent server shows).
+    return {"available": True, "panes": out, "looked": report.get("looked", []), "skipped": report.get("skipped", []),
+            "servers": report.get("servers", [])}
 
 
 def tmux_target(request, agent=False):
@@ -4454,7 +4582,7 @@ def tmux_target(request, agent=False):
     target = request.get("target")
     if not isinstance(target, str) or not TMUX_PANE_ID.fullmatch(target): raise BridgeError("Invalid tmux pane")
     if not isinstance(request.get("identity"), str): raise BridgeError("Invalid tmux pane")
-    panes = tmux_panes()
+    panes = tmux_panes(only=tmux_key(target))
     if panes is None: raise BridgeError("电脑上没找到 tmux")
     pane = next((p for p in panes if p["pane_id"] == target), None)
     if agent:
@@ -4467,8 +4595,8 @@ def tmux_target(request, agent=False):
     return pane
 
 
-def tmux_capture(pane_id):
-    try: raw = tmux_run(["capture-pane", "-p", "-e", "-J", "-t", pane_id, "-S", str(-TMUX_SCROLL)])
+def tmux_capture(pane):
+    try: raw = tmux_run(["capture-pane", "-p", "-e", "-J", "-t", pane["_tid"], "-S", str(-TMUX_SCROLL)], sock=pane["_sock"])
     except TmuxFailed as exc: raise BridgeError("读不到这个 tmux 窗格：" + str(exc)) from exc
     return screen_pair(raw)
 
@@ -4485,7 +4613,7 @@ def screen_pair(raw):
 
 def tmux_read(request):
     pane = tmux_target(request)
-    text, screen = tmux_capture(pane["pane_id"])
+    text, screen = tmux_capture(pane)
     return {"text": text, "ansi": screen, "pane": tmux_public(pane)}
 
 
@@ -4506,7 +4634,7 @@ def tmux_send(request, state_dir):
     pane = tmux_target(request)
     db, previous = receipt_open(state_dir, req_id, digest, "上次的输入结果未知：先看一眼终端，别直接重发")
     if previous is not None: return previous
-    target = pane["pane_id"]
+    target, sock = pane["_tid"], pane["_sock"]
     if action == "key": steps = [(["send-keys", "-t", target, TMUX_KEYS[key]], None)]
     elif "\n" in text or "\r" in text:
         # Several lines: one paste (bracketed when the program asked for it), so a shell or an
@@ -4521,14 +4649,14 @@ def tmux_send(request, state_dir):
             # An agent's input box may take typed text (or a paste's end) and the Enter as one burst, and
             # then keeps the Enter as part of the text (seen with Claude Code 2.1.268): let it settle.
             if args[-1] == "Enter" and index: time.sleep(0.3)
-            try: tmux_run(args, data=data)
+            try: tmux_run(args, data=data, sock=sock)
             except TmuxFailed as exc:
                 # tmux refused the first command before writing anything (pane gone): not sent.
                 # A buffer load writes nothing to the pane either.
                 if index == 0 or (index == 1 and args[0] == "paste-buffer"):
                     receipt_save(db, req_id, {"sent": False, "rejected": "tmux"})
                     if args[0] == "paste-buffer":
-                        try: tmux_run(["delete-buffer", "-b", args[args.index("-b") + 1]])
+                        try: tmux_run(["delete-buffer", "-b", args[args.index("-b") + 1]], sock=sock)
                         except BridgeError: pass
                     raise BridgeError("没发出去：tmux 拒绝了（" + str(exc)[:120] + "）") from exc
                 raise BridgeError("只发出去一部分，结果未知：先看一眼终端，别直接重发") from exc
@@ -4562,13 +4690,15 @@ def tmux_info(request):
         real = os.path.realpath(d["path"])
         if real in seen: continue
         seen.add(real); dirs.append({"path": d["path"], "source": "history", "modified": d["modified"]})
-    sessions = sorted({p["session"] for p in panes})
+    # Session names a new one must not reuse: tmuxNew creates on the default server.
+    sessions = sorted({p["session"] for p in panes if not p["_sock"]})
     return {"available": available, "home": str(Path.home()), "dirs": dirs[:16], "sessions": sessions[:TMUX_MAX]}
 
 
 def tmux_new(request, state_dir):
     """`tmux new-session -d [-s NAME] -c DIR`, detached (nothing on the computer's screen changes).
-    Starts the user's default tmux server when none runs: that is what the person asked for."""
+    Starts the user's default tmux server when none runs: that is what the person asked for.
+    Always the default server (named servers are only listed and used)."""
     if set(request) - TMUX_NEW_KEYS: raise BridgeError("没创建：请求里有不认识的字段")
     req_id = request.get("id")
     if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
@@ -4582,7 +4712,7 @@ def tmux_new(request, state_dir):
     if done is not None: return done
     # Reads only so far: a failure (a tmux server of another version, a hung server) created nothing.
     try:
-        panes = tmux_panes() or []
+        panes = tmux_panes(only="") or []
         if name and any(p["session"] == name for p in panes): raise BridgeError("没创建：已经有叫 " + name + " 的 tmux 会话了")
         known = {p["cwd"] for p in panes if p["cwd"].startswith("/")}
         cwd = create_dir(request.get("cwd"), lambda: known | {d["path"] for d in history_dirs(40)})
@@ -4621,7 +4751,7 @@ def tmux_new_pane(pane_id, session, before):
     would show as the command. Looks for at most about a second; never fails the create."""
     pane = None
     for attempt in range(6):
-        panes = tmux_panes() or []
+        panes = tmux_panes(only="") or []
         if pane_id: pane = next((p for p in panes if p["pane_id"] == pane_id), None)
         else:
             # The -P output was not readable: the one pane that was not there before, in that session.
@@ -4645,14 +4775,14 @@ def tmux_kill(request, state_dir):
     pane = tmux_target(request)
     if scope == "session":
         if not pane["_sid"]: raise BridgeError("没关：读不到这个会话的编号，刷新一下")
-        try: commands = tmux_run(["list-panes", "-s", "-t", pane["_sid"], "-F", "#{pane_current_command}"]).split("\n")
+        try: commands = tmux_run(["list-panes", "-s", "-t", pane["_sid"], "-F", "#{pane_current_command}"], sock=pane["_sock"]).split("\n")
         except TmuxFailed as exc: raise BridgeError("没关：读不到这个会话（" + str(exc)[:120] + "）") from exc
         if any(c.strip() in TMUX_SKIP for c in commands): raise BridgeError("没关：这个会话里开着 Herdr，只能单独关窗格")
     db, previous = receipt_open(state_dir, req_id, digest, "上次关闭的结果未知：先刷新列表看看，别直接再点")
     if previous is not None: return previous
     try:
-        args = ["kill-pane", "-t", pane["pane_id"]] if scope == "pane" else ["kill-session", "-t", pane["_sid"]]
-        try: tmux_run(args)
+        args = ["kill-pane", "-t", pane["_tid"]] if scope == "pane" else ["kill-session", "-t", pane["_sid"]]
+        try: tmux_run(args, sock=pane["_sock"])
         except TmuxFailed as exc:
             receipt_save(db, req_id, {"closed": False})
             raise BridgeError("没关：tmux 没接受（" + str(exc)[:160] + "）") from exc
@@ -4682,13 +4812,13 @@ TMUX_ANSWER_KEYS = {"up": "Up", "down": "Down", "enter": "Enter"}
 
 
 def tmux_answer_io(pane, kind):
-    target = pane["pane_id"]
+    target, sock = pane["_tid"], pane["_sock"]
     def key(name):
         if name not in TMUX_ANSWER_KEYS: raise BridgeError("Unsupported key")
-        tmux_run(["send-keys", "-t", target, TMUX_ANSWER_KEYS[name]])
+        tmux_run(["send-keys", "-t", target, TMUX_ANSWER_KEYS[name]], sock=sock)
     # Literal text (-l): one line, already checked for control characters by validate_answer.
-    return AnswerIO(kind, lambda: tmux_capture(target)[0], key,
-                    lambda text: tmux_run(["send-keys", "-t", target, "-l", "--", text]))
+    return AnswerIO(kind, lambda: tmux_capture(pane)[0], key,
+                    lambda text: tmux_run(["send-keys", "-t", target, "-l", "--", text], sock=sock))
 
 
 def tmux_status_rows():
@@ -4700,7 +4830,7 @@ def tmux_status_rows():
         status = None
         if screens < TMUX_AGENT_SCREENS:
             screens += 1
-            text = tmux_visible(pane["pane_id"])
+            text = tmux_visible(pane)
             if text is not None: status = tmux_state(pane, found, text)
         rows.append(tmux_agent_row(pane, found, status))
     return rows
@@ -4708,10 +4838,10 @@ def tmux_status_rows():
 
 def tmux_one_status(request):
     target = request.get("target")
-    pane = next((p for p in tmux_panes() or [] if p["pane_id"] == target), None)
+    pane = next((p for p in tmux_panes(only=tmux_key(target)) or [] if p["pane_id"] == target), None)
     found = tmux_agent_in(pane) if pane else None
     if not found: return {"tmux": True, "agents": []}
-    text = tmux_visible(pane["pane_id"])
+    text = tmux_visible(pane)
     return {"tmux": True, "agents": [tmux_agent_row(pane, found, tmux_state(pane, found, text) if text is not None else None)]}
 
 
@@ -4742,7 +4872,7 @@ def tmux_answer(request, state_dir, pane, found):
     req_id = request.get("id")
     if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
     validate_answer(request)
-    if parse_menu(tmux_capture(pane["pane_id"])[0], found["kind"]) is None:
+    if parse_menu(tmux_capture(pane)[0], found["kind"]) is None:
         raise BridgeError("Agent is not waiting on a menu; refresh and inspect it first")
     digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     db, previous = receipt_open(state_dir, req_id, digest, "上次回答的结果未知：先看一眼终端，别直接重发")
@@ -4762,11 +4892,11 @@ def tmux_agent_request(request, state_dir):
     if op == "agents":
         # Following a chat: what runs in the pane now ("same", "changed", "exited", "gone").
         target = request.get("target")
-        pane = next((p for p in tmux_panes() or [] if p["pane_id"] == target), None)
+        pane = next((p for p in tmux_panes(only=tmux_key(target)) or [] if p["pane_id"] == target), None)
         if not pane: return {"follow": True, "state": "gone", "agents": [], "pane": None}
         found = tmux_agent_in(pane)
         if not found: return {"follow": True, "state": "exited", "agents": [], "pane": dict(tmux_public(pane), tmux=True)}
-        text = tmux_visible(pane["pane_id"])
+        text = tmux_visible(pane)
         row = tmux_agent_row(pane, found, tmux_state(pane, found, text) if text is not None else None, tmux_history(pane, found, {}))
         row["tmux_pane"] = tmux_public(pane)
         return {"follow": True, "state": "same" if row["identity"] == request.get("identity") else "changed", "agents": [row], "pane": None}
@@ -4778,7 +4908,7 @@ def tmux_agent_request(request, state_dir):
         # Before a prompt: the upload must be there and hash right. Local pane: nothing to copy.
         return {"remote": False, "path": str(uploaded_file(request)[0])}
     if op == "read":
-        text, screen = tmux_capture(pane["pane_id"])
+        text, screen = tmux_capture(pane)
         state = tmux_state(pane, found, text)
         result = {"text": text, "agent_status": state, "modes": screen_modes(text, found["kind"]), "bg": screen_bg(text)}
         # `menu: true` (after a slash command) parses a picker even when the state is not blocked.
@@ -4792,7 +4922,7 @@ def tmux_agent_request(request, state_dir):
         if key not in AGENT_KEYS: raise BridgeError("Unsupported key")
         if key == "shift+tab":
             # Shift+Tab cycles the mode only while the agent's input footer is up; on a dialog it may approve.
-            screen = tmux_visible(pane["pane_id"])
+            screen = tmux_visible(pane)
             if screen is None or tmux_screen_state(screen, found["kind"]) == "blocked":
                 raise BridgeError("没发出去：Agent 正等你确认，这时按 Shift+Tab 可能直接批准；先处理完再切换")
             if screen_modes(screen, found["kind"]) is None:
@@ -4803,18 +4933,18 @@ def tmux_agent_request(request, state_dir):
     attached = request.get("images") is not None or request.get("files") is not None
     if not isinstance(text, str) or (not text.strip() and not attached) or "\x00" in text: raise BridgeError("Prompt must not be empty")
     if len(text.encode()) > 15000: raise BridgeError("没发出去：消息太长了，最多 15000 字节")
-    screen = tmux_visible(pane["pane_id"])
+    screen = tmux_visible(pane)
     state = tmux_state(pane, found, screen) if screen is not None else None
     if state == "blocked": raise BridgeError(NOT_SENT["agent_blocked"])
     # Same rule as a Herdr agent: only an idle agent gets a prompt; the phone queues it meanwhile.
     if state != "idle": raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
     if found["kind"] == "claude":
-        plain, colored = tmux_capture(pane["pane_id"])
+        plain, colored = tmux_capture(pane)
         if claude_draft(plain, colored):
             raise BridgeError(DRAFT_NOT_SENT["claude"])
     elif found["kind"] == "codex":
         # Text typed into the pane (or left there) would be sent together with this prompt (seen live).
-        plain, colored = tmux_capture(pane["pane_id"])
+        plain, colored = tmux_capture(pane)
         draft = codex_draft(plain, colored)
         if draft is None: raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
         if draft: raise BridgeError(DRAFT_NOT_SENT["codex"])

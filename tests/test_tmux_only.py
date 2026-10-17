@@ -83,6 +83,8 @@ class TmuxOnlyTests(unittest.TestCase):
         p = patch.dict(os.environ, env, clear=True); p.start(); self.addCleanup(p.stop)
         # Only the fixture's tmux: not the one this machine may have in /usr/local/bin or Linuxbrew.
         d = patch.object(bridge, "SYSTEM_BIN_DIRS", ()); d.start(); self.addCleanup(d.stop)
+        # Only the default server: this machine's own tmux sockets are never looked at.
+        d = patch.object(bridge, "tmux_socket_dirs", return_value=[]); d.start(); self.addCleanup(d.stop)
         self.addCleanup(bridge._tmux_sep.clear)
         h = patch.object(bridge.Path, "home", return_value=self.home); h.start(); self.addCleanup(h.stop)
         # Fake process tree: 200 is a shell running Claude (201), 300 a node launcher of Codex.

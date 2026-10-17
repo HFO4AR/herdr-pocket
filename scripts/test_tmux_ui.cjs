@@ -29,7 +29,7 @@ await page.addInitScript(()=>{
    else if(a.op==='glance')data={items:[]};
    else if(a.op==='account')data={ssh_user:'u',hostname:'fx'};
    else if(a.op==='createInfo')data={kinds:[{kind:'codex',found:true},{kind:'claude',found:true},{kind:'ch',found:false}],home:'/home/u',workspaces:[{workspace_id:'w1',label:'proj',focused:true,dirs:[{path:'/home/u/proj',agents:1,panes:1}]}],dirs:[{path:'/home/u/proj',source:'pane',agents:1,workspace_id:'w1'}]};
-   else if(a.op==='tmux'){if(!fx.tmuxKnown)throw Error('Unknown operation');data={available:true,panes:fx.tmux};}
+   else if(a.op==='tmux'){if(!fx.tmuxKnown)throw Error('Unknown operation');if(fx.tmuxFail)throw Error(fx.tmuxFail);data={available:true,panes:fx.tmux,looked:['/tmp/tmux-1000'],skipped:fx.skipped||[],servers:fx.servers||[]};}
    else if(a.op==='tmuxRead'){if(fx.readFail)throw Error(fx.readFail);const p=fx.tmux.find(x=>x.pane_id===a.target);
     if(!p||p.identity!==a.identity)throw Error('这个 tmux 窗格已经关了或换了，回到列表刷新一下');const ansi=fx.screen[a.target]||'$ ';data={text:ansi.replace(/\x1b\[[0-9;]*m/g,''),ansi,pane:p};}
    else if(a.op==='tmuxSend'){fx.sends.push(a);if(fx.sendFail)throw Error(fx.sendFail);data={sent:true,receipt:a.id};}
@@ -160,6 +160,53 @@ assert.equal((await calls('tmux')).length,asked+1,'an old bridge is not asked ag
 assert.equal(await page.locator('.tmux-label').count(),0);
 assert.equal(await page.getByText(/Unknown operation/).count(),0,'no error for an old bridge');
 console.log('PASS: no tmux, no section; an old bridge stays quiet');
+
+// ── 7b. Nothing running: one quiet line says where it looked; named servers; it follows on its own ──
+await page.evaluate(()=>{fx.tmuxKnown=true;fx.tmux=[];TX.by.clear();});
+await page.evaluate(()=>loadLive());
+const none=page.locator('.tmux-none-note');await none.waitFor();
+assert.match(await none.textContent(),/没找到正在运行的 tmux（看过 \/tmp\/tmux-1000）/);
+assert.match(await none.textContent(),/别的电脑上.*「设备」页/);
+assert.equal(await page.locator('.tmux-label').count(),0);
+await page.evaluate(()=>{fx.skipped=[{path:'/tmp/tmux-1000',reason:'权限太宽，别人也能写'}];fx.servers=[{name:'default',default:true,state:'none',panes:0},{name:'work',default:false,state:'error',panes:0,error:'tmux 没有及时回应'}];});
+await page.evaluate(()=>loadLive());
+await page.waitForFunction(()=>/跳过了 \/tmp\/tmux-1000（权限太宽/.test(document.querySelector('.tmux-none-note')?.textContent||''));
+assert.match(await none.textContent(),/有 tmux 服务器读不了：work/);
+await shot('none');
+// A failed read is not "nothing running"; the next good read brings the plain note back.
+await page.evaluate(()=>{fx.tmuxFail='tmux 没有及时回应';});await page.evaluate(()=>loadLive());
+await page.waitForFunction(()=>/这次没读到 tmux（tmux 没有及时回应）/.test(document.querySelector('.tmux-none-note')?.textContent||''));
+assert.doesNotMatch(await none.textContent(),/没找到正在运行/);
+await page.evaluate(()=>{fx.tmuxFail='';});await page.evaluate(()=>loadLive());
+await page.waitForFunction(()=>/没找到正在运行的 tmux/.test(document.querySelector('.tmux-none-note')?.textContent||''));
+// A session started on the computer (default server, and a named one `tmux -L work`, which counts
+// panes from %0 too) shows up while the list is on screen, without a refresh.
+const K='0123456789ab';
+await page.evaluate(K=>{fx.skipped=[];fx.servers=[];const base={session:'main',window_index:0,window_name:'bash',pane_index:0,window_panes:1,active:true,attached:false,command:'bash',cwd:'/home/u',width:120,height:40};
+ fx.tmux=[{...base,pane_id:'%0',identity:'tm-d0'},{...base,pane_id:'%0@'+K,identity:'tm-w0',server:'work',window_name:'repl',command:'python3'}];fx.screen['%0@'+K]='>>> 1+1\n2';},K);
+await page.waitForFunction(()=>document.querySelectorAll('.tmux-row').length===2,null,{timeout:6000});
+assert.equal(await none.count(),0);
+const named=rows.filter({hasText:'服务器 work'});assert.equal(await named.count(),1);
+assert.equal(await rows.filter({hasText:'服务器'}).count(),1,'the default server is not named');
+assert.equal(await overflow(),false);
+await shot('servers');
+// Back from the background: asked at once. In the background: not polled.
+let n0=(await calls('tmux')).length;
+await page.evaluate(()=>{setForeground(false);setForeground(true);});
+await page.waitForFunction(n=>fx.calls.filter(c=>c.op==='tmux').length>n,n0,{timeout:1500});
+await page.evaluate(()=>setForeground(false));await page.waitForTimeout(300);n0=(await calls('tmux')).length;
+await page.waitForTimeout(4600);
+assert.equal((await calls('tmux')).length,n0,'no tmux polling in the background');
+await page.evaluate(()=>setForeground(true));
+// The named server's pane opens by its own id; its long-press sheet names the server.
+await named.click();
+await page.waitForFunction(()=>(document.getElementById('pane-screen')?.textContent||'').includes('>>> 1+1'));
+assert.equal((await calls('tmuxRead')).at(-1).target,'%0@'+K);
+await page.getByRole('button',{name:'返回列表',exact:true}).click();await rows.first().waitFor();
+await named.dispatchEvent('contextmenu');
+await page.getByRole('dialog').getByText(/服务器 work/).first().waitFor();
+await page.evaluate(()=>closeSheet());await page.waitForFunction(()=>!document.querySelector('.sheet'));
+console.log('PASS: empty tmux says where it looked; named servers are shown; the list follows tmux while shown, not in the background');
 
 // ── 8. Small screen ──
 await page.evaluate(()=>{fx.tmuxKnown=true;fx.tmux=[{pane_id:'%7',identity:'tm-7',session:'a-very-long-session-name-for-testing',window_index:3,window_name:'an-equally-long-window-name',pane_index:0,window_panes:1,active:true,attached:true,command:'python3',cwd:'/home/u/some/really/deep/project/folder/that/goes/on',width:200,height:50}];TX.by.clear();});

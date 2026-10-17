@@ -53,6 +53,8 @@ class TmuxTests(unittest.TestCase):
         env = dict(os.environ, PATH=str(self.dir / "bin") + os.pathsep + os.environ.get("PATH", ""),
                    FAKE_TMUX_STATE=str(self.state_file), FAKE_TMUX_LOG=str(self.log), TMUX="/tmp/tmux-1/other,1,0")
         p = patch.dict(os.environ, env, clear=True); p.start(); self.addCleanup(p.stop)
+        # Only the default server: this machine's own tmux sockets are never looked at.
+        d = patch.object(bridge, "tmux_socket_dirs", return_value=[]); d.start(); self.addCleanup(d.stop)
         self.receipts = self.dir / "state"
 
     def save(self): self.state_file.write_text(json.dumps(self.state))
@@ -83,10 +85,11 @@ class TmuxTests(unittest.TestCase):
         self.assertFalse(call["tmux_env"], "$TMUX is dropped so the default server is used")
 
     def test_no_server_and_no_tmux(self):
+        none = [{"name": "default", "default": True, "state": "none", "panes": 0}]
         self.state["fail"] = {"list-panes": "no server running on /tmp/tmux-1000/default"}; self.save()
-        self.assertEqual(bridge.handle({"v": 1, "op": "tmux"}), {"available": True, "panes": []})
+        self.assertEqual(bridge.handle({"v": 1, "op": "tmux"}), {"available": True, "panes": [], "looked": [], "skipped": [], "servers": none})
         self.state["fail"] = {"list-panes": "error connecting to /tmp/tmux-1000/default (No such file or directory)"}; self.save()
-        self.assertEqual(bridge.handle({"v": 1, "op": "tmux"}), {"available": True, "panes": []})
+        self.assertEqual(bridge.handle({"v": 1, "op": "tmux"})["panes"], [])
         with patch.dict(os.environ, {"PATH": str(self.dir / "empty")}):
             self.assertEqual(bridge.handle({"v": 1, "op": "tmux"}), {"available": False, "panes": []})
 
