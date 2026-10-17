@@ -49,7 +49,11 @@ function footPaint(footer,a){
  const items=[],offline=!S.device&&!S.demo;
  if(!offline){if(writing)items.push('ask');
   if(queueItems(key).length&&!S.chat.stale)items.push('queue');
-  if(st==='working')items.push('work');else if(done&&!blocked&&!bgHold(a))items.push('done');
+  // Just sent and not picked up yet (activity.js 「已发出，等它开始…」): Herdr's first status after the
+  // send often still says idle and overrides the optimistic working. The 已发出 line stays all the same,
+  // so the footer does not shrink and grow back, which would move the whole conversation (and the
+  // bubble just sent) glued above it.
+  if(st==='working'||!blocked&&actInfo()?.kind==='sent')items.push('work');else if(done&&!blocked&&!bgHold(a))items.push('done');
   // Background work (bg.js): leads while the agent itself rests, a chip while it works — unless the
   // rail already carries two things (queue + 执行中); the status line and the list still say it.
   if(bgChatRunning()&&!S.chat.stale&&(st!=='working'||items.length<2))items.push('bg');}

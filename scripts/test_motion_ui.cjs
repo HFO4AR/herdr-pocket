@@ -33,7 +33,9 @@ await page.addInitScript(()=>{
   else if(op==='remote'){fx.calls.push(a.op);
    if(a.op==='sessions')data={sessions:[{name:'fx',running:true}]};
    else if(a.op==='agents')data=a.target?{follow:true,state:'same',agents:[fx.A1],pane:null}:{agents:[fx.A1]};
-   else if(a.op==='status'){const {history_ref,...rest}=fx.A1;data={agents:[rest]};}
+   // fx.statusGate (an array): status answers wait there until the test lets them land.
+   else if(a.op==='status'){const answer=()=>{const {history_ref,...rest}=fx.A1;return {agents:[rest]};};
+    if(fx.statusGate){fx.statusGate.push(()=>nativeResult(id,{ok:true,data:answer()}));return;}data=answer();}
    else if(a.op==='history'){
     fx.history.push(a.before===undefined?'poll':'before:'+a.before);fx.inflight++;fx.maxInflight=Math.max(fx.maxInflight,fx.inflight);
     const k=a.before===undefined?3:a.before/100-1,fail=a.before!==undefined&&fx.failNext;if(fail)fx.failNext='';
@@ -130,8 +132,20 @@ await page.getByText('第 2 页的回答 30。',{exact:false}).waitFor();
 assert(Math.abs(await markNow()-top2)<=2,'position kept after 重试');
 console.log('PASS: a failed page says so in place and 重试 loads it');
 
+// Herdr's first status after a send (still idle: the agent has not picked the prompt up yet) lands
+// whenever the next poll happens to answer: before the transcript copy or after it. Steps 5–6 hold
+// status answers back, so each order is played on purpose.
+const holdStatus=async()=>{await page.evaluate(()=>{fx.statusGate=[];});await page.waitForFunction(()=>!S.statusBusy);};
+const statusLands=async()=>{await page.evaluate(()=>{const q=fx.statusGate||[];fx.statusGate=null;if(q.length)q.forEach(f=>f());else refreshStatus();});
+ await page.waitForFunction(()=>S.chat.agent.agent_status==='idle'&&!S.statusBusy);};
+// Where a bubble sits once the rows' own motion is over, and the room the footer leaves above it.
+const settled=()=>page.waitForFunction(()=>!document.getAnimations().some(a=>a.playState==='running'&&a.effect?.target?.closest?.('.timeline .message')));
+const where=async text=>{await settled();return page.evaluate(t=>{const b=[...document.querySelectorAll('.timeline .message .bubble')].filter(x=>x.textContent.includes(t));
+ return {n:b.length,top:b.length?b.at(-1).getBoundingClientRect().top:NaN,foot:document.getElementById('composer').offsetHeight,view:document.getElementById('chat-scroll').clientHeight,stick:S.stick};},text);};
+const still=(a,b,what)=>{assert.equal(b.n,1,what+': one bubble');assert(Math.abs(b.top-a.top)<=2,what+' without a jump ('+a.top+' → '+b.top+'; footer '+a.foot+' → '+b.foot+', view '+a.view+' → '+b.view+')');};
+
 // 5. Sending: immediate feedback, the bubble rises in once, the label walks through the states.
-await page.evaluate(()=>{fx.delay=30;S.stick=true;scrollBottom();fx.promptDelay=700;});
+await page.evaluate(()=>{fx.delay=30;S.stick=true;scrollBottom();fx.promptDelay=700;});await holdStatus();
 const box=page.getByRole('textbox',{name:'消息输入框',exact:true});
 await box.fill('把发布流程写进文档');
 await page.getByRole('button',{name:'发送消息',exact:true}).click();
@@ -151,15 +165,17 @@ await page.evaluate(()=>{paintTimeline();paintTimeline();});
 assert.equal(await page.locator('.send-in,.message.fresh').count(),0,'no replay on repaint');
 console.log('PASS: send feedback is immediate, the bubble enters once and changes state in place');
 
-// 6. Hand-off: the transcript copy takes the bubble's place with no jump and no entrance.
-const before=await page.evaluate(()=>window.__row.querySelector('.bubble').getBoundingClientRect().top);
+// 6. Hand-off: the transcript copy takes the bubble's place with no jump and no entrance, and Herdr's
+// late idle after it moves nothing either (the footer keeps its 已发出 line, so it keeps its height).
+const before=await where('把发布流程写进文档');
 await page.evaluate(()=>{fx.extra.push({id:'999:0',kind:'user',text:'把发布流程写进文档',title:'',call_id:'',timestamp:new Date().toISOString()});return fetchHistory();});
 await page.waitForFunction(()=>!document.querySelector('.message.pending'));
 const prompt=page.locator('.message.prompt[data-mid="999:0"]');
 await prompt.waitFor();
-const after=await prompt.locator('.bubble').evaluate(b=>b.getBoundingClientRect().top);
-assert(Math.abs(after-before)<=2,'hand-off without a jump ('+before+' → '+after+')');
+const after=await where('把发布流程写进文档');still(before,after,'hand-off');
 assert.equal(await prompt.evaluate(r=>r.classList.contains('fresh')),false,'the transcript copy has no entrance of its own');
+await statusLands();
+still(before,await where('把发布流程写进文档'),'Herdr still idle after the hand-off');
 // A new reply in a poll fades in once; a refresh does not replay anything.
 await page.evaluate(()=>{fx.extra.push({id:'999:1',kind:'assistant',text:'写好了。',title:'',call_id:'',timestamp:new Date().toISOString()});return fetchHistory();});
 await page.locator('.message[data-mid="999:1"]').waitFor();
@@ -167,7 +183,22 @@ assert.equal(await page.locator('.message.fresh').count(),1,'a new reply fades i
 await page.waitForTimeout(400);
 await page.evaluate(()=>{S.paused=false;return fetchHistory(false,true);});await page.evaluate(()=>{S.paused=true;});
 assert.equal(await page.locator('.message.fresh,.send-in').count(),0,'no replay on a history refresh');
-console.log('PASS: the transcript copy replaces the bubble seamlessly; only new replies fade in, refreshes are quiet');
+// The other order: Herdr's idle lands first, while the bubble still waits; then the transcript copy.
+await holdStatus();
+await box.fill('顺手把测试也跑一下');
+await page.getByRole('button',{name:'发送消息',exact:true}).click();
+await page.locator('.message.pending').filter({hasText:'顺手把测试也跑一下'}).getByText('已送达 Agent',{exact:true}).waitFor();
+const before2=await where('顺手把测试也跑一下');
+await statusLands();
+const idle2=await where('顺手把测试也跑一下');still(before2,idle2,'Herdr still idle before the hand-off');
+assert.equal(await page.locator('.message.pending').filter({hasText:'顺手把测试也跑一下'}).count(),1,'still the waiting bubble');
+assert.equal(await page.locator('#act').getAttribute('data-kind'),'sent','the line still says it waits for the start');
+await page.evaluate(()=>{fx.extra.push({id:'999:2',kind:'user',text:'顺手把测试也跑一下',title:'',call_id:'',timestamp:new Date().toISOString()});return fetchHistory();});
+await page.locator('.message.prompt[data-mid="999:2"]').waitFor();
+await page.waitForFunction(()=>!document.querySelector('.message.pending'));
+still(before2,await where('顺手把测试也跑一下'),'hand-off after Herdr said idle');
+assert.equal(await page.locator('.message.prompt[data-mid="999:2"]').evaluate(r=>r.classList.contains('fresh')),false);
+console.log('PASS: the transcript copy replaces the bubble seamlessly in either order with Herdr\'s status; only new replies fade in, refreshes are quiet');
 
 // 7. Unconfirmed and refused sends never look delivered; a refused one becomes the queued bubble in place.
 await page.evaluate(()=>{fx.promptDelay=200;fx.promptErrors.push('连接超时');fx.A1={...fx.A1,agent_status:'idle'};S.chat.agent={...S.chat.agent,agent_status:'idle'};renderComposer();});
