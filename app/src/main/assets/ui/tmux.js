@@ -221,7 +221,9 @@ async function tmuxNewSheet(){
   const other=btn('','menu-item new-dir'+(f.custom?' on':''),()=>{f.custom=true;f.dir=pathInput.value.trim();draw();setTimeout(()=>pathInput.focus(),30);},'edit');
   other.setAttribute('role','radio');other.setAttribute('aria-checked',String(f.custom));const t=el('span','grow');t.append(el('span','menu-label','其他目录'),el('small','','家目录下的路径，要已经存在'));other.append(t);dirList.append(other);
   if(f.custom)dirList.append(pathInput);
-  if(!info)dirList.append(el('p','fine tmux-dir-loading','正在读取最近用过的目录…'));}
+  if(!info)dirList.append(el('p','fine tmux-dir-loading','正在读取最近用过的目录…'));
+  // The suggestions failed: say so, but 家目录 and a typed path still work (the bridge expands ~).
+  else if(info.error)dirList.append(el('p','fine tmux-dir-loading bad','读不到最近用过的目录（'+info.error+'），家目录和手填的路径照样能用'));}
  draw();
  const foot=el('div','new-foot');body.append(foot);
  const status=el('div','new-status hidden');status.setAttribute('role','status');status.setAttribute('aria-live','polite');foot.append(status);
@@ -230,18 +232,22 @@ async function tmuxNewSheet(){
  if(!info){try{const r=await remote('tmuxInfo');if(!box.isConnected)return;info=r;TX_NEW.info=r;TX_NEW.infoFor=S.device?.id||'';
    if(f.dir==='~')f.dir=r.home;draw();
    if(r.available===false){newStatus(status,'error','这台电脑上没找到 tmux，先装上（sudo apt install tmux 或 brew install tmux）');go.disabled=true;}}
-  catch(e){if(!box.isConnected)return;info={home:'',dirs:[]};draw();const m=e.message||String(e);
-   if(/Unknown operation|不支持的操作/.test(m)){newStatus(status,'error','电脑上的桥接程序太旧，先到「设备」里更新桥接程序');go.disabled=true;}}}}
+  catch(e){if(!box.isConnected)return;const m=e.message||String(e);
+   if(/Unknown operation|不支持的操作/.test(m)){info={home:'',dirs:[]};draw();newStatus(status,'error','电脑上的桥接程序太旧，先到「设备」里更新桥接程序');go.disabled=true;return;}
+   info={home:'',dirs:[],error:m.slice(0,120)};draw();}}}
 async function tmuxNewSubmit(f,go,status,nameOk,nameInput){
  if(TX_NEW.busy)return;
  if(!nameOk()){nameInput.focus();return;}
- const dir=(f.dir||'').trim();if(!dir||dir==='~'&&!TX_NEW.info){toast(f.custom?'先填目录路径':'先选一个目录');return;}
+ // "~" (家目录 before the directory list arrived, or when it could not be read) is fine: the bridge expands it.
+ const dir=(f.dir||'').trim();if(!dir){if(f.custom)newStatus(status,'error','先填目录路径，比如 ~/projects/app');else toast('先选一个目录');return;}
  TX_NEW.busy=true;go.disabled=true;go.replaceChildren(el('span','spinner'),document.createTextNode('正在新建…'));newStatus(status,'busy','正在开 tmux 会话…');
  try{const r=await remote('tmuxNew',{id:uuid(),cwd:dir,...(f.name?{name:f.name}:{})});TX_NEW.busy=false;
   if(!r?.created){newStatus(status,'error','没创建：tmux 没接受，可以改一下再试');restoreGo(go);return;}
-  if(status.isConnected)closeSheet();toast('tmux 会话「'+(r.session||f.name||'新会话')+'」开好了');
+  if(status.isConnected)closeSheet();const named='tmux 会话「'+(r.session||f.name||'新会话')+'」';
   const st=tmuxState();if(st&&r.pane&&!st.panes.some(p=>p.pane_id===r.pane.pane_id)){st.panes=st.panes.concat(r.pane);st.available=true;st.sig='';}
-  if(r.pane&&!S.chat)tmuxOpen(r.pane);else{render();}setTimeout(()=>tmuxLoad(),600);}
+  // Open its terminal; if the bridge could not name the pane, it shows up on the list instead.
+  if(r.pane&&!S.chat){toast(named+'开好了');tmuxOpen(r.pane);}else{toast(named+'开好了'+(r.pane?'':'，在会话列表里'));if(S.tab!=='live'&&!S.chat)setTab('live');else render();}
+  setTimeout(()=>tmuxLoad(),600);}
  catch(e){TX_NEW.busy=false;const m=e.message||String(e);
   if(/^没创建/.test(m)){if(status.isConnected){newStatus(status,'error',m);restoreGo(go);}else toast(m);return;}
   if(/Unknown operation|不支持的操作/.test(m)){newStatus(status,'error','电脑上的桥接程序太旧，先到「设备」里更新桥接程序');return;}

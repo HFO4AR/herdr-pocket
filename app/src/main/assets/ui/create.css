@@ -40,4 +40,8 @@
 .new-foot{position:sticky;bottom:calc(-22px - env(safe-area-inset-bottom));margin:18px -18px calc(-22px - env(safe-area-inset-bottom));padding:2px 18px calc(14px + env(safe-area-inset-bottom));background:var(--raised);box-shadow:0 -1px 0 var(--line)}
 .new-foot .new-status{margin-top:12px}
 .new-foot .sheet-actions{margin-top:12px}
+/* 正在启动: rows for agents whose tab is open but who have not shown up yet. */
+.new-pending .row-side{display:flex;flex-direction:row;align-items:center;gap:6px}
+.new-pending .row-side .spinner{border-top-color:var(--warn)}
+.new-pending .card-meta .sep{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:359px){.new-kind{padding:9px 8px 8px}.new-kind strong{font-size:13px}.new-btn{padding:0 12px 0 9px}}

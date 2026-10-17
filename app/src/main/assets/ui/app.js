@@ -239,10 +239,13 @@ function livePage(main){
  const counts=S.agents.length&&!S.liveError&&!(S.liveLoading&&!S.agents.length);
  actions.append(counts?liveStatus():el('span','grow'),ib('refresh','刷新会话',loadLive));
  // With no sessions the empty state carries the one 新建 button.
- if(S.device&&S.session&&S.agents.length)actions.append(createButton());
+ const pendingHere=typeof newPendingHere==='function'?newPendingHere().length:0;
+ if(S.device&&S.session&&(S.agents.length||pendingHere))actions.append(createButton());
  // Loading, failed and empty pages carry their own status and action (and new agents appear by
  // themselves): a lone refresh icon over them only looks unfinished.
- if(counts||S.sessions.length>1)main.append(actions);
+ if(counts||S.sessions.length>1||pendingHere)main.append(actions);
+ // Starts still on their way (create.js 正在启动) go first, also above an empty or loading list.
+ const starting=typeof newPendingSection==='function'?newPendingSection(main):0;
  if(S.liveLoading&&!S.agents.length){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并关联历史记录…');skeleton(main,3);return;}
  if(S.liveError){empty(main,'会话读取失败',S.liveError,btn('重新读取','primary',loadLive));return;}
  if(S.agents.length)glanceKick();

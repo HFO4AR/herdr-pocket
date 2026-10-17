@@ -77,7 +77,9 @@ class CreateTests(unittest.TestCase):
         start = self.mutations()[1]
         self.assertEqual(start[:7], ["agent", "start", "pocket-12345678", "--kind", "codex", "--pane", "w1:p9"])
         self.assertEqual(start[7], "--timeout")
-        self.assertLessEqual(int(start[8]), 22000)
+        # A short wait: the phone gets its answer in seconds and polls for the rest.
+        self.assertEqual(int(start[8]), bridge.CREATE_START_WAIT_MS)
+        self.assertGreater(int(start[8]), 3000, "Herdr 0.8 refuses 3000 ms or less")
         self.assertNotIn("--", start)  # no agent arguments from the phone
 
     def test_receipt_never_replays(self):
@@ -114,6 +116,56 @@ class CreateTests(unittest.TestCase):
         with patch.object(bridge.time, "monotonic", side_effect=lambda: next(clock)):
             r = bridge.handle(self.req(kind="ch"), self.state)
         self.assertEqual((r["created"], r["state"], r["detected"]), (True, "starting", False))
+
+    def test_quick_answer_while_the_agent_still_starts(self):
+        # Herdr's short wait ends before the agent is up: one start, answered "starting" (the agent
+        # keeps starting in the pane), and no second `agent start` for the same pane.
+        self.start_errors = ["timeout"]; self.pane_after = {"agent": None, "agent_status": "unknown"}
+        clock = [100.0]
+        def tick(): clock[0] += 0.05; return clock[0]
+        with patch.object(bridge.time, "monotonic", side_effect=tick):
+            r = bridge.handle(self.req(), self.state)
+        self.assertEqual((r["created"], r["state"], r["pane_id"]), (True, "starting", "w1:p9"))
+        self.assertEqual(sum(m[:2] == ["agent", "start"] for m in self.mutations()), 1)
+        # The receipt holds the same answer: a retry with this id reports the pane, starts nothing.
+        self.assertEqual(bridge.handle(self.req(), self.state), r)
+        self.assertEqual(sum(m[:2] == ["agent", "start"] for m in self.mutations()), 1)
+
+    def test_detected_after_the_short_wait_reports_its_state(self):
+        self.start_errors = ["timeout"]; self.pane_after = {"agent": "codex", "agent_status": "blocked"}
+        r = bridge.handle(self.req(), self.state)
+        self.assertEqual((r["state"], r["detected"]), ("blocked", True))
+
+    def test_busy_fresh_shell_is_retried_then_given_up(self):
+        # Herdr 0.8.2: a new pane whose shell is not at its prompt yet is "agent_pane_busy".
+        self.start_errors = ["agent_pane_busy", "agent_pane_busy"]
+        self.assertEqual(bridge.handle(self.req(), self.state)["state"], "ready")
+        self.assertEqual(sum(m[:2] == ["agent", "start"] for m in self.mutations()), 3)
+        # A shell that never gets there: nothing typed, said so, within the shell wait.
+        self.calls.clear(); self.start_errors = ["agent_pane_busy"] * 200; self.pane_after = {"agent": None}
+        clock = [0.0]
+        def tick(): clock[0] += 0.5; return clock[0]
+        with patch.object(bridge.time, "monotonic", side_effect=tick):
+            r = bridge.handle(self.req(id=UUID.replace("1234-4", "1234-8")), self.state)
+        self.assertEqual((r["state"], r["code"], r["typed"]), ("failed", "agent_pane_busy", False))
+        self.assertIn("没输入启动命令", r["detail"])
+        self.assertLess(sum(m[:2] == ["agent", "start"] for m in self.mutations()), 30)
+
+    def test_other_minimum_timeout_is_retried_once_longer(self):
+        self.start_errors = ["invalid_agent_timeout"]
+        self.assertEqual(bridge.handle(self.req(), self.state)["state"], "ready")
+        starts = [m for m in self.mutations() if m[:2] == ["agent", "start"]]
+        self.assertEqual([s[8] for s in starts], [str(bridge.CREATE_START_WAIT_MS), "20000"])
+
+    def test_ch_answers_after_a_short_look(self):
+        self.pane_after = {"pane_id": "w1:p9", "agent": None}
+        clock = [0.0]
+        def tick(): clock[0] += 0.25; return clock[0]
+        with patch.object(bridge.time, "monotonic", side_effect=tick):
+            r = bridge.handle(self.req(kind="ch"), self.state)
+        self.assertEqual((r["state"], r["detected"]), ("starting", False))
+        looks = sum(a[2:4] == ["pane", "get"] for a in self.calls)
+        self.assertLessEqual(looks, 16, "looks within CREATE_CH_WAIT (3 s of this clock), not the whole 26 s budget")
 
     def test_shell_not_ready_is_retried_then_blocked_startup(self):
         self.start_errors = ["agent_pane_unavailable", "agent_pane_unavailable"]
@@ -155,6 +207,20 @@ class CreateTests(unittest.TestCase):
         r = bridge.handle(self.req(cwd=str(self.outside), id=UUID.replace("1234-4", "1234-7")), self.state)
         self.assertEqual(r["cwd"], str(self.outside.resolve()))
 
+    def test_relative_and_symlinked_known_directories(self):
+        # "work/site" means ~/work/site (the sheet says 家目录下的路径).
+        self.assertEqual(bridge.handle(self.req(cwd="work/site/"), self.state)["cwd"], str(self.project.resolve()))
+        # A pane in a directory outside $HOME named through a symlink: the real path is accepted too.
+        real = Path(self.tmp.name) / "data/proj"; real.mkdir(parents=True)
+        link = Path(self.tmp.name) / "mnt/link"; link.symlink_to(real)
+        orig = self.call
+        def call(args, timeout=20):
+            if args[2:4] == ["pane", "list"] and args[-1] == "w3": self.calls.append(args); return {"panes": [{"pane_id": "w3:p1", "cwd": str(link)}]}
+            return orig(args, timeout)
+        with patch.object(bridge, "call", side_effect=call):
+            r = bridge.handle(self.req(cwd=str(real), id=UUID.replace("1234-4", "1234-9")), self.state)
+        self.assertEqual(r["cwd"], str(real.resolve()))
+
     def test_symlink_escape_rejected(self):
         os.symlink(Path(self.tmp.name), self.home / "link")
         with self.assertRaisesRegex(bridge.BridgeError, "没创建"):
@@ -177,9 +243,20 @@ class CreateTests(unittest.TestCase):
         self.assertEqual(self.mutations(), [])
 
     def test_offline_session_never_created(self):
-        with self.assertRaises(bridge.BridgeError):
+        with self.assertRaisesRegex(bridge.BridgeError, "^没创建"):
             bridge.handle(self.req(session="other"), self.state)
         self.assertEqual(self.mutations(), [])
+
+    def test_failed_reads_before_the_receipt_say_nothing_was_created(self):
+        orig = self.call
+        def call(args, timeout=20):
+            if args[2:] == ["workspace", "list"]: raise bridge.BridgeError("Herdr timeout; mutation outcome may be unknown. Do not resend blindly.")
+            return orig(args, timeout)
+        with patch.object(bridge, "call", side_effect=call):
+            with self.assertRaisesRegex(bridge.BridgeError, "^没创建：读不到 Herdr 的工作区"):
+                bridge.handle(self.req(), self.state)
+        self.assertEqual(self.mutations(), [])
+        self.assertEqual(bridge.handle(self.req(), self.state)["created"], True, "no receipt was taken")
 
 
 if __name__ == "__main__":

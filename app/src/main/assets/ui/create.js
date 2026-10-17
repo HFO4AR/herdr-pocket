@@ -106,8 +106,9 @@ async function createSubmit(text,go,status){
  if(!f.dir){toast(f.custom?'先填目录路径':'先选一个目录');return;}
  if(S.demo){closeSheet();toast('演示模式：不会真的新建');return;}
  const label=newKind(f.kind)[0];
- NEW.busy=true;go.disabled=true;go.replaceChildren(el('span','spinner'),document.createTextNode('正在启动…'));
- newStatus(status,'busy','正在开标签页并启动 '+label+'，一般要十几秒');
+ NEW.busy=true;go.disabled=true;go.replaceChildren(el('span','spinner'),document.createTextNode('正在新建…'));
+ // The bridge answers in a few seconds (tab open, start handed to Herdr); the rest shows on the list.
+ newStatus(status,'busy','正在开标签页，把 '+label+' 叫起来…');
  const req={session:S.session,id:uuid(),kind:f.kind,cwd:f.dir,workspace:f.place};
  try{
   const r=await remote('create',req);NEW.busy=false;
@@ -122,11 +123,11 @@ async function createSubmit(text,go,status){
   else toast('新建结果未知，刷新列表看看，别直接再建');}}
 function restoreGo(go){go.disabled=false;go.replaceChildren(icon('plus'),document.createTextNode('新建'));}
 
-// After creation: open the new chat (history appears once the agent writes it).
+// After creation: open the new chat once Herdr shows the agent (history appears once it writes it).
 async function createDone(r,text,label){
  if(r.state==='failed'){createFailed(r,text,label);return;}
  const seen=r.state==='ready'||r.state==='blocked'||r.detected;
- if(!seen){toast('标签页开好了，'+label+' 还在启动，出来后自动打开');createWatch(r,text,label);return;}
+ if(!seen){createPending(r,text,label);return;}
  toast(r.state==='blocked'?label+' 开好了，它在等你确认':r.state==='ready'?label+' 开好了':label+' 开好了，还在准备');
  await createOpen(r.pane_id,text);}
 async function createOpen(pane,text){
@@ -141,15 +142,69 @@ async function createOpen(pane,text){
   if(['idle','done'].includes(a.agent_status)&&input)sendMessage(input);
   else toast('第一条消息放在输入框里了，它准备好再发');}
  return true;}
-// The agent had not shown up yet: look a few times, then open it (only if the person is still on the list).
-function createWatch(r,text,label){
- clearInterval(NEW.watch);let n=0;
+
+// ─── 正在启动: the tab is open, the agent is not visible yet ──────────────────
+// A row at the top of 会话 for each start still on its way (per computer and Herdr session),
+// polled with the cheap `status` read until Herdr shows an agent in that pane. Nothing is ever
+// started again from here: the only actions are looking at the terminal and no longer waiting.
+NEW.pending=[];
+const NEW_POLL=1500,NEW_SLOW=45000,NEW_GIVE_UP=120000;
+function newPendingHere(){const dev=S.device?.id||'';return NEW.pending.filter(p=>p.device===dev&&p.session===S.session);}
+function createPending(r,text,label){
+ const p={device:S.device?.id||'',session:S.session,pane:r.pane_id,kind:r.kind,label,cwd:r.cwd||'',text,at:Date.now(),state:'starting',newWorkspace:!!r.new_workspace};
+ NEW.pending=NEW.pending.filter(x=>!(x.device===p.device&&x.pane===p.pane)).concat(p);
+ toast('标签页开好了，'+label+' 正在启动，出来后自动打开');
+ if(S.tab==='live'&&!S.chat&&!(typeof T!=='undefined'&&T.view))render();
+ createWatch();}
+function newPendingDrop(p){NEW.pending=NEW.pending.filter(x=>x!==p);if(!NEW.pending.some(x=>x.state!=='lost'))clearInterval(NEW.watch);}
+function createWatch(){
+ clearInterval(NEW.watch);let busy=false;
  NEW.watch=setInterval(async()=>{
-  if(++n>14||!S.device){clearInterval(NEW.watch);if(n>14)toast(label+' 还没出现，去电脑上看看那个标签页');return;}
-  try{const s=await remote('status',{session:S.session});const a=s.agents.find(x=>x.pane_id===r.pane_id&&x.agent);
-   if(!a)return;clearInterval(NEW.watch);
-   if(S.tab==='live'&&!S.chat&&!overlay.childElementCount)await createOpen(r.pane_id,text);
-   else toast(label+' 起来了，在会话列表里');}catch(_){}},3000);}
+  const live=NEW.pending.filter(p=>p.state!=='lost');if(!live.length){clearInterval(NEW.watch);return;}
+  const here=newPendingHere().filter(p=>p.state!=='lost');
+  // Waiting too long: say so on the row; after a while stop asking (the row stays until dismissed).
+  for(const p of live){const age=Date.now()-p.at;const st=age>NEW_GIVE_UP?'lost':age>NEW_SLOW?'slow':'starting';if(st!==p.state){p.state=st;newPendingPaint();}}
+  if(!here.length||busy||!S.device||S.demo)return;busy=true;
+  try{const s=await remote('status',{session:here[0].session});if(here[0].device!==(S.device?.id||''))return;
+   for(const p of here){const a=(s.agents||[]).find(x=>x.pane_id===p.pane&&x.agent);if(!a||!NEW.pending.includes(p))continue;
+    newPendingDrop(p);
+    if(S.tab==='live'&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount){toast(p.label+' 起来了');await createOpen(p.pane,p.text);}
+    else{if(p.text)S.drafts.set(p.session+'/'+a.identity,p.text);toast(p.label+' 起来了，在会话列表里'+(p.text?'；第一条消息放在它的输入框里了':''));newPendingPaint();}}}
+  catch(_){/* the next beat asks again */}
+  finally{busy=false;}},NEW_POLL);}
+// Repaint the list for a changed row, unless something is in the way (same rule as tmux.js).
+function newPendingPaint(){
+ if(S.tab!=='live'||S.chat||(typeof T!=='undefined'&&T.view)||overlay.childElementCount)return;
+ const a=document.activeElement;if(a&&/^(INPUT|TEXTAREA)$/.test(a.tagName)&&app.contains(a))return;
+ const main=app.querySelector('.main'),top=main?main.scrollTop:0;render();
+ const next=app.querySelector('.main');if(next){next.classList.remove('pane-enter');next.scrollTop=top;}}
+// livePage (app.js) calls this under its toolbar; returns how many rows it drew.
+function newPendingSection(main){
+ // An agent the list already shows is not starting any more: its row hides (the watcher still
+ // opens it, so a list refresh that saw it first does not swallow the chat or the first message).
+ const listed=p=>S.agents.some(a=>a.pane_id===p.pane&&a.agent);
+ for(const p of newPendingHere())if(p.state==='lost'&&listed(p))newPendingDrop(p);
+ const list=newPendingHere().filter(p=>!listed(p));if(!list.length)return 0;
+ const h=el('div','section-label group-label g-work new-pending-label');h.append(el('span','','正在启动'),el('span','group-count',String(list.length)));main.append(h);
+ const card=el('div','card list-card new-pending-list');list.forEach(p=>card.append(newPendingRow(p)));main.append(card);
+ return list.length;}
+function newPendingRow(p){
+ const slow=p.state!=='starting',where=newBase(p.cwd||'')+(p.cwd?' · '+newShort(p.cwd):'');
+ const b=btn('','card-button agent-row new-pending tone-'+(slow?'alert':'work'),()=>newPendingSheet(p));
+ b.setAttribute('aria-label',(slow?p.label+' 还没出现':'正在启动 '+p.label+'…')+' · '+where);
+ const t=el('div','grow');t.append(el('div','card-title',slow?p.label+' 还没出现':'正在启动 '+p.label+'…'));
+ const meta=el('div','card-meta');meta.append(el('span','project',newBase(p.cwd||'')||p.label));
+ meta.append(el('span','sep',p.state==='lost'?'没等到，去电脑上看看那个标签页':slow?'等得有点久，点开看看':p.kind==='ch'?'ch 在连另一台电脑':'标签页开好了，等它出来'));
+ t.append(meta);
+ const side=el('div','row-side');if(p.state!=='lost')side.append(el('span','spinner mini'));const tm=since(p.at);tm.classList.add('row-time');side.append(tm);
+ b.append(avatar(newKind(p.kind)[1],slow?'alert':'work'),t,side);return b;}
+function newPendingSheet(p){
+ const box=sheet(p.state==='starting'?'正在启动 '+p.label:p.label+' 还没出现');
+ box.append(el('p','muted',(p.newWorkspace?'新工作区':'新标签页')+'已经开好了（'+p.pane+'），'+(p.state==='starting'?p.label+' 正在启动，出来后这里会自动打开它。':'可 '+p.label+' 一直没出现。可能停在了终端里（比如登录、更新提示），去终端看看。')),
+  el('p','fine','不会再启动一次。'+(p.text?'第一条消息等它出来再处理。':'')));
+ const row=el('div','sheet-actions');
+ row.append(btn('不等了','secondary',()=>{newPendingDrop(p);closeSheet();newPendingPaint();toast('不等了，标签页还留在电脑上');}),btn('去终端看看','primary',()=>{closeSheet();setTab('terminals');},'terminal'));
+ box.append(row);}
 function createFailed(r,text,label){
  const box=sheet(label+' 没起来');
  box.append(el('p','muted','新标签页已经开好了（'+r.pane_id+'），但 '+label+' 没启动成功'+(r.detail?'：'+r.detail:'')+'。'),
