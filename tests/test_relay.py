@@ -82,7 +82,7 @@ class RelayTests(unittest.TestCase):
 
     def test_exit_command_runs_in_the_pane(self):
         self.send(op="exitAgent")
-        self.assertEqual(self.commands, [["agent", "prompt", "w1:p1", "/exit"], ["pane", "run", "w1:p1", "/exit"]])
+        self.assertEqual(self.writes(), [["agent", "prompt", "w1:p1", "/exit"], ["pane", "run", "w1:p1", "/exit"]])
 
     def test_local_agent_keeps_herdr_agent_commands(self):
         self.probe = {"ok": True, "route": None, "native": True}

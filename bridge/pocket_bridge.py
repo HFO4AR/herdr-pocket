@@ -70,6 +70,9 @@ NOT_SENT = {
 }
 # Text already in the agent's own input box would be sent together with the prompt (seen live with
 # Claude Code after Esc, and with Codex): refused before anything is typed.
+MENU_ON_SCREEN = "没发出去：它正停在一个提问或选择框上（电脑那边还显示它空闲），这时打字回车会直接选中选项。先回答它，或点“用按键操作”看屏幕"
+
+
 DRAFT_NOT_SENT = {
     "claude": "没发出去：它的输入框里已经有字了（可能是刚被中断、退回来的那条），发出去会连在一起。先在「终端」里看一眼",
     "codex": "没发出去：它的输入框里已经有字了，发出去会连在一起。先在「终端」里看一眼",
@@ -282,14 +285,21 @@ def colored_screen(prefix, agent, text):
 def herdr_draft(prefix, agent):
     """Text in a Herdr Claude / Codex input box, from its coloured visible screen ("" when empty).
     None when that cannot be told (no colours from this Herdr, an unreadable screen, no input box
-    on screen): the prompt then goes as before, Herdr's own state is what lets it through."""
+    on screen): the prompt then goes as before, Herdr's own state is what lets it through.
+
+    MENU_ON_SCREEN instead when the box is not on screen but a question / approval dialog is.
+    Herdr can call such an agent idle or done: in a narrow pane the dialog's footer wraps ("Esc to"
+    / "cancel", seen with Herdr 0.8.2 at 46 columns) and Herdr no longer recognises it. Typed text
+    and Enter would then tick or pick an option instead of sending a message."""
     kind = agent.get("agent")
     if kind not in ("claude", "codex"): return None
     try: raw = read_screen(prefix, agent, 0, ansi=True).get("text", "")
     except (BridgeError, OSError, ValueError): return None
-    if not isinstance(raw, str) or "\x1b[" not in raw: return None
+    if not isinstance(raw, str): return None
     plain, colored = screen_pair(raw)
-    return claude_draft(plain, colored) if kind == "claude" else codex_draft(plain, colored)
+    box = claude_draft(plain, colored) if kind == "claude" else codex_draft(plain, colored)
+    if box is None and parse_menu(plain, kind): return MENU_ON_SCREEN
+    return box if "\x1b[" in raw else None
 
 
 def relay_prompt(prefix, pane_id, text):
@@ -309,7 +319,7 @@ def mutate(request, prefix, agent, state_dir):
     digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     # The input box is read before the receipts database is locked (a screen read may take a while);
     # it only refuses below, after a request already handled has answered from its receipt.
-    draft = herdr_draft(prefix, agent) if op == "prompt" and agent.get("agent_status") in ("idle", "done") else None
+    draft = herdr_draft(prefix, agent) if op in ("prompt", "exitAgent") and agent.get("agent_status") in ("idle", "done") else None
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     db = sqlite3.connect(state_dir / "receipts.sqlite", timeout=5)
     try:
@@ -333,6 +343,7 @@ def mutate(request, prefix, agent, state_dir):
             if not isinstance(text, str) or (not text.strip() and not images and not files) or len(text.encode()) > 15000 or "\x00" in text:
                 raise BridgeError("Prompt must contain 1–15000 UTF-8 bytes without NUL")
             # Before the receipt: a refusal here sent nothing.
+            if draft is MENU_ON_SCREEN: raise BridgeError(MENU_ON_SCREEN)
             if draft: raise BridgeError(DRAFT_NOT_SENT[agent["agent"]])
             if images is not None or files is not None:
                 # Checked and (for ch routes) shared before the receipt: a failure here sent nothing.
@@ -359,7 +370,7 @@ def mutate(request, prefix, agent, state_dir):
             if set(request) - CLOSE_KEYS: raise BridgeError("没发出去：请求里有不认识的字段")
             command = EXIT_COMMANDS.get(agent.get("agent"))
             if not command: raise BridgeError("没发出去：不认识这个 Agent，没法让它自己退出")
-            if agent.get("agent_status") not in ("idle", "done"):
+            if agent.get("agent_status") not in ("idle", "done") or draft is MENU_ON_SCREEN:
                 raise BridgeError("没发出去：Agent 还在干活或在等确认，先中断它再结束")
             args = ["agent", "prompt", agent["pane_id"], command]
         elif op == "answer":
@@ -2760,6 +2771,32 @@ def arrow_run(lines):
     return [{"n": i - top + 1, "line": i, "ptr": i == p, "rest": row_at(i)} for i in range(top, bottom + 1)]
 
 
+def screen_cells(text):
+    """Terminal columns a line takes: East Asian wide/fullwidth characters take two."""
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
+
+
+def menu_unwrap(lines, start, end, question):
+    """The whole question when the TUI wrapped it over several rows (a narrow pane): rows above
+    it are joined while each one is so full that the next row's first word could not have fit.
+    The pane width is taken from the widest row on screen (the dialog rules span it)."""
+    if not question: return question
+    index = next((i for i in range(end - 1, start - 1, -1) if lines[i].strip()[:300] == question), None)
+    if index is None: return question
+    width = max((screen_cells(x.rstrip()) for x in lines), default=0)
+    wide = lambda c: screen_cells(c) == 2
+    parts = [lines[index].strip()]
+    for i in range(index - 1, max(start, index - 4) - 1, -1):
+        above, below = lines[i].rstrip(), parts[0]
+        if not above.strip() or menu_rule(above) or MENU_MORE.match(above.strip()) or ("←" in above and "→" in above): break
+        joined = wide(above[-1]) and wide(below[0])
+        first = below[0] if wide(below[0]) else below.split(" ")[0]
+        if screen_cells(above) + (0 if joined else 1) + screen_cells(first) <= width: break
+        parts[0] = above.strip() + ("" if joined else " ") + below
+    return parts[0][:600]
+
+
 def parse_menu(text, provider=""):
     """Find the newest numbered menu at the bottom of an agent screen; None if unsure."""
     lines = [menu_clean(x) for x in str(text or "").split("\n")][-70:]
@@ -2839,6 +2876,7 @@ def parse_menu(text, provider=""):
     while context and not context[-1]: context.pop()
     context = context[-14:]
     question = next((x for x in reversed(context) if x.endswith(("?", "？"))), next((x for x in reversed(context) if x), ""))
+    question = menu_unwrap(lines, max(0, run[0]["line"] - 16), run[0]["line"], question)
     words = " ".join(context + [r["label"] for r in run]).lower()
     labels = [r["label"] for r in run]
     if "review your answers" in words or "submit answers" in [x.lower() for x in labels]: kind = "review"

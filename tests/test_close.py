@@ -24,6 +24,7 @@ class CloseTests(unittest.TestCase):
         self.closed = False
         self.prompt_error = None
         self.route = None
+        self.screen = ""              # what an agent read shows (exitAgent first looks for a dialog)
         p = patch.object(bridge, "call", side_effect=self.call); p.start(); self.addCleanup(p.stop)
         p = patch.object(bridge, "probe_pane", side_effect=lambda a, prefix, provider: {"route": self.route}); p.start(); self.addCleanup(p.stop)
 
@@ -42,6 +43,7 @@ class CloseTests(unittest.TestCase):
             if self.close_error: raise bridge.HerdrRejected(self.close_error, "no")
             self.closed = True
             return {"type": "ok"}
+        if cmd[:2] == ["agent", "read"]: return {"text": self.screen}
         if cmd[:2] == ["agent", "prompt"]:
             if self.prompt_error: raise bridge.HerdrRejected(self.prompt_error, "no")
             return {"type": "prompt_submitted"}
@@ -163,6 +165,17 @@ class CloseTests(unittest.TestCase):
         self.agent = dict(self.agent, agent_status="idle")
         with self.assertRaisesRegex(bridge.BridgeError, "^没发出去"):
             bridge.handle(self.req("exitAgent", text="rm -rf ~", id=UUID2), self.state)
+        self.assertEqual(self.mutations(), [])
+
+    def test_exit_refused_while_a_dialog_is_on_screen(self):
+        # Herdr can call a Claude idle while its question dialog is up (a narrow pane wraps the footer):
+        # "/exit" and Enter would pick an option.
+        rule = "─" * 46
+        self.screen = "\n".join([rule, "←  ☐ Lang  ✔ Submit  →", "", "Which one?", "", "❯ 1. [ ] Python", "  2. [ ] Bash",
+                                  "  3. [ ] Type something", "     Submit", rule, "  4. Chat about this", "",
+                                  "Enter to select · ↑/↓ to navigate · Esc to", "cancel"])
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：Agent 还在干活或在等确认"):
+            bridge.handle(self.req("exitAgent"), self.state)
         self.assertEqual(self.mutations(), [])
 
     def test_exit_not_sent_code_is_reported(self):

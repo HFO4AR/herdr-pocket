@@ -98,6 +98,29 @@ class HerdrDraftTests(unittest.TestCase):
                         self.prompt(IDS[i])
         self.assertEqual(len(self.prompts()), 4)
 
+    def test_dialog_herdr_calls_idle_is_never_typed_into(self):
+        # Seen live (Herdr 0.8.2, Claude Code 2.1.268, a 46-column pane): the question dialog's footer
+        # wraps ("Esc to" / "cancel"), Herdr reports the agent done, and a prompt's text plus Enter
+        # ticked the highlighted checkbox. With no input box on screen and a dialog there, nothing goes.
+        self.agent["agent"] = "claude"
+        rule = "\x1b[38;5;244m" + "─" * 46 + "\x1b[0m"
+        dialog = "\n".join([rule, "←  ☐ Lang  ✔ Submit  →", "", "Which language should the tiny demo script use", "for parsing?", "",
+                             "\x1b[38;5;153m❯ 1. [ ] Python\x1b[0m", "  Python", "  2. [ ] Bash", "  Bash", "  3. [ ] Type something",
+                             "     Submit", rule, "  4. Chat about this", "", "Enter to select · ↑/↓ to navigate · Esc to", "cancel"])
+        for i, (status, screen) in enumerate((("done", dialog), ("idle", dialog), ("idle", bridge.strip_sgr(dialog)))):
+            self.agent["agent_status"], self.screen = status, screen
+            with self.subTest(i), self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它正停在一个提问或选择框上"):
+                self.prompt(IDS[i])
+        self.assertEqual((self.prompts(), self.receipts()), ([], 0))
+        # Answered on the computer, the input box is back: the same request id goes out.
+        self.screen = "\n".join(["● Bash it is.", "", rule, "\x1b[39m❯ \x1b[7m \x1b[0m", rule, "  ⏸ manual mode on"])
+        self.assertTrue(self.prompt(IDS[0])["sent"])
+        # A numbered list the user sent earlier ("❯ 1. …" in the transcript) with the box below is no dialog.
+        echo = "\n".join(["❯ 1. fix the parser", "  2. run the tests", "", "● Done.", "", rule, "\x1b[39m❯ \x1b[7m \x1b[0m", rule, "  ⏸ manual mode on"])
+        self.screen = echo
+        self.assertTrue(self.prompt(IDS[4])["sent"])
+        self.assertEqual(len(self.prompts()), 2)
+
     def test_unknown_box_keeps_the_old_behaviour(self):
         # Unreadable screen, a Herdr without colours, no input box on screen: Herdr's state decides.
         self.screen, self.unreadable = CODEX["draft"], True

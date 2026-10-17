@@ -170,6 +170,39 @@ class ParseMenuTests(unittest.TestCase):
         focused = CLAUDE_MULTI_CHAT.replace("❯ 1.", "  1.").replace("     Submit", "❯    Submit")
         self.assertEqual(bridge.parse_menu(focused, "claude")["cursor"], "submit")
 
+    def test_question_wrapped_by_a_narrow_pane_is_read_whole(self):
+        # Seen live in a 46-column Herdr pane: Claude wraps the question, the last row alone
+        # ("use?") would be shown as the question and matched against the wrong transcript question.
+        rule = "─" * 46
+        narrow = "\n".join([
+            rule,
+            "←  ☐ Lang  ☐ Extras  ✔ Submit  →",
+            "",
+            "Which language should the tiny demo script",
+            "use?",
+            "",
+            "❯ 1. Python 3 standard library only",
+            "     No third-party packages at all",
+            "  2. Bash with coreutils",
+            "  3. Type something.",
+            rule,
+            "  4. Chat about this",
+            "",
+            "Enter to select · Tab/Arrow keys to navigate ·",
+            "Esc to cancel",
+        ])
+        menu = bridge.parse_menu(narrow, "claude")
+        self.assertEqual(menu["question"], "Which language should the tiny demo script use?")
+        self.assertEqual(bridge.parse_menu(CLAUDE_MULTI_CHAT, "claude")["question"],
+                         "Which of the following options should be enabled (multiple choices allowed)?")
+        cjk = narrow.replace("Which language should the tiny demo script", "这个小演示脚本应该用哪一种语言来写，标准库还是").replace("\nuse?", "\nShell？")
+        self.assertEqual(bridge.parse_menu(cjk, "claude")["question"], "这个小演示脚本应该用哪一种语言来写，标准库还是 Shell？")
+        cjk = narrow.replace("Which language should the tiny demo script", "这个小演示脚本应该用哪一种语言来写，标准库还是").replace("\nuse?", "\n命令行？")
+        self.assertEqual(bridge.parse_menu(cjk, "claude")["question"], "这个小演示脚本应该用哪一种语言来写，标准库还是命令行？")
+        # A short row above is its own line, not part of a wrapped question.
+        short = narrow.replace("Which language should the tiny demo script", "Pick one.").replace("\nuse?", "\nWhich language?")
+        self.assertEqual(bridge.parse_menu(short, "claude")["question"], "Which language?")
+
     def test_claude_permission_dialog_is_an_approval_with_command_context(self):
         menu = bridge.parse_menu(CLAUDE_BASH, "claude")
         self.assertEqual(menu["kind"], "approval")
