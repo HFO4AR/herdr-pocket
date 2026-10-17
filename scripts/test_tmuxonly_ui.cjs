@@ -35,7 +35,7 @@ await page.addInitScript(()=>{
     if(a.op==='sessions')data=A?{sessions:[],herdr:false,tmux:!fx.noTmux}:{herdr:true,sessions:[{name:'main',running:true}]};
     else if(a.op==='doctor')data=A?{herdr:false,running:null,tmux:!fx.noTmux}:{herdr:true,running:1,tmux:true};
     else if(a.op==='tmux'){if(A&&fx.noTmux){data={available:false,panes:[]};}
-     else data={available:true,panes:fx.tmux[a.device].map(p=>p.pane_id==='%1'?{...p,agent:{...claude(),...(a.resolve?{history_ref:{status:'matched',source:'open-file',record_id:'rec1',thread:'T1',record:rec}}:{})}}:p)};}
+     else data={available:true,looked:fx.looked||['/tmp/tmux-1000'],skipped:[],servers:[],panes:fx.tmux[a.device].map(p=>p.pane_id==='%1'?{...p,agent:{...claude(),...(a.resolve?{history_ref:{status:'matched',source:'open-file',record_id:'rec1',thread:'T1',record:rec}}:{})}}:p)};}
     else if(a.op==='tmuxInfo'&&fx.infoFail)throw Error(fx.infoFail);
     else if(a.op==='tmuxInfo')data={available:true,home:'/home/pi',dirs:[{path:'/home/pi/logs',source:'tmux'},{path:'/home/pi/src',source:'history',modified:now-7200},...(fx.infoMore||[])],sessions:['main','work']};
     else if(a.op==='tmuxNew'){if(fx.newFail)throw Error(fx.newFail);const n=fx.made=(fx.made||0)+1;const p=pane('%'+(6+n),{session:a.name||String(2+n),cwd:a.cwd==='~'?'/home/pi':a.cwd});fx.tmux.A.push(p);data={created:true,session:p.session,cwd:a.cwd,pane:p};}
@@ -273,6 +273,26 @@ await page.locator('.tmux-row').filter({hasText:'main:top'}).waitFor();
 assert.equal(await page.locator('.tmux-row').filter({hasText:'dev:server'}).count(),0);
 assert.deepEqual(await page.evaluate(()=>fx.unnamed),[],'every request names its computer');
 console.log('PASS: two computers, one without Herdr: lists stay per computer');
+
+// ── 6b. A named server's pane; an empty list says where it looked ──
+await page.evaluate(()=>{fx.tmux.A.push({pane_id:'%0@0123456789ab',identity:'tm-l0',server:'lab',session:'lab',window_index:0,window_name:'repl',pane_index:0,window_panes:1,active:false,attached:false,command:'python3',cwd:'/home/pi',width:120,height:40});});
+await page.locator('.tmux-row').filter({hasText:'服务器 lab'}).waitFor({timeout:6000});
+// 新建 makes a session on the default server: a name used only on server "lab" is still free.
+await role('button','新建 tmux 会话').click();await sheetBox.waitFor();
+await name.fill('lab');assert.doesNotMatch(await page.locator('.tmux-name-note').textContent(),/已经有叫/);
+await name.fill('main');assert.match(await page.locator('.tmux-name-note').textContent(),/已经有叫 main/);
+await page.evaluate(()=>closeSheet());
+await page.evaluate(()=>{fx.keepA=fx.tmux.A;fx.tmux.A=[];fx.looked=['/tmp/tmux-1000','/run/user/1000/tmux-1000'];loadLive();});
+await page.getByText('还没有 tmux 会话',{exact:true}).waitFor();
+const emptyText=await page.locator('.empty').filter({hasText:'还没有 tmux 会话'}).textContent();
+assert.match(emptyText,/没找到正在运行的 tmux（看过 \/tmp\/tmux-1000、\/run\/user\/1000\/tmux-1000）/);
+assert.match(emptyText,/几秒内会自动出现/);assert.match(emptyText,/别的电脑上.*「设备」页/);
+assert.equal(await overflow(),false);
+await shot('empty');await dark('empty');
+// A session started on the computer shows up on its own (no refresh).
+await page.evaluate(()=>{fx.tmux.A=fx.keepA;fx.looked=null;});
+await page.locator('.tmux-row').first().waitFor({timeout:6000});
+console.log('PASS: named servers are shown, 新建 checks names on the default server, an empty list says where it looked');
 
 // ── 7. Neither Herdr nor tmux ──
 await page.evaluate(()=>{fx.noTmux=true;S.hostTmux=false;TX.by.clear();loadLive();});
