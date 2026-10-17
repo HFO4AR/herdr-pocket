@@ -107,7 +107,12 @@ async function tmuxPoll(entry){
  if(Date.now()-entry.readAt<900)return;entry.readAt=Date.now();
  let r;try{r=await remote('tmuxRead',{target:entry.pane.pane_id,identity:entry.pane.identity});}
  catch(e){if(/关了或换了/.test(e.message)&&T.view===entry){entry.ended=true;terminalStatus(entry,'这个 tmux 窗格已经关了，回到列表看看');tmuxLoad();return;}throw e;}
- if(T.view!==entry)return;if(r.pane)entry.pane={...entry.pane,...r.pane};
+ if(T.view!==entry)return;
+ // The window is renamed (tmux names a fresh window "tmux" for a moment, then after its command):
+ // the header follows the pane.
+ if(r.pane){entry.pane={...entry.pane,...r.pane};const title=tmuxTitle(entry.pane);
+  if(title!==entry.title){entry.title=title;const h=document.getElementById('term-title');if(h)h.textContent=title;}
+  const w=document.querySelector('.term-head .term-where');if(w&&w.textContent!==tmuxSub(entry))w.textContent=tmuxSub(entry);}
  if(r.text===entry.text&&(r.ansi||'')===entry.ansi)return;entry.text=r.text;entry.ansi=r.ansi||'';
  const n=document.getElementById('pane-screen');if(!n)return;screenPaint(n,paneText(entry.text),entry.ansi);
  if(entry.stick!==false)n.scrollTop=n.scrollHeight;termJump(entry,true);}
@@ -189,6 +194,7 @@ function tmuxNewButton(label='新建',cls='new-btn'){const b=btn(label,cls,tmuxN
 async function tmuxNewSheet(){
  if(!S.device){toast('先连接电脑');return;}if(S.demo){toast('演示模式：不会真的新建');return;}
  if(TX_NEW.busy){toast('上一个还在新建，稍等一下');return;}
+ const dev=S.device.id;
  const box=sheet('新建 tmux 会话');box.classList.add('new-sheet','tmux-new');
  const body=el('div','new-body');box.append(body);
  body.append(el('p','fine tmux-new-lead','开一个新的 tmux 会话（后台运行，不会抢电脑屏幕），开好后直接打开它的终端。'));
@@ -197,6 +203,7 @@ async function tmuxNewSheet(){
  body.append(el('div','section-label','名字 · 可不填'));
  const name=el('input','field tmux-name');name.type='text';name.placeholder='不填就自动起名';name.autocomplete='off';name.spellcheck=false;name.maxLength=64;
  name.setAttribute('aria-label','会话名字');name.setAttribute('autocapitalize','off');name.setAttribute('enterkeyhint','done');
+ name.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();name.blur();}};
  const nameNote=el('p','fine tmux-name-note','英文字母、数字、- 和 _');body.append(name,nameNote);
  const nameOk=()=>{const v=name.value.trim();const used=v&&tmuxPanes().some(p=>p.session===v);const bad=v&&!TMUX_NAME_RE.test(v);
   nameNote.textContent=bad?'只能用英文字母、数字、- 和 _，不能以 - 开头':used?'已经有叫 '+v+' 的会话了，换个名字':'英文字母、数字、- 和 _';nameNote.classList.toggle('bad',!!(bad||used));return !bad&&!used;};
@@ -204,9 +211,16 @@ async function tmuxNewSheet(){
  // Directory: home first, then where tmux panes are and recent projects.
  body.append(el('div','section-label','在哪个目录'));
  const dirList=el('div','new-dirs');dirList.setAttribute('role','radiogroup');dirList.setAttribute('aria-label','起始目录');body.append(dirList);
- const pathInput=el('input','field new-path');pathInput.type='text';pathInput.placeholder='~/projects/app';pathInput.autocomplete='off';pathInput.spellcheck=false;pathInput.setAttribute('aria-label','目录路径');pathInput.setAttribute('autocapitalize','off');
+ // The rows are redrawn when the directory list arrives; the path input and the note stay put, so
+ // typing a path while the list loads keeps the focus (and the soft keyboard).
+ const rows=el('div','tmux-dir-rows'),dirNote=el('p','fine tmux-dir-loading');
+ const pathInput=el('input','field new-path');pathInput.type='text';pathInput.placeholder='~/projects/app';pathInput.autocomplete='off';pathInput.spellcheck=false;pathInput.setAttribute('aria-label','目录路径');pathInput.setAttribute('autocapitalize','off');pathInput.setAttribute('enterkeyhint','go');
  pathInput.oninput=()=>{f.dir=pathInput.value.trim();};
- let info=TX_NEW.infoFor===S.device.id?TX_NEW.info:null,showAll=false;
+ pathInput.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();go.click();}};
+ dirList.append(rows,pathInput,dirNote);
+ // Typed something: back / a tap outside ask for × instead of throwing it away.
+ box.keepOpen=()=>!!(name.value.trim()||(f.custom&&pathInput.value.trim()));
+ let info=TX_NEW.infoFor===dev?TX_NEW.info:null,showAll=false;
  const home=()=>info?.home||'~';
  const short=p=>{const h=info?.home;return h&&(p===h||p.startsWith(h+'/'))?'~'+p.slice(h.length):p;};
  const base=p=>info?.home&&p.replace(/\/+$/,'')===info.home?'家目录':p.split('/').filter(Boolean).pop()||'/';
@@ -215,26 +229,30 @@ async function tmuxNewSheet(){
   b.setAttribute('role','radio');b.setAttribute('aria-checked',String(on));const t=el('span','grow');
   t.append(el('span','menu-label',d.source==='home'?'家目录':base(d.path)),el('small','truncate',d.source==='home'?short(d.path):short(d.path)+' · '+(d.source==='tmux'?'有 tmux 窗格在这':d.modified?newAgo(d.modified):'最近用过')));
   b.append(t);if(on)b.append(icon('check'));return b;}
- function draw(){dirList.replaceChildren();const all=dirs();if(!f.dir&&!f.custom)f.dir=all[0].path;
-  (showAll?all:all.slice(0,5)).forEach(d=>dirList.append(row(d)));
-  if(!showAll&&all.length>5)dirList.append(btn('更多目录 · '+(all.length-5),'link-btn new-more',()=>{showAll=true;draw();}));
+ function draw(){rows.replaceChildren();const all=dirs();if(!f.dir&&!f.custom)f.dir=all[0].path;
+  (showAll?all:all.slice(0,5)).forEach(d=>rows.append(row(d)));
+  if(!showAll&&all.length>5)rows.append(btn('更多目录 · '+(all.length-5),'link-btn new-more',()=>{showAll=true;draw();}));
   const other=btn('','menu-item new-dir'+(f.custom?' on':''),()=>{f.custom=true;f.dir=pathInput.value.trim();draw();setTimeout(()=>pathInput.focus(),30);},'edit');
-  other.setAttribute('role','radio');other.setAttribute('aria-checked',String(f.custom));const t=el('span','grow');t.append(el('span','menu-label','其他目录'),el('small','','家目录下的路径，要已经存在'));other.append(t);dirList.append(other);
-  if(f.custom)dirList.append(pathInput);
-  if(!info)dirList.append(el('p','fine tmux-dir-loading','正在读取最近用过的目录…'));
+  other.setAttribute('role','radio');other.setAttribute('aria-checked',String(f.custom));const t=el('span','grow');t.append(el('span','menu-label','其他目录'),el('small','','家目录下的路径，要已经存在'));other.append(t);rows.append(other);
+  pathInput.classList.toggle('hidden',!f.custom);
   // The suggestions failed: say so, but 家目录 and a typed path still work (the bridge expands ~).
-  else if(info.error)dirList.append(el('p','fine tmux-dir-loading bad','读不到最近用过的目录（'+info.error+'），家目录和手填的路径照样能用'));}
+  dirNote.textContent=!info?'正在读取最近用过的目录…':info.error?'读不到最近用过的目录（'+info.error+'），家目录和手填的路径照样能用':'';
+  dirNote.classList.toggle('bad',!!info?.error);dirNote.classList.toggle('hidden',!!info&&!info.error);
+  // Rows arriving above a focused path push it down: keep it above the footer (app.js).
+  requestAnimationFrame(sheetFieldClear);}
  draw();
  const foot=el('div','new-foot');body.append(foot);
  const status=el('div','new-status hidden');status.setAttribute('role','status');status.setAttribute('aria-live','polite');foot.append(status);
  const acts=el('div','sheet-actions');const go=btn('新建','primary',()=>tmuxNewSubmit(f,go,status,nameOk,name),'plus');go.setAttribute('aria-label','开始新建 tmux 会话');
  acts.append(btn('取消','secondary',closeSheet),go);foot.append(acts);
- if(!info){try{const r=await remote('tmuxInfo');if(!box.isConnected)return;info=r;TX_NEW.info=r;TX_NEW.infoFor=S.device?.id||'';
-   if(f.dir==='~')f.dir=r.home;draw();
-   if(r.available===false){newStatus(status,'error','这台电脑上没找到 tmux，先装上（sudo apt install tmux 或 brew install tmux）');go.disabled=true;}}
-  catch(e){if(!box.isConnected)return;const m=e.message||String(e);
-   if(/Unknown operation|不支持的操作/.test(m)){info={home:'',dirs:[]};draw();newStatus(status,'error','电脑上的桥接程序太旧，先到「设备」里更新桥接程序');go.disabled=true;return;}
-   info={home:'',dirs:[],error:m.slice(0,120)};draw();}}}
+ // Always asked again (new panes and projects since last time); a list from before shows meanwhile.
+ const cached=!!info;
+ try{const r=await remote('tmuxInfo');if(!box.isConnected)return;info=r;TX_NEW.info=r;TX_NEW.infoFor=dev;newHome(r.home);
+  if(f.dir==='~'&&r.home)f.dir=r.home;draw();
+  if(r.available===false){newStatus(status,'error','这台电脑上没找到 tmux，先装上（sudo apt install tmux 或 brew install tmux）');go.disabled=true;}}
+ catch(e){if(!box.isConnected)return;const m=e.message||String(e);
+  if(/Unknown operation|不支持的操作/.test(m)){info={home:'',dirs:[]};draw();newStatus(status,'error','电脑上的桥接程序太旧，先到「设备」里更新桥接程序');go.disabled=true;return;}
+  if(!cached){info={home:'',dirs:[],error:m.slice(0,120)};draw();}}}
 async function tmuxNewSubmit(f,go,status,nameOk,nameInput){
  if(TX_NEW.busy)return;
  if(!nameOk()){nameInput.focus();return;}
