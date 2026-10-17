@@ -27,7 +27,8 @@ function queueTidy(key){const q=Q.get(key);if(q&&!q.items.length&&!q.inflight)Q.
 function queueNotSent(msg){return /^没发出去/.test(msg)||/^Agent is busy or waiting for confirmation/.test(msg);}
 // Refusals that clear up on their own once the agent stops; anything else needs a look first.
 // The bridge's own screen check ("停在一个提问或选择框上": a dialog Herdr still calls idle) clears up once answered.
-function queueTransient(msg){return /停在一个提问或(授权|选择)框|还没准备好|^Agent is busy/.test(msg);}
+// So does Claude still putting an earlier paste into its box ("Pasting…").
+function queueTransient(msg){return /停在一个提问或(授权|选择)框|还没准备好|还在处理上一次粘贴|^Agent is busy/.test(msg);}
 // New messages queue up while the agent is busy, and behind anything already waiting (order is kept).
 function queueWants(a,key){return !!a&&(['working','blocked'].includes(a.agent_status)||queueItems(key).length>0);}
 function queueAdd(key,a,text,pics,opts={}){
@@ -179,8 +180,8 @@ async function queueRun(c,key,q,force){
   // Never to another computer: if the screen moved on meanwhile, it stays queued (nothing was sent).
   if(it.dev&&it.dev!==S.device?.id){it.state='queued';return;}
   // A fresh request id for every attempt; the bridge refuses a reused one.
-  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,...(it.dev?{device:it.dev}:{}),text:!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?it.text.trim():it.text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
-  q.items=q.items.filter(x=>x!==it);q.tries=0;q.retryAt=0;
+  const sent=await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,...(it.dev?{device:it.dev}:{}),text:!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?it.text.trim():it.text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
+  q.items=q.items.filter(x=>x!==it);q.tries=0;q.retryAt=0;if(sentNote(sent))toast(sentNote(sent));
   const card=!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?slashCard(key,it.text):null;
   if(card)card.state='sent';else S.outbox.push({key,text:it.text,images:it.pics.map(p=>({url:p.thumb})),files:(it.docs||[]).map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sent',qid:it.qid,row:it.row});
   if(it.pics.length)rpc('dropImages',{ids:it.pics.map(p=>p.id)}).catch(()=>{});if(it.docs?.length)rpc('dropFiles',{ids:it.docs.map(f=>f.id)}).catch(()=>{});

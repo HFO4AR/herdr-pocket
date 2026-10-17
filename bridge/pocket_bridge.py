@@ -68,14 +68,19 @@ NOT_SENT = {
     "agent_not_ready": "没发出去：Agent 还没准备好，等它空闲了再发",
     "pane_not_found": "没发出去：这个窗格已经不在了，回到列表刷新一下",
 }
-# Text already in the agent's own input box would be sent together with the prompt (seen live with
-# Claude Code after Esc, and with Codex): refused before anything is typed.
+# A question or approval dialog Herdr still calls idle: typed text plus Enter would pick an option.
 MENU_ON_SCREEN = "没发出去：它正停在一个提问或选择框上（电脑那边还显示它空闲），这时打字回车会直接选中选项。先回答它，或点“用按键操作”看屏幕"
-
-
-DRAFT_NOT_SENT = {
-    "claude": "没发出去：它的输入框里已经有字了（可能是刚被中断、退回来的那条），发出去会连在一起。先在「终端」里看一眼",
-    "codex": "没发出去：它的输入框里已经有字了，发出去会连在一起。先在「终端」里看一眼",
+# Text already in a Claude / Codex input box is replaced by the new message (box_send); these are the
+# cases where that cannot be done safely. Nothing of the new message was submitted in any of them.
+BOX_NOT_SENT = {
+    "draft": "没发出去：它输入框里原来的字没能清干净（可能开着 vim 模式），这条就没发。在「终端」里清一下再发",
+    "unclear": "没发出去：它的输入框里有字，可这台电脑上看不清它的屏幕颜色，没法确认清干净了。在「终端」里清一下再发",
+    "pasting": "没发出去：它还在处理上一次粘贴（屏幕上是「Pasting…」），等它好了再发",
+    "late": "没发出去：粘贴以后它一直显示「Pasting…」，字还没进输入框，所以没按回车（Claude 读剪贴板卡住时会这样）。之后再发会先清掉输入框",
+    "missing": "没发出去：粘贴以后输入框里一直没出现这条，所以没按回车。之后再发会先清掉输入框",
+    "other": "没发出去：粘贴以后输入框里的字和这条对不上，所以没按回车。之后再发会先清掉输入框",
+    "gone": "没发出去：粘贴以后它的输入框不见了（可能弹出了提问或选择框），所以没按回车。在「终端」里看一眼",
+    "enter": "没发出去：字进了它的输入框，可按了两次回车都没发出去。之后再发会先清掉输入框",
 }
 
 
@@ -285,23 +290,241 @@ def colored_screen(prefix, agent, text):
     return merged if len(merged) <= ANSI_LIMIT else screen
 
 
-def herdr_draft(prefix, agent):
-    """Text in a Herdr Claude / Codex input box, from its coloured visible screen ("" when empty).
-    None when that cannot be told (no colours from this Herdr, an unreadable screen, no input box
-    on screen): the prompt then goes as before, Herdr's own state is what lets it through.
+def herdr_box(prefix, agent):
+    """The input box of a Herdr Claude / Codex before a prompt (box_view, read-only), or None when it
+    cannot be told (another kind of agent, an unreadable screen, no colours from this Herdr): the
+    prompt then goes as before and Herdr's own state is what lets it through.
 
-    MENU_ON_SCREEN instead when the box is not on screen but a question / approval dialog is.
+    `menu` instead of a box when the box is not on screen but a question / approval dialog is.
     Herdr can call such an agent idle or done: in a narrow pane the dialog's footer wraps ("Esc to"
     / "cancel", seen with Herdr 0.8.2 at 46 columns) and Herdr no longer recognises it. Typed text
     and Enter would then tick or pick an option instead of sending a message."""
     kind = agent.get("agent")
     if kind not in ("claude", "codex"): return None
-    try: raw = read_screen(prefix, agent, 0, ansi=True).get("text", "")
-    except (BridgeError, OSError, ValueError): return None
+    view = box_before(lambda: read_screen(prefix, agent, 0, ansi=True).get("text", ""), kind)
+    if view and view.get("blind") and not view["menu"]: return None
+    return view
+
+
+# ─── The agent's input box: replaced, then a checked submit ─────────────────
+# Claude Code / Codex keep text in their own input box (an interrupted prompt comes back there, the
+# person may have typed something on the computer). A message from the phone replaces it: the box
+# is emptied and checked empty on screen first, never joined to the new text. The message then goes
+# in as one bracketed paste, Enter waits until the box shows it, and the box is read again after
+# Enter: it only counts as sent once the box has emptied.
+#
+# Why (seen live, Claude Code 2.1.268): a paste naming a picture that is not a local file (the ch
+# route's "[图片 · ch-local fetch] ch-file://….png" line) makes Claude read the clipboard first
+# (`xclip … || wl-paste`); meanwhile it shows "Pasting…" under an empty box and drops any Enter.
+# The text lands in the box afterwards, unsent, and stayed there. Herdr's `agent prompt` and the
+# relay path both pressed Enter about 0.15 s after the paste.
+#
+# Clearing: one round of BOX_CLEAR (end of line, delete to the line start, on the now empty line
+# delete the line break after it, then the one before it) removes one line wherever the cursor is;
+# chips such as "[Pasted text #1 +30 lines]" or "[Image #1]" go with their line. Checked live on
+# Claude Code 2.1.268 and Codex 0.163 (Herdr pane send-keys and tmux send-keys), and that an empty
+# box ignores all four. Never Esc (Claude: twice on an empty box opens rewind; Codex: arms "edit
+# previous message"; both: interrupt a turn), Ctrl+C (interrupt, or exit on an empty box), Ctrl+D
+# (exit), Up / Down (history) or Delete (Herdr has no such key).
+BOX_CLEAR = ("ctrl+e", "ctrl+u", "ctrl+k", "backspace")
+BOX_CLEAR_LINES = 40           # rounds of BOX_CLEAR sent at most before the box is read again
+BOX_CLEAR_TRIES = 3
+BOX_STEP = 0.25                # between screen reads
+BOX_PASTING_WAIT = 3.0         # before a prompt: an earlier "Pasting…" still running
+BOX_LAND_WAIT = 8.0            # after the paste: until the box shows it
+BOX_SUBMIT_WAIT = 5.0          # after Enter: until the box is empty
+BOX_SAME_READS = 3             # unchanged reads after Enter before it counts as not taken
+CLAUDE_PASTING = re.compile(r"^\s*Pasting(?:…|\.\.\.)\s*$")
+# What the agents draw in place of pasted content: Claude "[Pasted text #1 +30 lines]", "[Image #1]",
+# Codex "[Pasted Content 1501 chars]", "[image …]".
+BOX_CHIP = re.compile(r"\[(?:Pasted text #\d+(?: \+\d+ lines?)?|Image #\d+|Pasted Content \d+ chars|image[^\]\n]{0,120})\]")
+
+
+def box_reads(seconds):
+    return max(1, int(seconds / BOX_STEP + 0.5))
+
+
+def box_view(raw, kind):
+    """{box, menu, pasting} of a Claude / Codex screen: the text in its input box ("" when empty,
+    None when the box is not on screen), the dialog parsed while there is no box, and whether Claude
+    shows "Pasting…" (a paste it has not put into the box yet). Without colours an empty box's
+    placeholder cannot be told from typed text: `blind` is then set. None for a non-text read."""
     if not isinstance(raw, str): return None
-    seen = screen_input(raw, kind)
-    if seen["menu"]: return MENU_ON_SCREEN
-    return seen["box"] if "\x1b[" in raw else None
+    plain, colored = screen_pair(raw)
+    box = claude_draft(plain, colored) if kind == "claude" else codex_draft(plain, colored)
+    tail = [x for x in plain.split("\n") if x.strip()][-4:]
+    view = {"box": box, "menu": parse_menu(plain, kind) if box is None else None,
+            "pasting": kind == "claude" and any(CLAUDE_PASTING.match(x) for x in tail)}
+    if "\x1b[" not in raw: view["blind"] = True
+    return view
+
+
+def box_before(read, kind):
+    """The box before a prompt (read-only). While Claude still shows "Pasting…" from an earlier paste,
+    wait up to BOX_PASTING_WAIT for it to land. None when the screen cannot be read."""
+    view = None
+    for i in range(box_reads(BOX_PASTING_WAIT)):
+        if i: time.sleep(BOX_STEP)
+        try: view = box_view(read(), kind)
+        except (BridgeError, OSError, ValueError): return None
+        if not view or not view["pasting"]: return view
+    return view
+
+
+def box_squash(text):
+    return "".join(str(text or "").split())
+
+
+def box_holds(box, text):
+    """The box shows `text`: the same characters once whitespace (wrapping, indents) is ignored; or,
+    where the agent drew chips for pasted content or pictures (it may also move a picture's chip and
+    drop its path), every other character it shows appears in `text`, in order."""
+    shown, want = box_squash(box), box_squash(text)
+    if not shown: return False
+    if shown == want: return True
+    if not BOX_CHIP.search(box): return False
+    rest = iter(want)
+    return all(c in rest for c in box_squash(BOX_CHIP.sub(" ", box)))
+
+
+def box_text(text):
+    """The prompt as it is pasted: CRLF as LF, and no ESC (an ESC[201~ inside would end the paste early)."""
+    return text.replace("\r\n", "\n").replace("\x1b", "")
+
+
+class BoxIO:
+    """One agent's input box: `read` returns its raw coloured screen; `keys` presses BOX_CLEAR keys,
+    `paste` writes a bracketed paste (no Enter), `enter` presses Enter."""
+    def __init__(self, kind, read, keys, paste, enter):
+        self.kind, self.read, self.keys, self.paste, self.enter = kind, read, keys, paste, enter
+
+    def look(self):
+        try: view = box_view(self.read(), self.kind)
+        except (BridgeError, OSError, ValueError): return None
+        return None if not view or view.get("blind") else view
+
+
+class BoxNotSent(BridgeError):
+    """Nothing of this message was submitted (Enter was never pressed, or the box still holds it)."""
+    def __init__(self, code):
+        super().__init__(BOX_NOT_SENT[code])
+        self.code = code
+
+
+def box_clear(io, view):
+    """Empty the box (BOX_CLEAR rounds); True only once a fresh read shows it empty."""
+    for _ in range(BOX_CLEAR_TRIES):
+        io.keys(list(BOX_CLEAR) * min(BOX_CLEAR_LINES, view["box"].count("\n") + 2))
+        for _ in range(box_reads(1.5)):
+            time.sleep(BOX_STEP)
+            view = io.look()
+            if not view or view["box"] is None: return False
+            if view["box"] == "": return True
+            if view["pasting"]: continue
+    return False
+
+
+def box_landed(io, text):
+    """After the paste: ("ours", view) once two reads in a row show the box holding it. Otherwise
+    "unreadable" (screen read failed), "gone" (no box any more), "other" (something else, steady),
+    "late" (still "Pasting…" or empty at the end) or "missing" (empty, no "Pasting…")."""
+    last, view, pasting = None, None, False
+    for i in range(box_reads(BOX_LAND_WAIT)):
+        if i: time.sleep(BOX_STEP)
+        view = io.look()
+        if view is None: return "unreadable", None
+        box = view["box"]
+        if box is None: return "gone", view
+        pasting = view["pasting"]
+        if pasting or not box: last = None; continue
+        holds = box_holds(box, text)
+        # Typed text may show up a few characters at a time: a beginning of it is still arriving.
+        if not holds and box_squash(text).startswith(box_squash(box)): last = None; continue
+        if box == last: return ("ours" if holds else "other"), view
+        last = box
+    if last is not None: return "other", view
+    return ("late" if pasting else "missing"), view
+
+
+def box_taken(io, before):
+    """After Enter: "sent" once the box is empty; "unsent" when it still shows exactly what it showed
+    before Enter after one more Enter (the agent never took it: submitting empties the box);
+    "unknown" when the screen cannot tell (unreadable, no box, other text). Returns (state, retried)."""
+    retried, same = False, 0
+    for _ in range(box_reads(BOX_SUBMIT_WAIT)):
+        time.sleep(BOX_STEP)
+        view = io.look()
+        if view is None or view["box"] is None: return "unknown", retried
+        if view["box"] == "" and not view["pasting"]: return "sent", retried
+        if view["pasting"]: same = 0; continue
+        if box_squash(view["box"]) != box_squash(before): return "unknown", retried
+        same += 1
+        if same < BOX_SAME_READS: continue
+        if retried: return "unsent", retried
+        # Exactly our text, unchanged: Enter was dropped. One more, never a second paste.
+        io.enter(); retried, same = True, 0
+    return ("unsent" if retried and same else "unknown"), retried
+
+
+def box_send(io, text, view):
+    """Replace whatever is in the agent's input box with `text` and submit it (after the receipt).
+    `view` is the box as read just before (box_view, with colours). Returns {verified, replaced
+    [, retried]}: verified False when the screen could not confirm it left the box (it may well
+    have gone; never resent). Raises BoxNotSent when nothing of it can have been submitted (Enter
+    not pressed, or the box still holds it); any other failure after the first write leaves the
+    outcome unknown."""
+    replaced = False
+    if view["box"]:
+        if not box_clear(io, view): raise BoxNotSent("draft")
+        replaced = True
+    text = box_text(text)
+    io.paste(text)
+    state, seen = box_landed(io, text)
+    if state == "unreadable":
+        # The screen stopped answering: as before this check existed, Enter after a short pause.
+        time.sleep(0.3); io.enter()
+        return {"verified": False, "replaced": replaced}
+    if state != "ours": raise BoxNotSent(state)
+    io.enter()
+    taken, retried = box_taken(io, seen["box"])
+    if taken == "unsent": raise BoxNotSent("enter")
+    result = {"verified": taken == "sent", "replaced": replaced}
+    if retried: result["retried"] = True
+    return result
+
+
+def herdr_box_io(prefix, agent):
+    """Pane-level Herdr input for the box: the same for a local agent and a ch relay pane (whose
+    foreground is the relay, so Herdr's agent commands refuse it)."""
+    pane = agent["pane_id"]
+    return BoxIO(agent["agent"],
+                 lambda: call(prefix + ["pane", "read", pane, "--source", "visible", "--format", "ansi"]).get("text", ""),
+                 lambda names: call(prefix + ["pane", "send-keys", pane, *names]),
+                 lambda text: call(prefix + ["pane", "send-text", pane, "\x1b[200~" + text + "\x1b[201~"]),
+                 lambda: call(prefix + ["pane", "send-keys", pane, "enter"]))
+
+
+def box_attempt(io, text, view):
+    """box_send with its failures sorted for the receipt: (result, None) when it went (or may have
+    gone), (stored refusal, BridgeError) when nothing was submitted. Raises when the outcome is
+    unknown (a write failed once Enter may have been pressed)."""
+    pressed = []
+    enter = io.enter
+    def press():
+        pressed.append(True)
+        enter()
+    io.enter = press
+    try: return box_send(io, text, view), None
+    except BoxNotSent as exc:
+        return {"sent": False, "rejected": exc.code}, exc
+    except BridgeError as exc:
+        # Before the first Enter nothing can have been submitted: the paste is bracketed, so its
+        # line breaks stay text. A refusal or a broken write there means "not sent".
+        if pressed: raise
+        message = NOT_SENT.get(getattr(exc, "code", None)) or "没发出去：往它的输入框里写字时出错了（%s），没按回车" % str(exc)[:200]
+        return {"sent": False, "rejected": getattr(exc, "code", None) or "write"}, BridgeError(message)
+    finally:
+        io.enter = enter
 
 
 def screen_input(raw, kind):
@@ -387,8 +610,8 @@ def relay_prompt(prefix, pane_id, text):
     """Type a prompt into a relay pane. One line: `pane run` (text, then Enter). Several lines go in
     as one bracketed paste, so the agent's input box keeps the line breaks, then Enter submits."""
     if "\n" not in text and "\r" not in text: return call(prefix + ["pane", "run", pane_id, text])
-    call(prefix + ["pane", "send-text", pane_id, "\x1b[200~" + text.replace("\r\n", "\n") + "\x1b[201~"])
-    time.sleep(0.15)
+    call(prefix + ["pane", "send-text", pane_id, "\x1b[200~" + box_text(text) + "\x1b[201~"])
+    time.sleep(0.3)
     return call(prefix + ["pane", "send-keys", pane_id, "enter"])
 
 
@@ -400,7 +623,10 @@ def mutate(request, prefix, agent, state_dir):
     digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     # The input box is read before the receipts database is locked (a screen read may take a while);
     # it only refuses below, after a request already handled has answered from its receipt.
-    draft = herdr_draft(prefix, agent) if op in ("prompt", "exitAgent") and agent.get("agent_status") in ("idle", "done") else None
+    view = herdr_box(prefix, agent) if op in ("prompt", "exitAgent") and agent.get("agent_status") in ("idle", "done") else None
+    menu_up = bool(view and view["box"] is None and view["menu"])
+    # The box is on screen (with colours): it is replaced and the submit is checked (box_send).
+    boxed = bool(view and isinstance(view["box"], str))
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     db = sqlite3.connect(state_dir / "receipts.sqlite", timeout=5)
     try:
@@ -425,8 +651,8 @@ def mutate(request, prefix, agent, state_dir):
             if not isinstance(text, str) or (not text.strip() and not images and not files) or len(text.encode()) > 15000 or "\x00" in text:
                 raise BridgeError("Prompt must contain 1–15000 UTF-8 bytes without NUL")
             # Before the receipt: a refusal here sent nothing.
-            if draft is MENU_ON_SCREEN: raise BridgeError(MENU_ON_SCREEN)
-            if draft: raise BridgeError(DRAFT_NOT_SENT[agent["agent"]])
+            if menu_up: raise BridgeError(MENU_ON_SCREEN)
+            if boxed and view["pasting"]: raise BridgeError(BOX_NOT_SENT["pasting"])
             if images is not None or files is not None:
                 # Checked and (for ch routes) shared before the receipt: a failure here sent nothing.
                 text = compose_prompt(text, (prompt_images(images, request, prefix, agent) if images is not None else [])
@@ -452,7 +678,7 @@ def mutate(request, prefix, agent, state_dir):
             if set(request) - CLOSE_KEYS: raise BridgeError("没发出去：请求里有不认识的字段")
             command = EXIT_COMMANDS.get(agent.get("agent"))
             if not command: raise BridgeError("没发出去：不认识这个 Agent，没法让它自己退出")
-            if agent.get("agent_status") not in ("idle", "done") or draft is MENU_ON_SCREEN:
+            if agent.get("agent_status") not in ("idle", "done") or menu_up:
                 raise BridgeError("没发出去：Agent 还在干活或在等确认，先中断它再结束")
             args = ["agent", "prompt", agent["pane_id"], command]
         elif op == "answer":
@@ -476,6 +702,28 @@ def mutate(request, prefix, agent, state_dir):
         # 在写入终端之前持久化请求；中断后相同 ID 也不能再次执行。
         db.execute("INSERT INTO receipts VALUES (?, ?, NULL)", (req_id, digest))
         db.commit()
+        if boxed and op == "prompt":
+            # Pane-level input, the same for a local agent and a ch relay pane.
+            value, refusal = box_attempt(herdr_box_io(prefix, agent), args[-1], view)
+            if refusal:
+                db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(value), req_id))
+                db.commit()
+                raise refusal
+            result = dict({"sent": True, "receipt": req_id, "result": {"type": "ok"}}, **value)
+            if request.get("images") is not None or request.get("files") is not None: result["text"] = text
+            db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
+            db.commit()
+            return result
+        if boxed and op == "exitAgent" and view["box"]:
+            # /exit (/quit) joined to a draft would go out as one message: the box is emptied first.
+            try: cleared = box_clear(herdr_box_io(prefix, agent), view)
+            except HerdrRejected as exc:
+                if exc.code not in NOT_SENT: raise
+                cleared = False
+            if not cleared:
+                db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps({"sent": False, "rejected": "draft"}), req_id))
+                db.commit()
+                raise BridgeError(BOX_NOT_SENT["draft"])
         try:
             try: value = answer_question(request, herdr_answer_io(prefix, agent)) if op == "answer" else call(prefix + args)
             except HerdrRejected as exc:
@@ -5005,14 +5253,35 @@ def tmux_kill(request, state_dir):
 #  · status (target): the cheap poll of one open chat; `status` with `tmux: true` and no target
 #    lists every tmux agent next to Herdr's (the background watcher). Reads only.
 #  · prompt: refused unless the screen says it is idle (same rule as Herdr: the phone queues
-#    instead) and its input box is empty (claude_draft, codex_draft); pictures and files name
-#    the phone's uploads by local path (the pane runs here), re-hashed first. One receipt per request id, through tmux_send.
+#    instead); text in its input box is replaced and the submit checked (box_send); pictures and
+#    files name the phone's uploads by local path (the pane runs here), re-hashed first. One
+#    receipt per request id (the one tmux_send would write).
 #  · answer: answer_question with tmux keys (tmux_answer_io): every key is followed by a screen
 #    read, Enter only on a verified cursor; its receipt is written before the first key.
 #  · key: ↑ ↓ Enter Esc Ctrl+C and Shift+Tab (BTab, only while the agent's own input footer is on
 #    screen and nothing waits: on a permission dialog Claude would take it as "don't ask again").
 TMUX_AGENT_OPS = ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent")
 TMUX_ANSWER_KEYS = {"up": "Up", "down": "Down", "enter": "Enter"}
+
+
+TMUX_BOX_KEYS = {"ctrl+e": "C-e", "ctrl+u": "C-u", "ctrl+k": "C-k", "backspace": "BSpace"}
+
+
+def tmux_box_io(pane, kind, req_id):
+    """box_send's input for a tmux pane: visible rows with colours, keys, a paste (bracketed when the
+    agent asked for it, which Claude and Codex do) and Enter."""
+    target, sock = pane["_tid"], pane["_sock"]
+    def paste(text):
+        name = "herdr-pocket-" + req_id[:8]
+        tmux_run(["load-buffer", "-b", name, "-"], data=text, sock=sock)
+        try: tmux_run(["paste-buffer", "-p", "-d", "-b", name, "-t", target], sock=sock)
+        except TmuxFailed:
+            try: tmux_run(["delete-buffer", "-b", name], sock=sock)
+            except BridgeError: pass
+            raise
+    return BoxIO(kind, lambda: tmux_run(["capture-pane", "-p", "-e", "-J", "-t", target], sock=sock),
+                 lambda names: tmux_run(["send-keys", "-t", target, *[TMUX_BOX_KEYS[n] for n in names]], sock=sock),
+                 paste, lambda: tmux_run(["send-keys", "-t", target, "Enter"], sock=sock))
 
 
 def tmux_answer_io(pane, kind):
@@ -5142,21 +5411,38 @@ def tmux_agent_request(request, state_dir):
     if state == "blocked": raise BridgeError(NOT_SENT["agent_blocked"])
     # Same rule as a Herdr agent: only an idle agent gets a prompt; the phone queues it meanwhile.
     if state != "idle": raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
-    if found["kind"] == "claude":
-        plain, colored = tmux_capture(pane)
-        if claude_draft(plain, colored):
-            raise BridgeError(DRAFT_NOT_SENT["claude"])
-    elif found["kind"] == "codex":
-        # Text typed into the pane (or left there) would be sent together with this prompt (seen live).
-        plain, colored = tmux_capture(pane)
-        draft = codex_draft(plain, colored)
-        if draft is None: raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
-        if draft: raise BridgeError(DRAFT_NOT_SENT["codex"])
+    # Text already in the box is replaced, never joined (box_send): read with colours, visible rows.
+    io = tmux_box_io(pane, found["kind"], request.get("id") or "")
+    view = box_before(io.read, found["kind"])
+    if view is None: raise BridgeError("读不到这个 tmux 窗格，先没发")
+    if view["box"] is None:
+        # Codex: idle only with its own composer on screen (letters may be shortcuts elsewhere).
+        if found["kind"] == "codex": raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
+        if view["menu"]: raise BridgeError(NOT_SENT["agent_blocked"])
+    elif view.get("blind"):
+        # Without colours an empty box's placeholder looks like typed text: cannot be cleared verifiably.
+        if view["box"]: raise BridgeError(BOX_NOT_SENT["unclear"])
+    elif view["pasting"]: raise BridgeError(BOX_NOT_SENT["pasting"])
     if attached:
         # Checked before the receipt: a refusal here sent nothing.
         text = compose_prompt(text, tmux_attachments(request))
         if len(text.encode()) > TMUX_TEXT: raise BridgeError("没发出去：消息加上附件路径太长了")
-    result = tmux_send(dict(base, action="run", text=text), state_dir)
+    if view["box"] is None or view.get("blind"): result = tmux_send(dict(base, action="run", text=text), state_dir)
+    else:
+        req_id = request.get("id")
+        if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
+        # The same receipt (id and digest) as tmux_send would write for this prompt.
+        digest = hashlib.sha256(json.dumps(dict(base, action="run", text=text), sort_keys=True).encode()).hexdigest()
+        db, previous = receipt_open(state_dir, req_id, digest, "上次的输入结果未知：先看一眼终端，别直接重发")
+        if previous is not None: return previous
+        try:
+            value, refusal = box_attempt(io, text, view)
+            if refusal:
+                receipt_save(db, req_id, value)
+                raise refusal
+            result = dict({"sent": True, "receipt": req_id}, **value)
+            receipt_save(db, req_id, result)
+        finally: db.close()
     if attached and result.get("sent"): result = dict(result, text=text)
     return result
 

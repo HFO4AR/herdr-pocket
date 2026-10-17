@@ -486,7 +486,7 @@ async function sendMessage(input){
   // Pictures go up first; only then is the one prompt sent (never resent automatically).
   const images=pics.length?await imgUpload(pics,stage=>{item.stage=stage;paintTimeline();}):null;
   const files=docs.length?await fileUpload(docs,a,stage=>{item.stage=stage;paintTimeline();}):null;item.stage='';
-  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:card?text.trim():text,id:uuid(),...(dev&&!S.demo?{device:dev}:{}),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
+  const sent=await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:card?text.trim():text,id:uuid(),...(dev&&!S.demo?{device:dev}:{}),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
   if(S.demo){toast('演示模式：未发送，草稿已保留');return;}
   item.state='sent';if(card)card.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
   if(pics.length){imgSet(key,imgAttached(key).filter(p=>!pics.includes(p)));rpc('dropImages',{ids:pics.map(p=>p.id)}).catch(()=>{});}
@@ -494,9 +494,13 @@ async function sendMessage(input){
   // A slash command may not start a turn at all (/status), so no optimistic "working": Herdr's own state decides.
   if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;if(!card)S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
   S.stick=true;paintTimeline();if(card)slashCapture(card);if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);
-  if(S.chat?.noTranscript&&!card){toast('发给 '+providerName(a.agent)+' 了，回复看终端');setTimeout(()=>{if(epoch===S.epoch)fetchTerminal(true);},900);}}
+  if(S.chat?.noTranscript&&!card){toast('发给 '+providerName(a.agent)+' 了，回复看终端'+sentNote(sent,'；'));setTimeout(()=>{if(epoch===S.epoch)fetchTerminal(true);},900);}
+  else if(sentNote(sent))toast(sentNote(sent));}
  catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
  finally{S.sendBusy=Math.max(0,(S.sendBusy||1)-1);button.disabled=!input.value.trim()&&!attCount(key);}}
+// What the bridge says about the agent's own input box after a send: text that sat there was
+// replaced (never joined to this message), or the screen could not confirm the box emptied.
+function sentNote(r,sep=''){const n=[r?.replaced?'覆盖了它输入框里原来的字':'',r?.verified===false?'屏幕上没确认到它收下了，留意一下':''].filter(Boolean).join('，');return n?sep+n:'';}
 // The send button answers the press at once (the haptic comes from native.js); the bubble follows.
 let sendSeq=0;
 function sendPulse(b){if(!b)return;b.classList.remove('fired');void b.offsetWidth;b.classList.add('fired');setTimeout(()=>b.classList.remove('fired'),400);}
