@@ -122,3 +122,9 @@ A Claude Code / Codex process found in a tmux pane of the SSH user (`tmux` op, `
 - `answer`: same request as for Herdr. The receipt is written before the first key; keys are `tmux send-keys Up|Down|Enter`, the text row gets `send-keys -l -- <text>`, and the screen is re-read after every key (`capture-pane`), stopping before Enter on any doubt.
 - `key`: the agent key list; `shift+tab` is sent as `BTab` only while the agent's input footer is on screen and no menu waits.
 - `exitAgent` is refused (close the pane with `tmuxKill`).
+
+## What the agent is doing (protocol remains v1)
+
+- `read` (Herdr and tmux agents) adds `activity` when the agent's own live status line is on screen: `{verb, seconds?, tokens?, dir?, thinking?, line}` (Claude Code "✽ Ionizing… (42s · ↓ 1.2k tokens · esc to interrupt)", Codex "• Working (1m 02s • esc to interrupt)"). For Claude only the line right above its input box counts (past its todo list), elsewhere the bottom lines; a finished line ("✻ Crunched for 7s") or a bullet in the conversation is not activity. It is parsed from the same screen read, never decides the agent's state, and is absent when there is no such line.
+- Sub-agent reports (`kids` in `glance` / `history`, also from a ch route's remote helper) add, for the newest `KIDS_LIVE` (4) running sub-agents only, `activity` (the glance shape: `{kind: tool|note|agent, verb, text, open, at}` from the child's own last 64 KB), `started` (its current task's timestamp), `tools` and `failed` counts. Finished sub-agents are not read.
+- The phone shows these in the conversation's activity line (已发出，等它开始… / 正在执行 / 正在思考 / 正在输出 / 子 Agent 在跑 / 状态有一会儿没更新了 / 状态未知); it is read-only and sends nothing.

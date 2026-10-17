@@ -60,7 +60,7 @@ function footPaint(footer,a){
  const chips=items.filter(x=>x!==lead);
  // What the rail shows; rebuilt only when this changes (the timers inside tick on their own).
  const q=Q.get(key);const sig=JSON.stringify([lead,chips,lead==='mode'?'':mode,items.includes('queue')?[q.items.length,footQueueText(a,key)]:0,
-  st,items.includes('bg')?[bgChatRunning(),bgChat()?.stamp||'']:0,lead==='work'?[!!S.chat.interruptAt&&Date.now()-S.chat.interruptAt<4000,statusSince(a)||S.chat.sentAt||0]:0,done?[S.chat.took,S.stick]:0,writing?ask.className:'']);
+  st,items.includes('bg')?[bgChatRunning(),bgChat()?.stamp||'']:0,lead==='work'?[!!S.chat.interruptAt&&Date.now()-S.chat.interruptAt<4000,actSince(a),actInfo()?.kind==='sent']:0,done?[S.chat.took,S.stick]:0,writing?ask.className:'']);
  if(bar)bar.classList.toggle('hidden',lead!=='mode');
  if(rail.dataset.sig!==sig){rail.dataset.sig=sig;
   rail.querySelectorAll(':scope>:not(#mode-bar)').forEach(n=>n.remove());
@@ -80,8 +80,10 @@ function footRefresh(){const f=document.getElementById('composer'),a=S.chat?.age
 // The expanded line: what leads, in words, with its one action.
 function footLead(kind,a,key,ask){
  if(kind==='work'){const n=el('div','foot-lead t-work');n.setAttribute('role','status');n.append(el('span','pulse'));
-  const t=el('strong','','执行中');const at=statusSince(a)||S.chat.sentAt;if(at)t.append(' ',since(at));
-  const line=el('span','foot-detail mono',S.activity||'正在读取终端…');line.id='activity-line';n.append(t,line);return n;}
+  // Same clock and words as the activity line in the conversation (activity.js); its timer hides
+  // while that line is in view.
+  const info=actInfo(),t=el('strong','',info?.kind==='sent'?'已发出':'执行中');const at=actSince(a);if(at)t.append(' ',since(at));
+  const line=el('span','foot-detail mono',actRailText(info));line.id='activity-line';n.append(t,line);return n;}
  if(kind==='done'){const n=el('div','foot-lead t-done');n.setAttribute('role','status');n.append(icon('check'),el('strong','','做完了'));
   if(S.chat.took>=5000)n.append(el('span','foot-detail','用时 '+dur(S.chat.took)));
   if(!S.stick)n.append(btn('看结果','link-btn',()=>{S.stick=true;S.unseen=0;scrollBottom();updateJump();footRefresh();}));return n;}
@@ -95,7 +97,7 @@ function footLead(kind,a,key,ask){
 // A compact chip; tapping it opens what it stands for.
 function footChip(kind,a,key,mode,ask){
  let c;
- if(kind==='work'){c=btn('','foot-chip t-work',()=>{FOOT.pin='work';footRefresh();});c.append(el('span','pulse'),document.createTextNode('执行中'));const at=statusSince(a)||S.chat.sentAt;if(at)c.append(' ',since(at));c.setAttribute('aria-label','执行中，点开看进度和中断');}
+ if(kind==='work'){c=btn('','foot-chip t-work',()=>{FOOT.pin='work';footRefresh();});c.append(el('span','pulse'),document.createTextNode('执行中'));const at=actSince(a);if(at)c.append(' ',since(at));c.setAttribute('aria-label','执行中，点开看进度和中断');}
  else if(kind==='done'){c=btn('做完了','foot-chip t-done',()=>{FOOT.pin='done';footRefresh();},'check');}
  else if(kind==='queue'){c=btn('排队 '+queueItems(key).length,'foot-chip t-queue',footQueueShow,'history');c.setAttribute('aria-label','排队 '+queueItems(key).length+' 条，'+footQueueText(a,key));}
  else if(kind==='bg')c=bgFootChip();

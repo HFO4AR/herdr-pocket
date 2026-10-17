@@ -46,3 +46,9 @@
 
 /* The header's 切换 Agent count turns amber while sub-agents run. */
 .icon-count.kids-on{background:var(--warn-soft);color:var(--warn);box-shadow:0 0 0 1.5px var(--warn) inset}
+
+/* Folded strip while sub-agents run: who is producing what right now (the newest running one). */
+.kids-live{display:flex;align-items:baseline;gap:6px;min-width:0;margin:-6px 0 6px 2px;font-size:var(--fs-xs);line-height:1.5}
+.kids-live-who{flex:0 1 auto;min-width:2em;max-width:45%;color:var(--ink-2);font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kids-live-what{flex:1;min-width:0;color:var(--warn);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kid-row.running .kid-sub{font-variant-numeric:tabular-nums}

@@ -1,6 +1,6 @@
 /* Two-pane layout for tablets (layout.js adds .wide-frame only on wide screens; phones never see it).
  * Rail (navigation) · list (会话 / 历史) · detail (the open conversation). Tokens only. */
-:root.wide-on{--rail-w:88px;--list-w:clamp(330px,33vw,380px)}
+:root.wide-on{--rail-w:88px;--list-w:clamp(330px,28vw,440px)}
 .wide-frame{height:100vh;height:100dvh;display:grid;grid-template-columns:var(--rail-w) var(--list-w) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);background:var(--bg)}
 .wide-banner{grid-column:1/-1;grid-row:1}
 .wide-frame:not(.has-banner) .wide-banner{display:none}
@@ -28,8 +28,16 @@
 .wide-frame:not([data-mode="solo"]) .wide-list .main{padding:4px 12px 24px}
 .wide-frame:not([data-mode="solo"]) .wide-list .main>*{max-width:none}
 /* One-column pages keep the readable 760 px column; the title bar lines up with it. */
-.wide-frame[data-mode="solo"] .topbar{padding:0 max(20px,calc((100% - 760px) / 2))}
-.wide-frame[data-mode="solo"] .main{padding-left:max(32px,calc((100% - 760px) / 2));padding-right:max(32px,calc((100% - 760px) / 2))}
+.wide-frame[data-mode="solo"]{--solo-w:760px}
+.wide-frame[data-mode="solo"] .topbar{padding:0 max(20px,calc((100% - var(--solo-w)) / 2))}
+.wide-frame[data-mode="solo"] .main{padding-left:max(32px,calc((100% - var(--solo-w)) / 2));padding-right:max(32px,calc((100% - var(--solo-w)) / 2))}
+.wide-frame[data-mode="solo"] .main>*{max-width:var(--solo-w)}
+/* Settings on a wide screen: two columns of groups instead of one long wall (settings.js .set-cols). */
+@media(min-width:1180px){
+ .wide-frame[data-mode="solo"]:has(.main.settings){--solo-w:1040px}
+ .wide-frame[data-mode="solo"] .set-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:28px;align-items:start}
+ .wide-frame[data-mode="solo"] .set-col>.section-label:first-child{margin-top:var(--sp-5)}
+}
 .wide-frame:not([data-mode="solo"]) .wide-list .tabs.chips{flex-wrap:wrap;overflow:visible;margin:0 0 8px;padding:0;row-gap:8px}
 .wide-list .card-button{position:relative;transition:background-color .15s var(--ease)}
 .wide-list .card-button:hover{background:var(--sunken)}
@@ -39,8 +47,10 @@
 .wide-list .card-button.is-selected .avatar .status-dot{border-color:var(--soft)}
 .wide-list .card-button.is-selected .avatar.claude{background:var(--surface);box-shadow:inset 0 0 0 1px var(--soft-line)}
 
-/* Detail column: the chat fills it; its header lines up with the list's title bar. */
+/* Detail column: the chat fills it; on a wide pane its header, tabs, timeline and composer share one
+   reading column (780 px of text plus the chat body's 28 px gutters). */
 .wide-detail .chat-head{min-height:56px}
+.wide-detail #chat-head{padding-left:max(2px,calc((100% - 836px) / 2));padding-right:max(4px,calc((100% - 836px) / 2))}
 .wide-detail .chat-body{padding:20px 28px 24px}
 
 /* Nothing open yet. */
