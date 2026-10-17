@@ -157,7 +157,8 @@ function buildTurns(messages,live){
  return turns;}
 function tlDuration(a,b){if(!a||!b)return '';const s=Math.max(0,Math.round((b-a)/1000));if(s<60)return s+' 秒';const m=Math.round(s/60);if(m<60)return m+' 分钟';return Math.floor(m/60)+' 小时'+(m%60?' '+m%60+' 分':'');}
 function workSummary(turn){const s=turn.stats,parts=[];if(s.notes)parts.push(s.notes+' 条进展');if(s.ops)parts.push(s.ops+' 个操作');if(!s.notes&&!s.ops&&s.agents)parts.push(s.agents+' 条子 Agent 消息');
- const d=tlDuration(turn.start,turn.live?new Date():turn.end);if(d&&turn.prompt)parts.push(d);return parts.join(' · ');}
+ // A live turn's clock is the activity line's (activity.js); two different clocks would only confuse.
+ const d=turn.live?'':tlDuration(turn.start,turn.end);if(d&&turn.prompt)parts.push(d);return parts.join(' · ');}
 // One-line preview of the newest progress for the collapsed block.
 function workPreview(turn){const last=turn.work.filter(e=>e.type!=='notice').at(-1);if(!last)return '';
  if(last.type==='tool'){const t=last.entry.tool,r=last.entry.result,i=toolInfo(t,r);return i.label+' '+(i.file?i.file:i.text);}
@@ -225,7 +226,8 @@ function toolGroup(g,open,openRows){
  if(failed&&!tally.tests?.fail)s.append(el('span','tool-state bad',failed+' 失败'));else if(running&&tlWorking())s.append(el('span','spinner mini'));
  s.append(el('span','chev'));s.lastChild.append(icon('down'));d.append(s);
  const list=el('div','tool-list');g.entries.forEach(e=>list.append(toolRow(e,open.has('row:'+e.id)||openRows?.has?.(e.id))));d.append(list);return d;}
-function tlWorking(){const st=S.chat?.agent?.agent_status;return !S.chat?.stale&&(st==='working'||st==='blocked');}
+// A running sub-agent's own record (read-only, kids.js) is live too: its newest turn has no reply yet.
+function tlWorking(){const c=S.chat,st=c?.agent?.agent_status;return !c?.stale&&(st==='working'||st==='blocked'||!c?.agent&&!!c?.record?.parent&&!!c?.kidRunning);}
 function messageRow(m,label){
  const row=el('article','message '+m.kind);row.dataset.mid=m.id;const meta=el('div','message-label');meta.append(el('span','',label),el('span','',clock(m.timestamp)));
  const bubble=el('div','bubble');bubble.append(m.kind==='user'?userText(m.text):markdown(m.text));
@@ -262,7 +264,7 @@ function workBlock(turn,open){
  const anchor=turn.work.at(-1)?.id||'';d.dataset.anchor=anchor;d.open=open.has('work:'+turn.id)||turn.work.some(e=>open.has('anchor:'+e.id));
  const sum=el('summary');const lead=el('span','work-lead');
  if(turn.live&&tlWorking())lead.append(el('span','spinner mini'));else lead.append(icon(s.failed?'alert':turn.interrupted?'stop':turn.final?'check':'tool'));
- const head=el('span','work-head');const title=el('span','work-title');title.append(el('strong','',turn.live&&tlWorking()?(S.chat.agent.agent_status==='blocked'?'等你确认':'正在工作'):turn.interrupted?'已中断':'工作过程'),el('span','work-stats',workSummary(turn)));
+ const head=el('span','work-head');const title=el('span','work-title');title.append(el('strong','',turn.live&&tlWorking()?(S.chat.agent?.agent_status==='blocked'?'等你确认':'正在工作'):turn.interrupted?'已中断':'工作过程'),el('span','work-stats',workSummary(turn)));
  if(s.failed)title.append(el('span','work-bad',s.failed+' 个失败'));
  head.append(title);const tally=tlTally(turn.work.filter(e=>e.type==='tool').map(e=>e.entry));
  const facts=!turn.live&&(tally.files||tally.tests)?tlTallyNodes(el('span','work-facts'),tally):null;
@@ -433,12 +435,12 @@ function tlBuild(list,open){
  // An agent whose conversation cannot be read: the screen is the conversation; sends and the queue still show.
  if(S.chat.noTranscript){list.append(noTranscriptNote(true));
   if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));list.append(el('pre','agent-terminal compact',tail(S.terminalText,14)));}
-  S.outbox=S.outbox.filter(o=>o.key!==draftKey()||o.state!=='sent'||Date.now()-o.at<180000);outboxRows(list,()=>{});slashRest(list);queueTimeline(list);return;}
+  S.outbox=S.outbox.filter(o=>o.key!==draftKey()||o.state!=='sent'||Date.now()-o.at<180000);outboxRows(list,()=>{});actRow(list);slashRest(list);queueTimeline(list);return;}
  if(!S.chat.record){const box=el('div','unlinked');box.append(el('h2','','还没关联到对话记录'),el('p','muted',S.chat.historyIssue||'正在定位这个窗格对应的历史记录…'));
   if(S.chat.historyIssue)box.append(btn('选择历史记录','primary',pickHistory));list.append(box);
   const candidates=S.chat.agent?.history_ref?.candidates||[];if(candidates.length){list.append(el('div','section-label','候选历史 · 点击后确认'));const g=el('div','card list-card');candidates.forEach(rec=>{const b=btn('','card-button',()=>chooseHistory(rec,S.chat.agent));const t=el('div','grow');t.append(el('div','card-title',rec.title),el('div','card-meta',relative(rec.modified)+' · '+String(rec.thread).slice(0,8)));b.append(t,icon('chevron'));g.append(b);});list.append(g);}
   if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));const pre=el('pre','agent-terminal compact');screenPaint(pre,S.terminalText,S.terminalAnsi,14);list.append(pre);}
-  slashRest(list);queueTimeline(list);return;}
+  actRow(list);slashRest(list);queueTimeline(list);return;}
  // Until the first fresh read arrives (cache shown, or still loading) paging is unknown: no button.
  const c=S.chat,settling=!!(c.cached||c.waiting||c.historyLoading);
  // The same node across repaints, so a tap is never lost to a redraw.
@@ -453,7 +455,9 @@ function tlBuild(list,open){
   const live=tlWorking()&&!S.outbox.some(o=>o.key===draftKey()&&o.state!=='failed');const turns=buildTurns(S.messages,live);count=turns.length;slashMatch(turns);const next=new Map();for(const turn of turns){slashBefore(list,turn.start);dayMark(turn.start);list.append(keptTurn(turn,who,open,next));}TL_KEEP.nodes=next;}
  if(!commandsOnly){count+=slashCards().length;slashRest(list);}
  outboxRows(list,dayMark);
-  queueTimeline(list);
+ // The live activity line (activity.js) follows what was sent; queued messages come after it.
+ actRow(list);
+ queueTimeline(list);
  if(!count&&!S.chat.historyError){
   if(S.chat.historyLoading||S.more)list.append(el('div','empty small',S.chat.historyLoading?'正在读取对话记录…':'这一页没有可显示的消息，继续加载更早记录。'));
   // A real empty state, not a stray line over a blank page.

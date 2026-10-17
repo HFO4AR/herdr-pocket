@@ -65,7 +65,8 @@ function kidsTake(key,report){
  K.map.set(key,next);
  if(!old||old.running!==next.running||old.total!==next.total||kidsSig(old)!==kidsSig(next))K.changed.add(key);
  if(!K.pending){K.pending=true;queueMicrotask(kidsApply);}}
-function kidsSig(r){return r.items.map(x=>(x.id||x.title)+(x.running?'+':'-')).join(',');}
+// A running sub-agent's step (bridge `activity`, its own tail) counts too: the rows say what it does.
+function kidsSig(r){return r.items.map(x=>(x.id||x.title)+(x.running?'+':'-')+(x.running&&x.activity?(x.activity.open?'o':'')+x.activity.kind+':'+(x.activity.text||''):'')).join(',');}
 function kidsApply(){
  K.pending=false;if(!K.changed.size)return;const keys=new Set(K.changed);K.changed.clear();
  const touched=S.agents.filter(a=>keys.has(kidsKey(a)));
@@ -89,7 +90,8 @@ function kidsChat(){const c=S.chat;if(!c)return null;return (c.agent&&!c.stale?k
 
 // ─── Rows on the 会话 list ──────────────────────────────────────────────────
 function kidsCount(r){const n=r.running;return '子 Agent '+r.total+(n?' · '+n+' 运行中':'');}
-function kidsWhen(x){const t=Number(x.modified)||0;return x.state==='starting'?'正在启动':x.running?'运行中':t?relative(t)||'':'';}
+// Running: what it does right now (activity.js wording), else when it last wrote.
+function kidsWhen(x){const t=Number(x.modified)||0;if(x.state==='starting')return '正在启动';if(x.running){const s=actKidState(x);return s.text+(s.target?' '+s.target:'');}return t?'已结束 · '+(relative(t)||''):'';}
 // The strip under a row: a chip, and when opened the sub-agents themselves. Outside the row
 // button (no nested buttons); the row keeps its swipe and long press.
 // Running background work (bg.js) adds its 「后台 N」 chip to the same strip: one chip group per row.
@@ -105,6 +107,9 @@ function kidsFillStrip(box,a,r){
   if(r.running)chip.append(el('span','kids-pulse'));chip.append(el('span','kids-chip-text',kidsCount(r)),icon('down'));
   chip.setAttribute('aria-expanded',String(open));chip.setAttribute('aria-label',kidsCount(r)+(open?'，收起':'，展开'));chips.append(chip);}
  if(bg)chips.append(bg);
+ // Folded while some run: the newest running one's step, so the row says who is producing what.
+ const lead=!open&&r?.running?kidsSorted(r.items).find(x=>x.running&&x.activity):null;
+ if(lead){const s=actKidState(lead),line=el('div','kids-live');line.append(el('span','kids-live-who',kidsTitle(lead)),el('span','kids-live-what',s.text+(s.target?' '+s.target:s.tail?' · '+s.tail:'')));box.append(line);}
  if(!open)return;
  const list=el('div','kids-list');
  const items=kidsSorted(r.items);items.forEach(x=>list.append(kidsRow(x,false)));

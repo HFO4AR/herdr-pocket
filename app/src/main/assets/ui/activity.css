@@ -1,0 +1,80 @@
+/* The live activity line at the end of the conversation (activity.js). Like the agent's own spinner
+ * line: a turning glyph in coral, the state in words with a soft shimmer, the clock, the current tool
+ * call and the agent's own words, then the sub-agents that run. Tokens from app.css only; every
+ * animation stops with reduced motion (app.css) and in the calm states (stale, unknown, tail). */
+.act{align-self:stretch;display:flex;flex-direction:column;min-width:0;padding:12px 14px 12px 12px;border-radius:var(--radius-card);
+ background:var(--surface);box-shadow:inset 0 0 0 1px var(--soft-line),var(--shadow)}
+.act.act-enter{animation:act-in .32s var(--ease-out)}
+.act.k-sent,.act.calm{box-shadow:inset 0 0 0 1px var(--line)}
+.act.k-kids{box-shadow:inset 0 0 0 1px var(--warn-line),var(--shadow)}
+@keyframes act-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.act-main{display:flex;align-items:flex-start;gap:12px;min-width:0}
+
+/* The mark: Claude's turning flower (✢ ✳ ✶ ✻ ✽) from the bundled glyph font, one step at a time. */
+.act-mark{flex:0 0 auto;width:36px;height:36px;border-radius:12px;display:grid;place-items:center;background:var(--soft);color:var(--accent-raw)}
+.act-glyph{font:600 22px/1 'Pocket Term Glyphs',var(--mono);width:1em;text-align:center}
+.act-glyph::before{content:'✻';display:inline-block;animation:act-glyph 1.5s steps(1,end) infinite}
+@keyframes act-glyph{0%{content:'·'}12.5%{content:'✢'}25%{content:'✳'}37.5%{content:'✶'}50%{content:'✻'}62.5%{content:'✽'}75%{content:'✻'}87.5%{content:'✶'}}
+.act.k-sent .act-mark{background:var(--sunken);color:var(--muted)}
+/* Waiting for the start: three dots filling in, like someone about to type. */
+.act.k-sent .act-glyph{font:700 18px/1 var(--mono);width:3ch;text-align:left;letter-spacing:0}
+.act.k-sent .act-glyph::before{content:'···';animation:act-dots 1.2s steps(1,end) infinite}
+@keyframes act-dots{0%{content:'·\00a0\00a0'}33%{content:'··\00a0'}66%{content:'···'}}
+.act.k-kids .act-mark{background:var(--warn-soft);color:var(--work)}
+.act.k-tail .act-mark{background:var(--success-soft);color:var(--success)}
+.act.k-tail .act-glyph::before{content:'✻'}
+.act.k-stale .act-mark,.act.k-unknown .act-mark{background:var(--sunken);color:var(--faint)}
+.act.k-stale .act-glyph::before,.act.k-unknown .act-glyph::before{content:'?';font-family:inherit;font-size:16px}
+.act.calm .act-glyph::before{animation:none}
+
+.act-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;padding-top:1px}
+.act-line{display:flex;align-items:baseline;gap:10px;min-width:0;min-height:20px}
+/* The words shimmer like the agent's own verb: a light band sweeps across, resting solid. */
+.act-label{flex:1;min-width:0;font-size:var(--fs-base);font-weight:650;line-height:1.35;color:var(--accent);
+ background:linear-gradient(90deg,var(--accent) 0 40%,var(--accent-raw) 50%,var(--accent) 60% 100%) 0 0/250% 100%;
+ -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:act-shimmer 2.4s linear infinite}
+@keyframes act-shimmer{from{background-position:100% 0}to{background-position:-50% 0}}
+.act.k-sent .act-label{color:var(--ink-2);background-image:linear-gradient(90deg,var(--ink-2) 0 40%,var(--faint) 50%,var(--ink-2) 60% 100%)}
+.act.k-kids .act-label{color:var(--warn);background-image:linear-gradient(90deg,var(--warn) 0 40%,var(--work) 50%,var(--warn) 60% 100%)}
+.act.k-tail .act-label{color:var(--success);background-image:none;-webkit-text-fill-color:currentColor}
+.act.calm .act-label{animation:none;background:none;-webkit-text-fill-color:currentColor}
+.act.k-stale .act-label,.act.k-unknown .act-label{color:var(--ink-2)}
+.act-time{flex:0 0 auto;font-size:var(--fs-sm);font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums;letter-spacing:.2px}
+
+/* The current tool call: verb, then the command or file as code (one line). */
+.act-tool{display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--fs-sm);color:var(--ink-2);line-height:1.5}
+.act-tool svg{width:15px;height:15px;color:var(--muted)}
+.act-verb{flex:0 0 auto;font-weight:500}
+.act-target{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12.5px/1.5 var(--mono);color:var(--ink);background:var(--code-bg);border-radius:6px;padding:1px 6px}
+.act-words{font-size:var(--fs-xs);line-height:1.5;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+.act-note{font-size:var(--fs-xs);color:var(--muted);line-height:1.5}
+.act-note .link-btn{min-height:32px;padding:0 4px;font-size:var(--fs-xs);color:var(--accent);font-weight:600}
+
+/* Sub-agents that run: one row each, with what it is doing and its last line. */
+.act-kids{margin:10px -6px -4px 40px;padding-top:6px;border-top:1px solid var(--line);display:flex;flex-direction:column}
+.act-kids-head{font-size:var(--fs-2xs);font-weight:650;letter-spacing:.3px;color:var(--warn);padding:2px 6px 2px}
+.act-kid{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:5px 6px;text-align:left;border-radius:var(--radius-control)}
+.act-kid:active{transform:none;background:var(--press)}
+.act-kid:disabled{opacity:1}
+.act-kid>svg{width:16px;height:16px;color:var(--faint);flex-shrink:0}
+.act-kid-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.act-kid-top{display:flex;align-items:baseline;gap:8px;min-width:0}
+.act-kid-title{flex:0 1 auto;min-width:3em;font-size:var(--fs-md);font-weight:550;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.act-kid-state{flex:1 1 0;min-width:0;font-size:var(--fs-xs);color:var(--warn);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.act-kid-state code{font:11.5px var(--mono);color:var(--ink-2)}
+.act-kid.s-write .act-kid-state{color:var(--accent)}
+.act-kid.s-ask .act-kid-state{color:var(--danger)}
+.act-kid-time{flex:0 0 auto;margin-left:auto;font-size:var(--fs-xs);color:var(--faint);font-variant-numeric:tabular-nums}
+.act-kid-tail{font-size:var(--fs-xs);line-height:1.5;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.act-kid-tail.mono{font:11.5px/1.6 var(--mono);color:var(--ink-2)}
+.act-kids-more{align-self:flex-start;min-height:36px;margin-left:24px;padding:0 6px;font-size:var(--fs-xs);color:var(--accent);font-weight:600}
+@media(max-width:360px){.act{padding:10px 12px 10px 10px}.act-main{gap:10px}.act-kids{margin-left:34px}}
+@media (prefers-reduced-motion:reduce){.act.act-enter,.act-glyph::before,.act-label{animation:none}}
+
+/* The line is the live state; the turn's 「正在工作」 block above it steps back to a plain container. */
+.timeline:has(#act) .work.live{background:var(--sunken);border-color:var(--line)}
+.timeline:has(#act) .work.live .work-title strong{color:var(--ink-2)}
+/* The rail under it keeps 中断 and a short 「执行中」; the words and the clock are in the line. */
+.composer-wrap.act-seen .foot-lead.t-work{flex:0 0 auto}
+.composer-wrap.act-seen .foot-lead.t-work .foot-detail{display:none}
+.composer-wrap.act-seen .foot-rail>.secondary.small{margin-left:auto}

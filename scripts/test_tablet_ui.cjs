@@ -148,6 +148,40 @@ for(const [w,h] of [[1024,768],[1280,800]])for(const theme of ['light','dark']){
  await page.locator('.wide-frame[data-mode="solo"]').waitFor();
  await page.close();}
 
+// Every size the app is used at: each page fits, keeps a readable column and uses the width.
+// 768×1024 (portrait tablet) is one pane with the bottom bar; 1600×1000 gives the list more room.
+const box2=(page,sel)=>page.evaluate(sel=>{const r=document.querySelector(sel)?.getBoundingClientRect();return r?{l:Math.round(r.left),r:Math.round(r.right),w:Math.round(r.width),t:Math.round(r.top)}:null;},sel);
+for(const [w,h] of [[768,1024],[1024,768],[1280,800],[1600,1000]])for(const theme of ['light','dark']){
+ const tag=w+'x'+h+'-'+theme,page=await open(w,h,theme),wide=w>=840;
+ const pick=()=>page.locator(wide?'.wide-list .card-button':'.card-button').filter({hasText:'整理发布脚本'});
+ await pick().waitFor();
+ assert.equal(await page.locator('.wide-frame').count(),wide?1:0,'panes at '+tag);
+ if(w===1600)assert.equal((await box2(page,'.wide-list')).w,440,'the list gets more room on a very wide screen');
+ assert.ok(await overflow(page)<=0,'no horizontal scroll: '+tag);
+ await shot(page,tag+'-list');
+ await pick().click();await page.getByText('整理发布脚本 · 第 14 条回复。').first().waitFor();
+ // One reading column: timeline ≤ 780 px; the rail and the composer share its edges; on a wide pane
+ // the header's first button starts where the conversation does.
+ const tl=await box2(page,'.timeline'),comp=await box2(page,'#composer .composer');
+ assert.ok(tl.w<=780,'timeline width '+tl.w);
+ assert.ok(Math.abs(tl.l-comp.l)<=30&&Math.abs(tl.r-comp.r)<=30,'composer under the reading column: '+JSON.stringify([tl,comp]));
+ if(w===1600){const head=await box2(page,'#chat-head > .icon-btn');assert.ok(Math.abs(head.l-tl.l)<=30,'header lines up: '+JSON.stringify([head,tl]));}
+ assert.ok(await overflow(page)<=0);
+ await shot(page,tag+'-chat');
+ // Sheets are centred dialogs once there is room.
+ await page.evaluate(()=>agentSwitcher());const sh=await box2(page,'#overlay .sheet');
+ assert.ok(sh.w<=640&&Math.abs((sh.l+sh.r)/2-w/2)<=(wide?w:2),'sheet as a dialog: '+JSON.stringify(sh));
+ if(theme==='light')await shot(page,tag+'-sheet');
+ await page.evaluate(()=>closeSheet());
+ // Settings: two columns of groups on wide one-column pages, one column below that.
+ await page.evaluate(()=>{pocketBack();setTab('settings');});await page.locator('.set-col').first().waitFor();
+ const cols=await page.evaluate(()=>[...document.querySelectorAll('.set-col')].map(c=>Math.round(c.getBoundingClientRect().left)));
+ assert.equal(cols[0]!==cols[1],w>=1180,'settings columns at '+tag+': '+cols);
+ assert.ok(await overflow(page)<=0);
+ await shot(page,tag+'-settings');
+ for(const t of ['devices','terminals','history']){await page.evaluate(t=>setTab(t),t);await page.waitForTimeout(250);assert.ok(await overflow(page)<=0,t+' fits at '+tag);if(theme==='light'&&w>=1280)await shot(page,tag+'-'+t);}
+ await page.close();}
+
 // Landscape phones stay single-pane even though they are wider than 840 px.
 {const page=await open(844,390,'light');
  await page.locator('.card-button').filter({hasText:'整理发布脚本'}).waitFor();

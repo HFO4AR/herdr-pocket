@@ -63,39 +63,41 @@ function settingsPage(main){
  if(!SET.prefs){skeleton(main,3);settingsLoad().then(()=>{if(S.tab==='settings'&&!S.chat)render();});return;}
  const p=SET.prefs;
  if(updateAvailable())main.append(updateBanner());
+ // Two columns of groups (layout.css puts them side by side on wide screens; phones stack them in order).
+ const cols=el('div','set-cols'),left=el('div','set-col'),right=el('div','set-col');cols.append(left,right);main.append(cols);
 
- const look=group(main,'外观');
+ const look=group(left,'外观');
  look.append(seg('主题',THEMES,p.theme,v=>settingsSet('theme',v)));
  look.append(seg('文字大小',ZOOMS,p.textZoom,v=>settingsSet('textZoom',v)));
 
- const conn=group(main,'连接');
+ const conn=group(left,'连接');
  conn.append(toggle('启动时自动重连','打开 App 时自动连上关掉前连着的电脑',p.autoResume!==false,async on=>{const r=await settingsSet('autoResume',on);if(!r)return false;if(!on)resumeStop();toast(on?'下次打开会自动连上这次连着的电脑':'下次打开不再自动连接');return true;}));
  const keepOn=p.keepAlive!==false,minutes=KEEPS.some(k=>k[0]===p.keepAliveMinutes)?p.keepAliveMinutes:60;
  conn.append(toggle('后台保持连接','切到后台或划掉 App 后继续连着，回来不用重新登录',keepOn,async on=>{const r=await settingsSet('keepAlive',on);if(!r)return false;toast(on?'切到后台时会保持连接 '+keepText(r.keepAliveMinutes):'切到后台后不再保持连接');paintSettings();return true;}));
  if(keepOn){
   conn.append(seg('保持多久',KEEPS,minutes,async v=>{const r=await settingsSet('keepAliveMinutes',v);if(r){toast(v?'后台保持 '+keepText(v)+'，到时自动断开':'会一直保持连接，不用了在通知里点「断开」');paintSettings();}},true));
   conn.append(el('p','set-note',(minutes?'到时间自动断开省电，回来时自动重连。':'一直保持会多耗一点电，不用了在通知里点「断开」。')+(p.notifications===false?'系统通知关着也照样保持，只是通知栏里看不到它。':'保持期间通知栏有一条安静的常驻通知。')));}
- const privacy=group(main,'提醒与隐私');
+ const privacy=group(left,'提醒与隐私');
  privacy.append(toggle('后台提醒','切到后台后，Agent 做完或等你确认时发通知',S.alerts!==false,async on=>{try{S.alerts=(await rpc('setAlerts',{enabled:on})).alerts;toast(S.alerts?'切到后台时会继续关注 Agent':'已关闭后台提醒');return true;}catch(e){error(e);return false;}}));
  if(S.alerts!==false&&p.notifications===false){privacy.append(el('p','set-note error','系统通知被关掉了，后台提醒弹不出来。'));const go=btn('打开系统通知','secondary small',()=>rpc('openNotificationSettings').catch(error));go.classList.add('set-action');privacy.append(go);}
  privacy.append(toggle('防截图','打开后不能截图、录屏，最近任务里也看不到画面',!!p.secureScreen,async on=>{const r=await settingsSet('secureScreen',on);if(r)toast(on?'已禁止截图':'现在可以截图了');return !!r;}));
 
- const store=group(main,'缓存');
+ const store=group(right,'缓存');
  const info=el('div','set-row');info.append(el('span','set-label','对话缓存'));const size=el('span','set-value',SET.cache?bytesText(SET.cache.bytes||0)+' · '+(SET.cache.entries||0)+' 项':'读取中…');size.id='cache-size';info.append(size);store.append(info);
  store.append(el('p','set-note','打开过的会话列表和对话会加密存在这台手机上，下次打开先显示，再在后台刷新。'));
  const clear=btn('清除缓存','secondary small',()=>confirmAction('清除缓存？','只删除手机上的缓存，电脑上的会话和历史不受影响。','清除',async()=>{try{await rpc('cacheClear');if(typeof cacheForget==='function')cacheForget();SET.cache={bytes:0,entries:0};toast('缓存已清除');paintSettings();}catch(e){error(e);}},true));
  clear.classList.add('set-action');store.append(clear);
  rpc('cacheInfo').then(c=>{SET.cache=c;const n=document.getElementById('cache-size');if(n)n.textContent=bytesText(c.bytes||0)+' · '+(c.entries||0)+' 项';}).catch(()=>{const n=document.getElementById('cache-size');if(n)n.textContent='—';});
 
- const upd=group(main,'更新');
+ const upd=group(right,'更新');
  const ver=el('div','set-row');ver.append(el('span','set-label','当前版本'),el('span','set-value mono',(p.version||'—')));upd.append(ver);
  upd.append(updateStatus());
  upd.append(toggle('自动检查更新','打开 App 时最多每 12 小时查一次 GitHub，不发送任何设备信息',p.autoUpdate!==false,async on=>!!(await settingsSet('autoUpdate',on))));
 
- const help=group(main,'帮助与反馈');
+ const help=group(right,'帮助与反馈');
  help.append(linkRow('使用帮助','',()=>helpOpen()),linkRow('反馈问题','',()=>helpFeedback()));
 
- const about=group(main,'关于');
+ const about=group(right,'关于');
  about.append(linkRow('项目主页','GitHub',()=>rpc('openUrl',{url:'https://github.com/HFO4AR/herdr-pocket'}).catch(error),'globe'));
  about.append(linkRow('全部版本','',()=>rpc('openUrl',{url:'https://github.com/HFO4AR/herdr-pocket/releases'}).catch(error),'globe'));
  const lic=el('div','set-row');lic.append(el('span','set-label','开源许可'),el('span','set-value','MIT'));about.append(lic);

@@ -309,7 +309,7 @@ async function refreshStatus(){
  finally{S.statusBusy=false;}}
 
 // ─── Chat ───────────────────────────────────────────────────────────────────
-function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.terminalAnsi='';S.activity='';S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;}
+function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.terminalAnsi='';S.activity='';actForget();S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;}
 async function openAgent(a){
  S.unread.delete(agentKey(a));S.chatStack=[];resetChat({agent:a,record:null,title:titleOf(a),provider:a.agent});
  // No transcript reader for this kind: the terminal is the conversation. Say so once, calmly.
@@ -400,8 +400,9 @@ function updateChatMeta(){
  const n=document.getElementById('chat-meta'),c=S.chat;
  if(n&&c){n.replaceChildren();const a=c.agent&&!c.stale?c.agent:null;
   if(!a)n.append(chatSubtitle());
-  else if(awaitingReply())n.append(el('span','meta-state work','正在读取回复…'),' · '+(projectOf(a)?projectOf(a)+' · ':'')+providerName(a.agent));
-  else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=['working','blocked'].includes(agentState(a))?statusSince(a)||(a.agent_status==='working'&&c.sentAt)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}}
+  // Just sent and not started yet (activity.js): say that, not 执行中 or 正在读取回复.
+  else if(actHeadText()||awaitingReply())n.append(el('span','meta-state work',actHeadText()||'正在读取回复…'),' · '+(projectOf(a)?projectOf(a)+' · ':'')+providerName(a.agent));
+  else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=agentState(a)==='working'?actSince(a):agentState(a)==='blocked'?statusSince(a)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}}
  const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(c?.agent&&!c.stale?stateTone(c.agent):'muted');
  const b=document.getElementById('child-count');if(b){b.textContent=String(S.children.length);b.classList.toggle('hidden',!S.children.length);}kidsPaintHead();}
 function renderChat(){
@@ -548,13 +549,13 @@ async function fetchTerminal(quiet=false){
  if(quiet&&S.reading===epoch){S.readAgain=epoch;return;}S.reading=epoch;S.readAgain=null;
  // Colors cost a second screen read on the computer: ask only while the 终端 tab or the confirm screen shows.
   const color=S.chatMode==='terminal'||S.chat.agent.agent_status==='blocked';
-  try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity,...(color?{ansi:true}:{})});if(epoch!==S.epoch)return;S.terminalText=r.text;S.terminalAnsi=r.ansi||'';applyReadStatus(r.agent_status);qaScreen(r);modeScreen(r);
+  try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity,...(color?{ansi:true}:{})});if(epoch!==S.epoch)return;S.terminalText=r.text;S.terminalAnsi=r.ansi||'';applyReadStatus(r.agent_status);qaScreen(r);modeScreen(r);actScreen(r);
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
-  screenPaint(document.getElementById('terminal-output'),r.text,S.terminalAnsi);const c=document.getElementById('confirm-screen');if(c){screenPaint(c,r.text,S.terminalAnsi,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
+  screenPaint(document.getElementById('terminal-output'),r.text,S.terminalAnsi);const c=document.getElementById('confirm-screen');if(c){screenPaint(c,r.text,S.terminalAnsi,12);c.scrollTop=c.scrollHeight;}
   if(!S.chat.record&&S.chatMode==='conversation')paintTimeline();}
  catch(e){if(epoch!==S.epoch)return;if(!quiet)error(e);
   // Never leave 「正在读取…」 up after a failed read: say what happened and how to retry.
-  if(!S.terminalText){const msg='读取终端画面失败：'+(e.message||e)+'。点「刷新」再试';screenPaint(document.getElementById('terminal-output'),msg,'');screenPaint(document.getElementById('confirm-screen'),msg,'');const l=document.getElementById('activity-line');if(l)l.textContent='读取终端失败，稍后会自动再试';}}
+  if(!S.terminalText){const msg='读取终端画面失败：'+(e.message||e)+'。点「刷新」再试';screenPaint(document.getElementById('terminal-output'),msg,'');screenPaint(document.getElementById('confirm-screen'),msg,'');ACT.readErr='读取终端失败，稍后会自动再试';const l=document.getElementById('activity-line');if(l)l.textContent=ACT.readErr;}}
  finally{if(S.reading===epoch)S.reading=null;if(S.readAgain===epoch&&S.epoch===epoch){S.readAgain=null;setTimeout(()=>fetchTerminal(true),0);}}}
 
 // ─── Sheets ─────────────────────────────────────────────────────────────────

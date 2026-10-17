@@ -1922,6 +1922,7 @@ KIDS_QUIET = 1800          # child stopped mid-turn and the parent said nothing:
 KIDS_OPEN = 6 * 3600       # parent still waits for it (e.g. a long command in the child)
 KIDS_STARTING = 600        # launched, no transcript yet
 KIDS_LIST = 12
+KIDS_LIVE = 4              # running sub-agents whose own tail is read for what they are doing
 KIDS_TAIL = 65_536
 KIDS_SCAN = 32_000_000     # parent bytes read per call; a longer backlog continues next call
 KIDS_EVENTS = 400
@@ -2238,15 +2239,37 @@ def kids_report(path, provider, thread, now=None):
                      modified=v["at"], running=True, state="starting")
                 for k, v in events.items() if v.get("s") == "open" and k not in seen and v.get("agent") not in seen and now - v.get("at", 0) < KIDS_STARTING]
     rows.sort(key=lambda r: (not r["running"], -r["at"]))
-    items = list(starting)
+    items, live = list(starting), 0
     for row in rows[:max(0, KIDS_LIST - len(items))]:
         meta = row["meta"] or kid_meta(provider, root, row["path"], row["info"])
-        if meta: items.append(dict(public_record(meta), running=row["running"], state="running" if row["running"] else "done"))
+        if not meta: continue
+        item = dict(public_record(meta), running=row["running"], state="running" if row["running"] else "done")
+        # What the newest running ones are doing right now (their own tail; a few ms each).
+        if row["running"] and live < KIDS_LIVE:
+            live += 1
+            try: item.update(kid_activity(row["path"], provider))
+            except (OSError, ValueError): pass
+        items.append(item)
     running = sum(1 for r in rows if r["running"]) + len(starting)
     # Same stamp = same answer: which sub-agents exist, which run, how the newest ones look.
     stamp = hashlib.sha256(json.dumps([path.stat().st_size, [(r["path"].name, r["running"]) for r in rows], [x.get("title") for x in items]],
                                       ensure_ascii=False).encode()).hexdigest()[:20]
     return {"total": len(rows) + len(starting), "running": running, "items": items, "stamp": stamp}
+
+
+def kid_activity(path, provider):
+    """A running sub-agent's current step from its own tail (≤ KIDS_TAIL bytes, read-only): the glance
+    activity (tool call with its verb, or the note it just wrote), when its current task started, and
+    how many of this task's commands ran / failed."""
+    messages, _ = glance_tail(path, provider, KIDS_TAIL)
+    summary = glance_summary(messages)
+    out = {}
+    if summary.get("activity"): out["activity"] = summary["activity"]
+    if (summary.get("task") or {}).get("at"): out["started"] = summary["task"]["at"]
+    turn = summary.get("turn") or {}
+    if turn.get("tools"): out["tools"] = turn["tools"]
+    if turn.get("failed"): out["failed"] = turn["failed"]
+    return out
 
 
 def kids_for_item(item, path=None):
@@ -2752,6 +2775,57 @@ def screen_bg(text):
         for m in SCREEN_BG_RE.finditer(line):
             total += int(m.group(1)); words.append(m.group(0)[:40])
     return {"count": total, "words": words} if words else None
+
+
+# ─── What the agent says it is doing ─────────────────────────────────────────────────────
+# The agent's own live status line, read from the same screen read the chat already makes, so the
+# phone can say "Ionizing… 42s ↓ 1.2k tokens" the way the agent does. Read-only; nothing here
+# decides the state (Herdr / the screen rules above still do). Formats seen on screen:
+#   Claude Code 2.x  "✽ Ionizing… (42s · ↓ 1.2k tokens · esc to interrupt)", "· Ionizing… (4s · ↓ 28 tokens)",
+#                    "✢ Compacting conversation… (34s)", "✶ Ionizing… (esc to interrupt · ctrl+t to show todos)"
+#   Codex 0.16x      "• Working (12s • esc to interrupt)", "◦ Exploring the code (1m 02s • esc to interrupt)"
+# A finished line ("✻ Crunched for 7s", "• Ran npm test") has neither the ellipsis nor the interrupt
+# hint and is not activity. Only the bottom of the screen counts, the newest match wins.
+SCREEN_ACTIVITY_RE = re.compile(r"^\s*[·•◦✢✳✶✻✽*∗⏺]\s+(?P<verb>[^\s(…][^(…]{0,60}?)\s*(?P<dots>…|\.\.\.)?\s*(?:\((?P<inner>[^()]{0,160})\))?\s*$")
+SCREEN_TIME_RE = re.compile(r"^(?:(\d{1,3})h\s*)?(?:(\d{1,4})m\s*)?(?:(\d{1,5})s)?$")
+SCREEN_UNDER_RE = re.compile(r"^\s+(?:⎿|[◻◼☐☑☒✔✓□■]|Tip:|…)|^\s{4,}\S")
+SCREEN_TOKENS_RE = re.compile(r"([↑↓])\s*([\d.,]{1,9}\s?[kKmM]?)\s*tokens?\b")
+
+
+def screen_activity(text):
+    """{"verb", "seconds"?, "tokens"?, "dir"?, "thinking"?, "line"} from the agent's live status line at
+    the bottom of a screen, or None when there is none (idle, a dialog, a finished line)."""
+    lines = screen_lines(text)
+    # Claude draws it just above its input box (a todo list may sit between): only those lines count,
+    # so a bullet in the conversation above never reads as activity. Elsewhere: the bottom lines.
+    rules = [i for i, x in enumerate(lines) if RULE_RE.match(x)]
+    box = next((rules[k - 1] for k in range(len(rules) - 1, 0, -1)
+                if any(x.lstrip().startswith("❯") for x in lines[rules[k - 1] + 1:rules[k]])), None)
+    if box is not None:
+        # Walking up from the box past its todo list / tip lines, the first other line must be it.
+        above = [x for x in lines[max(0, box - 14):box] if x.strip()]
+        while above and SCREEN_UNDER_RE.match(above[-1]): above.pop()
+        lines = above[-1:]
+    else: lines = [x for x in lines if x.strip()][-8:]
+    for line in reversed(lines):
+        m = SCREEN_ACTIVITY_RE.match(line)
+        if not m: continue
+        inner = m.group("inner") or ""
+        if not m.group("dots") and "interrupt" not in inner.lower(): continue
+        verb = m.group("verb").strip()
+        if not re.match(r"[^\W\d_]", verb): continue
+        out = {"verb": verb[:60]}
+        for part in re.split(r"\s+[·•]\s+", inner):
+            part = part.strip(); low = part.lower()
+            t = SCREEN_TIME_RE.match(part) if part else None
+            if t and any(t.groups()):
+                h, mi, se = (int(x or 0) for x in t.groups()); out["seconds"] = h * 3600 + mi * 60 + se; continue
+            k = SCREEN_TOKENS_RE.search(part)
+            if k: out["dir"], out["tokens"] = k.group(1), k.group(2).replace(" ", ""); continue
+            if low.startswith("thinking") or low.startswith("thought"): out["thinking"] = True
+        out["line"] = line.strip()[:160]
+        return out
+    return None
 
 
 # ─── Agent modes ────────────────────────────────────────────────────────────
@@ -5384,6 +5458,8 @@ def tmux_agent_request(request, state_dir):
         text, screen = tmux_capture(pane)
         state = tmux_state(pane, found, text)
         result = {"text": text, "agent_status": state, "modes": screen_modes(text, found["kind"]), "bg": screen_bg(text)}
+        activity = screen_activity(text)
+        if activity: result["activity"] = activity
         # `menu: true` (after a slash command) parses a picker even when the state is not blocked.
         if state == "blocked" or request.get("menu") is True: result["menu"] = parse_menu(text, found["kind"])
         if request.get("ansi") is True: result["ansi"] = screen
@@ -5599,6 +5675,8 @@ def handle(request, state_dir=None):
         screen = with_menu(read_screen(prefix, agent, 160), agent, request.get("menu") is True)
         screen["modes"] = screen_modes(screen.get("text", ""), agent.get("agent"))
         screen["bg"] = screen_bg(screen.get("text", ""))
+        activity = screen_activity(screen.get("text", ""))
+        if activity: screen["activity"] = activity
         # `ansi: true` (the 终端 tab and the confirm screen are open): add the colored screen. Menus
         # and modes keep parsing the plain read above: Herdr's colored read is the visible rows only.
         if request.get("ansi") is True:

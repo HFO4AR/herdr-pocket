@@ -131,6 +131,15 @@ class TmuxAgentTests(unittest.TestCase):
         menu = self.h(op="read", target="%1", identity=a["identity"])["menu"]
         return self.h(op="answer", target="%1", identity=a["identity"], id=request_id, fingerprint=menu["fingerprint"], **extra)
 
+    def test_read_carries_the_agents_status_line(self):
+        # The phone's activity line: the agent's own words and clock, only while it works.
+        self.tuis["%1"] = Static(CLAUDE_BUSY)
+        a = self.agent()
+        read = self.h(op="read", target="%1", identity=a["identity"])
+        self.assertEqual((read["agent_status"], read["activity"]["verb"], read["activity"]["seconds"]), ("working", "Pondering", 12))
+        self.tuis["%1"] = Static(CLAUDE_IDLE)
+        self.assertNotIn("activity", self.h(op="read", target="%1", identity=a["identity"]))
+
     def test_read_carries_the_menu_while_it_waits(self):
         self.tuis["%1"] = MultiChatTui()
         a = self.agent()
