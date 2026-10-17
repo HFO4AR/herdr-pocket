@@ -39,6 +39,8 @@ async function live(page){
    if(op==='create'){if(fx.createError)throw Error(fx.createError);return fx.created;}
    if(op==='read')return{text:'Do you trust the files in this folder?\n❯ 1. Yes, proceed\n  2. No, exit'};
    if(op==='prompt')return{sent:true,receipt:args.id};
+   if(op==='panes')return{panes:[{pane_id:'w7:p1',terminal_id:'t71',identity:'p71',cwd:'/home/me/notes',workspace_label:'notes'},{pane_id:'w1:p4',terminal_id:'t14',identity:'p14',cwd:'/home/me',workspace_label:'stm32_host'}]};
+   if(op==='paneRead')return{text:'me@h:~/notes$ '};
    throw Error('unexpected op '+op);};
   try{localStorage.clear();}catch(_){}
   S.demo=false;S.device={id:'d1',name:'工作站',user:'me',host:'h',port:22};S.agents=[];S.session='';
@@ -174,12 +176,15 @@ const newAgent=(status,extra={})=>({pane_id:'w1:p9',identity:'id-new',agent:'cla
  await info.getByRole('button',{name:'关闭',exact:true}).click();
  // Polled with the cheap status read; the agent shows up → its chat opens, the message goes out once.
  await page.waitForFunction(()=>fx.calls.filter(c=>c.op==='status').length>=2,null,{timeout:8000});
+ // From here until the chat is open the row stays (起来了，正在打开): the list never shows neither.
+ await page.evaluate(()=>{window.gap=false;new MutationObserver(()=>{if(!S.chat&&S.tab==='live'&&document.querySelector('.main')&&!document.querySelector('.new-pending'))gap=true;}).observe(document.getElementById('app'),{childList:true,subtree:true});});
  await page.evaluate(()=>{fx.newVisible=true;});
  await page.waitForFunction(()=>S.chat?.agent?.pane_id==='w1:p9',null,{timeout:8000});
  await page.waitForFunction(()=>fx.calls.some(c=>c.op==='prompt'));
  const prompts=await calls(page,'prompt');
  assert.equal(prompts.length,1);assert.equal(prompts[0].text,'跑一下测试');assert.equal(prompts[0].target,'w1:p9');
  assert.equal((await calls(page,'create')).length,1,'one create, never repeated');
+ assert.equal(await page.evaluate(()=>gap),false,'the 正在启动 row stayed until the chat opened');
  await page.getByRole('button',{name:'返回列表',exact:true}).click();
  await page.getByRole('button',{name:/检查设备显示/}).waitFor();
  assert.equal(await page.locator('.new-pending').count(),0,'no 正在启动 row once the agent is listed');
@@ -214,6 +219,37 @@ const newAgent=(status,extra={})=>({pane_id:'w1:p9',identity:'id-new',agent:'cla
  assert.equal((await calls(page,'create')).length,1);assert.equal((await calls(page,'prompt')).length,0);
  await page.close();
  console.log('PASS: a start that never shows up says so, stops waiting, and is never retried');}
+
+// 5c. Given up with a first message: 去终端看看 opens that very tab; if the agent shows up later,
+//     the message goes into its input box (never sent on its own).
+{const page=await fresh();await live(page);
+ await page.evaluate(a=>{fx.created={created:true,kind:'claude',cwd:'/home/me/notes',pane_id:'w7:p1',state:'starting',new_workspace:true};fx.newAgent=a;fx.newVisible=false;},newAgent('idle',{pane_id:'w7:p1',identity:'id-late',cwd:'/home/me/notes'}));
+ await page.getByRole('button',{name:'新建会话',exact:true}).click();
+ const sheet=page.getByRole('dialog',{name:'新建会话'});
+ await sheet.getByRole('radio',{name:'Claude',exact:true}).click();
+ await sheet.getByRole('textbox',{name:'第一条消息',exact:true}).fill('整理一下笔记');
+ // Back with a typed first message keeps the sheet.
+ await page.evaluate(()=>pocketBack());
+ assert.equal(await page.getByRole('dialog',{name:'新建会话'}).count(),1,'back does not throw the first message away');
+ await sheet.getByRole('button',{name:'开始新建',exact:true}).click();
+ await page.getByRole('button',{name:/^正在启动 Claude…/}).waitFor();
+ await page.evaluate(()=>{NEW.pending[0].at-=150000;});
+ const lost=page.getByRole('button',{name:/^Claude 还没出现/});
+ await lost.getByText('没等到，去电脑上看看那个标签页',{exact:true}).waitFor({timeout:5000});
+ await lost.click();
+ const info=page.getByRole('dialog',{name:'Claude 还没出现'});
+ await info.getByText('不会再启动一次。第一条消息没发；它之后出来的话，会放在它的输入框里。',{exact:true}).waitFor();
+ await info.getByRole('button',{name:'去终端看看',exact:true}).click();
+ await page.locator('#pane-screen').waitFor();
+ assert.equal(await page.evaluate(()=>T.view?.pane?.pane_id),'w7:p1','the new tab itself, not just the 终端 list');
+ await page.getByRole('button',{name:'返回终端列表',exact:true}).click();
+ await page.evaluate(()=>{fx.newVisible=true;setTab('live');});
+ await page.getByText('Claude 出来了；第一条消息放在它的输入框里了，没发',{exact:true}).waitFor();
+ assert.equal(await page.evaluate(()=>S.drafts.get('default/id-late')),'整理一下笔记');
+ assert.equal(await page.locator('.new-pending').count(),0);
+ assert.equal((await calls(page,'prompt')).length,0,'nothing sent on its own');
+ await page.close();
+ console.log('PASS: a given-up start opens its own tab; a late agent gets the first message as a draft');}
 
 // 6. Small screens: no horizontal overflow, the sheet fits.
 for(const [w,h] of [[320,640],[390,844]]){

@@ -1,5 +1,6 @@
 """Starting a new agent from the phone. Herdr is a recorded fake: nothing is created for real."""
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -223,8 +224,13 @@ class CreateTests(unittest.TestCase):
 
     def test_symlink_escape_rejected(self):
         os.symlink(Path(self.tmp.name), self.home / "link")
-        with self.assertRaisesRegex(bridge.BridgeError, "没创建"):
-            bridge.handle(self.req(cwd=str(self.home / "link")), self.state)
+        # Refused, and the reason names where the link really goes (a path typed as ~/… is not
+        # obviously "outside home" to the person).
+        with self.assertRaisesRegex(bridge.BridgeError, "^没创建：~/link 实际指向家目录外面的 " + re.escape(str(Path(self.tmp.name).resolve()))):
+            bridge.handle(self.req(cwd="~/link"), self.state)
+        with self.assertRaisesRegex(bridge.BridgeError, "^没创建：隐藏目录"):
+            bridge.handle(self.req(cwd="~/.ssh"), self.state)
+        self.assertEqual(self.mutations(), [])
 
     def test_strict_arguments(self):
         cases = [dict(kind="bash"), dict(kind="ch; rm -rf ~"), dict(workspace="w1:t1"), dict(workspace="--focus"),

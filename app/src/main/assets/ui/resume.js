@@ -74,7 +74,11 @@ async function resumeQuiet(d){
    // The one on screen went away meanwhile: show this one.
    viewTake(d.id);S.device=r.device;S.account=null;hostCheck(r.host);setTab(['devices','settings'].includes(S.tab)?S.tab:'live');return;}
   if(S.device?.id!==d.id&&!LINKS.views.has(d.id)){
-   const shown=S.hostIssue;hostCheck(r.host);const v={device:r.device,hostIssue:S.hostIssue};S.hostIssue=shown;LINKS.views.set(d.id,v);}
+   // hostCheck writes the on-screen computer's fields: read this one's into its parked view and
+   // put the shown computer's back (else a tmux-only computer reconnecting quietly turned the
+   // Herdr computer on screen into "没装 Herdr" until its next list refresh).
+   const shown={hostIssue:S.hostIssue,herdr:S.herdr,hostTmux:S.hostTmux};Object.assign(S,{hostIssue:null,herdr:null,hostTmux:null});hostCheck(r.host);
+   const v={device:r.device,hostIssue:S.hostIssue,herdr:S.herdr,hostTmux:S.hostTmux};Object.assign(S,shown);LINKS.views.set(d.id,v);}
  }catch(e){resumeFailed(d,e.code||'',e.message||String(e));}
  if(!S.chat&&['devices','live'].includes(S.tab))render();}
 

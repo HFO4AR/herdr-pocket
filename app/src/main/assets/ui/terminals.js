@@ -17,7 +17,8 @@ function paneInfo(p){
  const m=raw.match(/^([^:]{1,80}):\s*(.+)$/);const cmd=(m?m[2]:raw).trim();const idle=!cmd||SHELLS.test(cmd)||cmd===dir;
  return {title:idle?'空闲 shell':cmd,idle,dir,cmd};}
 function paneTitle(p){const i=paneInfo(p);return i.idle?'Shell · '+i.dir:i.title;}
-function shortPath(p){const home=NEW.info?.home||'';p=String(p||'');return home&&(p===home||p.startsWith(home+'/'))?'~'+p.slice(home.length):p.replace(/^\/home\/[^/]+/,'~');}
+// The home directory as the bridge last reported it for this computer (createInfo / tmuxInfo).
+function shortPath(p){const home=NEW.info?.home||NEW.homes.get(S.device?.id||'')||'';p=String(p||'');return home&&(p===home||p.startsWith(home+'/'))?'~'+p.slice(home.length):p.replace(/^\/(home|Users)\/[^/]+(?=\/|$)/,'~');}
 
 // ─── Look: colours come from the app tokens, so the terminal follows the light / dark theme ───
 function termToken(name){return getComputedStyle(document.documentElement).getPropertyValue(name).trim();}
@@ -115,8 +116,8 @@ function renderTerminal(){
  const [st,stLabel]=termState(entry);
  const av=el('div','avatar term-av'+(entry.kind==='ssh'?' ssh':''));av.append(icon(entry.kind==='ssh'?'globe':'terminal'),el('span','status-dot '+(st==='ok'?'ok':st==='warn'?'work':'')));head.append(av);
  const name=el('div','grow chat-id');const sub=el('small','term-sub');const chip=el('span','term-state '+st,stLabel);chip.id='term-state';
- sub.append(chip,el('span','',entry.kind==='ssh'?'独立 SSH · '+S.device.user+'@'+S.device.host:entry.kind==='tmux'?tmuxSub(entry):'Herdr 窗格 · '+(entry.pane.workspace_label?entry.pane.workspace_label+' · ':'')+entry.pane.pane_id));
- name.append(el('h2','',entry.title),sub);
+ sub.append(chip,el('span','term-where',entry.kind==='ssh'?'独立 SSH · '+S.device.user+'@'+S.device.host:entry.kind==='tmux'?tmuxSub(entry):'Herdr 窗格 · '+(entry.pane.workspace_label?entry.pane.workspace_label+' · ':'')+entry.pane.pane_id));
+ const h=el('h2','',entry.title);h.id='term-title';name.append(h,sub);
  head.append(name,ib('copy','复制屏幕内容',()=>terminalCopy(entry)),ib('more','终端选项',terminalMenu));root.append(head);
  // The screen: a dark card on the warm page in light theme, a deeper well in dark theme.
  const stage=el('div','term-stage');const surface=el('div','term-surface');surface.id='term-surface';surface.classList.toggle('is-off',!!entry.ended);

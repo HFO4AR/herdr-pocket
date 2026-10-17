@@ -3663,6 +3663,12 @@ def create_dir(raw, known):
         try:
             if os.path.realpath(d) == str(resolved): return str(resolved)
         except (OSError, ValueError, TypeError): continue
+    # A symlink in $HOME pointing out of it (~/work -> /mnt/data/work): say where it really goes,
+    # else "only folders under home" reads like a mistake for a path that starts with ~/.
+    if resolved.is_relative_to(home): raise BridgeError("没创建：隐藏目录（名字以 . 开头）不能用")
+    if path.is_relative_to(Path.home()) or path.is_relative_to(home):
+        raise BridgeError("没创建：" + raw.strip()[:200] + " 实际指向家目录外面的 " + str(resolved)[:300]
+                          + "；只能用家目录下的目录，或已经有窗格在用的目录")
     raise BridgeError("没创建：只能用家目录下的目录，或已经有窗格在用的目录")
 
 

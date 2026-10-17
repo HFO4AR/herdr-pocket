@@ -658,12 +658,24 @@ async function loadCatalog(query='',more=false){
 
 // ─── Back & lifecycle ───────────────────────────────────────────────────────
 function pocketBack(){
- if(overlay.childElementCount){closeSheet();return;}
+ // Back on a sheet with typed content (a device form, a new session) asks for × like a tap outside.
+ if(overlay.childElementCount){const panel=overlay.querySelector('.sheet');if(panel?.keepOpen&&panel.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();return;}
  if(T.view){leaveTerminal();render();return;}
  if(S.chatStack.length){const prev=S.chatStack.pop();S.chat=prev;S.chatMode=prev.mode||'conversation';S.messages=prev.savedMessages||[];S.children=prev.savedChildren||[];S.before=prev.savedBefore||0;S.more=!!prev.savedMore;S.stick=prev.savedStick!==false;S.unseen=0;S.epoch++;renderChat();if(!S.stick)document.getElementById('chat-scroll').scrollTop=prev.savedScroll||0;if(prev.record&&!S.messages.length)fetchHistory(false,true);return;}
  if(S.chat){S.chat=null;S.epoch++;render();return;}
  if(S.tab!=='live'&&S.device)setTab('live');else if(S.tab!=='devices')setTab('devices');else toast('设备和保存的密码都在，可以直接关闭应用');}
 window.pocketBack=pocketBack;
+// A field focused in a sheet with a pinned footer (new session, new tmux session, close): once the
+// soft keyboard has shrunk the page, the browser scrolls the field into view but not out from under
+// the footer, so a path input ended up half hidden. Keep it clear of the footer.
+function sheetFieldClear(){
+ const t=document.activeElement;if(!t||!/^(INPUT|TEXTAREA)$/.test(t.tagName))return;
+ const s=t.closest('.sheet'),foot=s&&s.querySelector('.new-foot,.close-foot');if(!foot||foot.contains(t))return;
+ const r=t.getBoundingClientRect(),f=foot.getBoundingClientRect(),top=s.getBoundingClientRect().top;
+ const under=r.bottom+10-f.top;if(under>0)s.scrollTop+=Math.min(under,Math.max(0,r.top-top-10));}
+document.addEventListener('focusin',()=>setTimeout(sheetFieldClear,60));
+document.addEventListener('input',e=>{if(e.target?.closest?.('.sheet'))sheetFieldClear();});
+addEventListener('resize',()=>{setTimeout(sheetFieldClear,80);setTimeout(sheetFieldClear,350);});
 addEventListener('resize',()=>{const c=document.getElementById('confirm-screen');if(c)c.scrollTop=c.scrollHeight;});
 window.setForeground=v=>{S.active=v;if(v){netForeground();refreshStatus();if(S.chat?.record&&!S.paused)fetchHistory();}};
 // Busy agents refresh faster; nothing polls in the background or in demo mode.

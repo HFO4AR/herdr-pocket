@@ -28,7 +28,7 @@ async function launch(cfg){
   const NEED={A:'',B:'',C:'password',E:'trust'};
   const agent=(dev,title)=>({pane_id:'w1:p1',terminal_id:'term-'+dev,agent:'claude',agent_status:'idle',identity:'id-'+dev,cwd:'/work/'+dev,title});
   window.fx={D,calls:[],set:cfg.set,enabled:cfg.enabled!==false,online:cfg.online!==false,links:[...(cfg.kept||[])],active:cfg.kept?.at(-1)||'',
-   fail:cfg.fail||{},delay:cfg.delay||{},held:new Map(),prefs:{theme:'system',dark:false,textZoom:100,secureScreen:false,autoUpdate:false,seenUpdate:'',alerts:true,keepAlive:true,keepAliveMinutes:60,autoResume:cfg.enabled!==false,version:'test',versionCode:1,update:null}};
+   fail:cfg.fail||{},delay:cfg.delay||{},host:cfg.host||{},held:new Map(),prefs:{theme:'system',dark:false,textZoom:100,secureScreen:false,autoUpdate:false,seenUpdate:'',alerts:true,keepAlive:true,keepAliveMinutes:60,autoResume:cfg.enabled!==false,version:'test',versionCode:1,update:null}};
   const info=()=>({enabled:fx.enabled,online:fx.online,active:fx.set.active,ids:fx.set.ids.map(id=>({id,need:NEED[id]}))});
   const reply=(id,ok,v,ms=10)=>setTimeout(()=>nativeResult(id,ok?{ok:true,data:v}:{ok:false,error:v.error,code:v.code}),ms);
   window.PocketNative={request(id,op,raw){const a=JSON.parse(raw);fx.calls.push({op,a});let data={};
@@ -43,7 +43,7 @@ async function launch(cfg){
      if(f)return reply(id,false,f,fx.delay[a.id]||30);
      const done=()=>{if(!fx.links.includes(a.id))fx.links.push(a.id);if(!(a.auto&&a.background)||!fx.active)fx.active=a.id;
       if(!fx.set.ids.includes(a.id))fx.set.ids.push(a.id);if(!(a.auto&&a.background))fx.set.active=a.id;
-      reply(id,true,{device:d,devices:Object.values(D),ready:true,connections:fx.links.map(x=>D[x]),host:{herdr:true,running:1}},0);};
+      reply(id,true,{device:d,devices:Object.values(D),ready:true,connections:fx.links.map(x=>D[x]),host:fx.host[a.id]||{herdr:true,running:1}},0);};
      if(fx.delay[a.id]==='hold'){fx.held.set(a.id,done);return;}
      setTimeout(done,fx.delay[a.id]||30);return;}
     else if(op==='activate'){if(!fx.links.includes(a.device))throw Error('not connected');fx.active=a.device;fx.set.active=a.device;}
@@ -205,6 +205,17 @@ assert.equal(await page.evaluate(()=>S.device.id),'B');
 for(const w of [320,390]){await page.setViewportSize({width:w,height:w===320?640:844});await page.getByRole('button',{name:'设备',exact:true}).click();assert(await page.evaluate(()=>document.scrollingElement.scrollWidth<=innerWidth),'no sideways scroll at '+w);}
 await page.close();
 console.log('PASS: keep-alive links reattached; only the missing computer reconnects');
+
+// 7. A computer without Herdr reconnecting quietly must not change the Herdr computer on screen.
+page=await launch({set:{ids:['A','B'],active:'B'},host:{A:{herdr:false,tmux:true}}});
+await page.getByRole('button',{name:/Beta 任务/}).first().waitFor();
+await page.waitForFunction(()=>LINKS.ids.length===2&&LINKS.views.has('A'));
+assert.deepEqual(await page.evaluate(()=>[S.device.id,S.herdr,S.hostTmux??null,LINKS.views.get('A').herdr,LINKS.views.get('A').hostTmux]),['B',true,null,false,true],
+ 'A\'s host facts go into its parked view; B keeps its own');
+assert.equal(await page.locator('.tmux-only-note').count(),0,'B is not shown as a tmux-only computer');
+await page.getByRole('button',{name:/Beta 任务/}).first().waitFor();
+await page.close();
+console.log('PASS: a quiet reconnect of a tmux-only computer keeps the Herdr computer on screen as it is');
 
 assert.deepEqual(errors,[]);
 console.log('PASS: no page errors');

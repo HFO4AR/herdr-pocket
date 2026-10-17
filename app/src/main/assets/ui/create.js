@@ -3,7 +3,8 @@
 // where to open it; the bridge opens a new Herdr tab there (never stealing focus on the
 // computer) and starts the agent with a command line it chooses itself. The optional first
 // message goes out through the normal prompt path, only once the new agent is ready.
-const NEW={info:null,infoSession:'',busy:false,watch:0,form:null,recent:null,recentFor:''};
+const NEW={info:null,infoSession:'',busy:false,watch:0,form:null,recent:null,recentFor:'',homes:new Map()};
+function newHome(home){if(typeof home==='string'&&home.startsWith('/')&&S.device&&!S.demo)NEW.homes.set(S.device.id,home.replace(/\/+$/,'')||'/');}
 const NEW_KINDS={codex:['Codex','codex','本机运行'],claude:['Claude','claude','本机运行'],ch:['Claude · ch','claude','用 ch new 开']};
 // Other agents Herdr can start (bridge createInfo `more`: only kinds whose command is installed).
 // [label, avatar kind, detail]: they run like any agent; their replies are read from the terminal.
@@ -32,7 +33,7 @@ async function openCreate(){
  const cached=NEW.infoSession===S.session?NEW.info:null;
  if(cached)createForm(body,cached);else body.append(el('div','loading','读取目录和工作区…'));
  try{const info=S.demo?NEW_DEMO:await remote('createInfo',{session:S.session});
-  await newRecentLoad().catch(()=>{});NEW.info=info;NEW.infoSession=S.session;
+  await newRecentLoad().catch(()=>{});NEW.info=info;NEW.infoSession=S.session;newHome(info.home);
   if(!body.isConnected||NEW.busy)return;
   if(!cached)createForm(body,info);}
  catch(e){if(body.isConnected&&!cached)body.replaceChildren(el('p','note error','读不到目录：'+e.message));}}
@@ -93,6 +94,7 @@ function createForm(body,info){
  // Optional first message
  body.append(el('div','section-label','第一条消息 · 可不填'));
  const first=el('textarea','field new-first');first.rows=3;first.placeholder='准备好之后自动发给它';first.setAttribute('aria-label','第一条消息');body.append(first);
+ const box=body.closest('.sheet');if(box)box.keepOpen=()=>!!first.value.trim()&&!NEW.busy;
  // Status and buttons stay pinned to the bottom of the sheet.
  const foot=el('div','new-foot');body.append(foot);
  const status=el('div','new-status hidden');status.setAttribute('role','status');status.setAttribute('aria-live','polite');foot.append(status);
@@ -166,10 +168,11 @@ function createWatch(){
   for(const p of live){const age=Date.now()-p.at;const st=age>NEW_GIVE_UP?'lost':age>NEW_SLOW?'slow':'starting';if(st!==p.state){p.state=st;newPendingPaint();}}
   if(!here.length||busy||!S.device||S.demo)return;busy=true;
   try{const s=await remote('status',{session:here[0].session});if(here[0].device!==(S.device?.id||''))return;
-   for(const p of here){const a=(s.agents||[]).find(x=>x.pane_id===p.pane&&x.agent);if(!a||!NEW.pending.includes(p))continue;
-    newPendingDrop(p);
-    if(S.tab==='live'&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount){toast(p.label+' 起来了');await createOpen(p.pane,p.text);}
-    else{if(p.text)S.drafts.set(p.session+'/'+a.identity,p.text);toast(p.label+' 起来了，在会话列表里'+(p.text?'；第一条消息放在它的输入框里了':''));newPendingPaint();}}}
+   for(const p of here){const a=(s.agents||[]).find(x=>x.pane_id===p.pane&&x.agent);if(!a||!NEW.pending.includes(p)||p.opening)continue;
+    if(S.tab==='live'&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount){
+     // The row stays (as 起来了) until the chat is open, so the list never shows neither.
+     p.opening=true;newPendingPaint();toast(p.label+' 起来了');try{await createOpen(p.pane,p.text);}finally{newPendingDrop(p);if(!S.chat)newPendingPaint();}}
+    else{newPendingDrop(p);if(p.text)S.drafts.set(p.session+'/'+a.identity,p.text);toast(p.label+' 起来了，在会话列表里'+(p.text?'；第一条消息放在它的输入框里了':''));newPendingPaint();}}}
   catch(_){/* the next beat asks again */}
   finally{busy=false;}},NEW_POLL);}
 // Repaint the list for a changed row, unless something is in the way (same rule as tmux.js).
@@ -183,30 +186,40 @@ function newPendingSection(main){
  // An agent the list already shows is not starting any more: its row hides (the watcher still
  // opens it, so a list refresh that saw it first does not swallow the chat or the first message).
  const listed=p=>S.agents.some(a=>a.pane_id===p.pane&&a.agent);
- for(const p of newPendingHere())if(p.state==='lost'&&listed(p))newPendingDrop(p);
- const list=newPendingHere().filter(p=>!listed(p));if(!list.length)return 0;
+ // One the watcher gave up on that shows up later: its first message goes into its input box, not out.
+ for(const p of newPendingHere())if(p.state==='lost'&&listed(p)){newPendingDrop(p);const a=S.agents.find(x=>x.pane_id===p.pane&&x.agent);
+  if(p.text&&a){S.drafts.set(p.session+'/'+a.identity,p.text);setTimeout(()=>toast(p.label+' 出来了；第一条消息放在它的输入框里了，没发'),0);}}
+ const list=newPendingHere().filter(p=>!listed(p)||p.opening);if(!list.length)return 0;
  const h=el('div','section-label group-label g-work new-pending-label');h.append(el('span','','正在启动'),el('span','group-count',String(list.length)));main.append(h);
  const card=el('div','card list-card new-pending-list');list.forEach(p=>card.append(newPendingRow(p)));main.append(card);
  return list.length;}
 function newPendingRow(p){
- const slow=p.state!=='starting',where=newBase(p.cwd||'')+(p.cwd?' · '+newShort(p.cwd):'');
+ const slow=p.state!=='starting'&&!p.opening,where=newBase(p.cwd||'')+(p.cwd?' · '+newShort(p.cwd):'');
  const b=btn('','card-button agent-row new-pending tone-'+(slow?'alert':'work'),()=>newPendingSheet(p));
  b.setAttribute('aria-label',(slow?p.label+' 还没出现':'正在启动 '+p.label+'…')+' · '+where);
  const t=el('div','grow');t.append(el('div','card-title',slow?p.label+' 还没出现':'正在启动 '+p.label+'…'));
  const meta=el('div','card-meta');meta.append(el('span','project',newBase(p.cwd||'')||p.label));
- meta.append(el('span','sep',p.state==='lost'?'没等到，去电脑上看看那个标签页':slow?'等得有点久，点开看看':p.kind==='ch'?'ch 在连另一台电脑':'标签页开好了，等它出来'));
+ meta.append(el('span','sep',p.opening?'起来了，正在打开':p.state==='lost'?'没等到，去电脑上看看那个标签页':slow?'等得有点久，点开看看':p.kind==='ch'?'ch 在连另一台电脑':'标签页开好了，等它出来'));
  t.append(meta);
  const side=el('div','row-side');if(p.state!=='lost')side.append(el('span','spinner mini'));const tm=since(p.at);tm.classList.add('row-time');side.append(tm);
  b.append(avatar(newKind(p.kind)[1],slow?'alert':'work'),t,side);return b;}
 function newPendingSheet(p){
  const box=sheet(p.state==='starting'?'正在启动 '+p.label:p.label+' 还没出现');
  box.append(el('p','muted',(p.newWorkspace?'新工作区':'新标签页')+'已经开好了（'+p.pane+'），'+(p.state==='starting'?p.label+' 正在启动，出来后这里会自动打开它。':'可 '+p.label+' 一直没出现。可能停在了终端里（比如登录、更新提示），去终端看看。')),
-  el('p','fine','不会再启动一次。'+(p.text?'第一条消息等它出来再处理。':'')));
+  el('p','fine','不会再启动一次。'+(!p.text?'':p.state==='lost'?'第一条消息没发；它之后出来的话，会放在它的输入框里。':'第一条消息等它出来再发。')));
  const row=el('div','sheet-actions');
- row.append(btn('不等了','secondary',()=>{newPendingDrop(p);closeSheet();newPendingPaint();toast('不等了，标签页还留在电脑上');}),btn('去终端看看','primary',()=>{closeSheet();setTab('terminals');},'terminal'));
+ row.append(btn('不等了','secondary',()=>{newPendingDrop(p);closeSheet();newPendingPaint();toast('不等了，标签页还留在电脑上');}),btn('去终端看看','primary',()=>newPaneOpen(p.pane),'terminal'));
  box.append(row);}
+// 去终端看看: straight to that tab's terminal (the 终端 list shows several look-alike idle shells).
+async function newPaneOpen(paneId){
+ closeSheet();setTab('terminals');
+ for(let i=0;i<60&&T.loading;i++)await new Promise(r=>setTimeout(r,150));
+ if(S.tab!=='terminals'||T.view)return;
+ if(!T.panes.some(x=>x.pane_id===paneId))await loadPanes();
+ const pane=T.panes.find(x=>x.pane_id===paneId);
+ if(pane&&S.tab==='terminals'&&!T.view)openPane(pane);else if(!pane&&S.tab==='terminals')toast('没在普通窗格里找到它（可能已经起了 Agent 或被关了），看看会话列表');}
 function createFailed(r,text,label){
  const box=sheet(label+' 没起来');
  box.append(el('p','muted','新标签页已经开好了（'+r.pane_id+'），但 '+label+' 没启动成功'+(r.detail?'：'+r.detail:'')+'。'),
   el('p','fine',(r.typed?'启动命令可能已经输进去了，':'')+'标签页留在电脑上，没有关掉。'+(text?'第一条消息没发。':'')));
- const row=el('div','sheet-actions');row.append(btn('知道了','secondary',closeSheet),btn('去终端看看','primary',()=>{closeSheet();setTab('terminals');},'terminal'));box.append(row);}
+ const row=el('div','sheet-actions');row.append(btn('知道了','secondary',closeSheet),btn('去终端看看','primary',()=>newPaneOpen(r.pane_id),'terminal'));box.append(row);}

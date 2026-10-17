@@ -37,7 +37,7 @@ await page.addInitScript(()=>{
     else if(a.op==='tmux'){if(A&&fx.noTmux){data={available:false,panes:[]};}
      else data={available:true,panes:fx.tmux[a.device].map(p=>p.pane_id==='%1'?{...p,agent:{...claude(),...(a.resolve?{history_ref:{status:'matched',source:'open-file',record_id:'rec1',thread:'T1',record:rec}}:{})}}:p)};}
     else if(a.op==='tmuxInfo'&&fx.infoFail)throw Error(fx.infoFail);
-    else if(a.op==='tmuxInfo')data={available:true,home:'/home/pi',dirs:[{path:'/home/pi/logs',source:'tmux'},{path:'/home/pi/src',source:'history',modified:now-7200}],sessions:['main','work']};
+    else if(a.op==='tmuxInfo')data={available:true,home:'/home/pi',dirs:[{path:'/home/pi/logs',source:'tmux'},{path:'/home/pi/src',source:'history',modified:now-7200},...(fx.infoMore||[])],sessions:['main','work']};
     else if(a.op==='tmuxNew'){if(fx.newFail)throw Error(fx.newFail);const n=fx.made=(fx.made||0)+1;const p=pane('%'+(6+n),{session:a.name||String(2+n),cwd:a.cwd==='~'?'/home/pi':a.cwd});fx.tmux.A.push(p);data={created:true,session:p.session,cwd:a.cwd,pane:p};}
     else if(a.op==='tmuxKill'){if(fx.killFail)throw Error(fx.killFail);const p=fx.tmux.A.find(x=>x.pane_id===a.target);fx.tmux.A=fx.tmux.A.filter(x=>a.scope==='session'?x.session!==p.session:x.pane_id!==a.target);data={closed:true,scope:a.scope,session:p.session};}
     else if(a.op==='tmuxRead'){const p=fx.tmux.A.concat(fx.tmux.B).find(x=>x.pane_id===a.target);if(!p)throw Error('这个 tmux 窗格已经关了或换了，回到列表刷新一下');data={text:'pi@pi:~$ ',ansi:'pi@pi:~$ ',pane:p};}
@@ -182,6 +182,41 @@ await role('button','返回列表').click();await page.locator('.tmux-only-note'
 await page.evaluate(()=>{fx.infoFail='';fx.tmux.A=fx.tmux.A.filter(p=>!['%8','%9'].includes(p.pane_id));TX_NEW.info=null;TX_NEW.infoFor='';tmuxLoad();});
 await page.waitForFunction(()=>document.querySelectorAll('.tmux-row').length===3);
 console.log('PASS: 新建 tmux 会话 works while the directory list is slow or unreadable, errors stay in the sheet');
+
+// ── 3c. A path typed while the list loads keeps the focus (and the keyboard) and stays clear of the
+//        pinned footer; back keeps typed text; Enter creates; the header follows a renamed window;
+//        a list from before is asked again ──
+await page.evaluate(()=>{fx.infoDelay=1500;TX_NEW.info=null;TX_NEW.infoFor='';});
+await page.setViewportSize({width:390,height:520});// about what the soft keyboard leaves
+await role('button','新建 tmux 会话').click();await sheetBox.waitFor();
+await sheetBox.getByRole('radio',{name:/^其他目录/}).click();
+const pathBox=page.getByRole('textbox',{name:'目录路径'});
+await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='目录路径');
+await page.keyboard.type('~/sr');
+await page.waitForTimeout(250);
+const clear=await page.evaluate(()=>{const i=document.querySelector('.tmux-new .new-path').getBoundingClientRect(),f=document.querySelector('.tmux-new .new-foot').getBoundingClientRect();return i.bottom<=f.top+1;});
+assert.equal(clear,true,'the focused path input is not under the pinned footer');
+await sheetBox.getByText('logs',{exact:true}).waitFor();
+assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'目录路径','the list arriving keeps the focus');
+await page.waitForTimeout(100);
+assert.equal(await page.evaluate(()=>{const i=document.querySelector('.tmux-new .new-path').getBoundingClientRect(),f=document.querySelector('.tmux-new .new-foot').getBoundingClientRect();return i.bottom<=f.top+1;}),true,'rows arriving above it do not push the path under the footer');
+await page.keyboard.type('c');
+assert.equal(await pathBox.inputValue(),'~/src');
+await page.evaluate(()=>pocketBack());
+assert.equal(await sheetBox.count(),1,'back does not throw a typed path away');
+await page.keyboard.press('Enter');
+await page.locator('#pane-screen').waitFor();
+assert.equal((await calls('tmuxNew')).at(-1).cwd,'~/src');
+await page.setViewportSize({width:390,height:844});
+await page.evaluate(()=>{const p=fx.tmux.A.at(-1);p.window_name='vim';p.command='vim';});
+await page.waitForFunction(()=>document.getElementById('term-title')?.textContent.endsWith(':vim'),null,{timeout:5000});
+await role('button','返回列表').click();await page.locator('.tmux-only-note').waitFor();
+await page.evaluate(()=>{fx.infoDelay=0;fx.infoMore=[{path:'/home/pi/new-proj',source:'history',modified:Date.now()/1000-60}];});
+await role('button','新建 tmux 会话').click();await sheetBox.waitFor();
+await sheetBox.getByText('new-proj',{exact:true}).waitFor();
+await page.evaluate(()=>{closeSheet();fx.infoMore=[];fx.tmux.A=fx.tmux.A.filter(p=>p.cwd!=='~/src');tmuxLoad();});
+await page.waitForFunction(()=>document.querySelectorAll('.tmux-row').length===3);
+console.log('PASS: typing a path while the list loads, footer clearance, back, Enter, renamed window, refreshed list');
 
 // ── 4. 关闭 with a confirmation ──
 const row=page.locator('.tmux-row').filter({hasText:'work:build'});
