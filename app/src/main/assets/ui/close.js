@@ -53,7 +53,8 @@ function closeSwipe(row,actions){
 // used it retires (kept in this WebView's storage, so it stays gone).
 const CLOSE_HINT={done:(()=>{try{return localStorage.getItem('hp.hint.rows')==='1';}catch(_){return false;}})()};
 function closeHintLearned(){if(CLOSE_HINT.done)return;CLOSE_HINT.done=true;try{localStorage.setItem('hp.hint.rows','1');}catch(_){}}
-function closeHint(list){if(!CLOSE_HINT.done)list.append(el('p','fine center close-hint','左滑或长按一行：关闭会话、更多操作'));}
+// The tmux-only page words it for its rows (tmux.js) and retires with the same flag.
+function closeHint(list,text='左滑或长按一行：关闭会话、更多操作'){if(!CLOSE_HINT.done)list.append(el('p','fine center close-hint',text));}
 function agentActions(a){
  const box=sheet(titleOf(a));
  box.append(el('p','fine close-sub',[stateLabel(a),providerName(a.agent),projectOf(a),closeIsCh(a)?'通过 ch 连到远端':''].filter(Boolean).join(' · ')));

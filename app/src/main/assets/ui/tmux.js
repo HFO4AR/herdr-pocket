@@ -96,7 +96,7 @@ function tmuxOnlyPage(main){
  if(!st?.loaded){skeleton(main,3);return;}
  if(!list.length){empty(main,'还没有 tmux 会话','新建一个，或者在电脑上运行 tmux，这里会自动出现。',tmuxCan()?tmuxNewButton('新建 tmux 会话','primary'):undefined,'terminal');pullRefresh(main,loadLive);return;}
  tmuxSection(main,true);
- main.append(el('p','fine center close-hint','左滑或长按一行：关闭、更多操作'));
+ closeHint(main,'左滑或长按一行：关闭、更多操作');
  pullRefresh(main,loadLive);}
 function tmuxOpen(p){termPrefs();termFontVar();
  T.view={kind:'tmux',pane:p,title:tmuxTitle(p),text:'正在读取 tmux 窗格…',ansi:'',draft:'',paused:false,busy:false,demo:false,stick:true,readAt:0};

@@ -56,6 +56,10 @@ function toast(text){const n=document.getElementById('toast');toastSpot(n);n.tex
  // Empty once faded so screen readers never find an old message (aria-hidden toggling made Android WebView drop the next one).
  toastTimer=setTimeout(()=>{n.textContent='';},400);},4200);}
 function error(e){toast(e.message||String(e));}
+// An error already written inline where it happened (role=alert in a card or form) is not toasted
+// again while that line is on screen; off screen (scrolled away, view changed) the toast still tells it.
+function toastUnlessShown(text,sel){const n=[...document.querySelectorAll(sel)].find(x=>x.textContent===text);
+ if(n){const r=n.getBoundingClientRect();if(r.height>0&&r.bottom>0&&r.top<innerHeight)return;}toast(text);}
 // Where the toast may sit without covering what it talks about: above an open sheet, above the
 // composer (with its question card), or under the header when those leave no room.
 function toastSpot(n){
@@ -184,7 +188,9 @@ function pullRefresh(main,fn){
 // ─── Devices & connection ───────────────────────────────────────────────────
 // Devices, device form, connecting, host-key trust, bridge install and disconnect live in onboard.js.
 async function startDemo(){if(S.loading){toast('正在连接，请稍候');return;}S.connectError='';if(S.device&&!S.demo){confirmAction('断开并体验演示？','演示不连接任何电脑，也不会给 Agent 发消息。','进入演示',async()=>{await disconnect(false);startDemo();});return;}try{await rpc('demo');S.demo=true;S.device={id:'demo',name:'演示工作站',user:'demo',host:'workstation.local',port:22};S.account={ssh_user:'demo',hostname:'workstation'};S.session='demo';S.sessions=['demo'];S.agents=demoAgents;S.records=demoRecords.slice().sort((a,b)=>b.modified-a.modified);S.tab='live';S.chat=null;render();}catch(e){error(e);}}
-async function loadAccount(){const epoch=S.epoch;try{const a=await remote('account');if(epoch!==S.epoch)return;S.account=a;if(S.tab==='devices'&&!S.chat)render();}catch(e){if(epoch===S.epoch)error(e);}}
+// The 设备 page's card on top: SSH user and host name, plus the bridge's own version (read-only `hello`;
+// an old or unreadable bridge just shows a dash).
+async function loadAccount(){const epoch=S.epoch;try{const [a,h]=await Promise.all([remote('account'),remote('hello').catch(()=>null)]);if(epoch!==S.epoch)return;S.account={...a,bridge:h?.version?String(h.version).slice(0,24):''};if(S.tab==='devices'&&!S.chat)render();}catch(e){if(epoch===S.epoch)error(e);}}
 
 // ─── Live agents ────────────────────────────────────────────────────────────
 // One row per agent: what it is (title), where (provider · project), and what it

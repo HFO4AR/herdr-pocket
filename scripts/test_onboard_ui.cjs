@@ -150,6 +150,9 @@ await page.evaluate(([fp,old])=>{fx.connect.push({ok:false,code:'hostkey_changed
  {ok:false,code:'hostkey_new',error:'第一次连这台电脑，先核对一下 SSH 指纹。',info:{host:'box.lan',port:2222,fingerprint:fp,type:'ssh-ed25519'}});connectDevice(S.devices[0]);},[FP,OLD]);
 await page.getByRole('dialog',{name:'电脑指纹变了'}).waitFor();
 assert.equal(await page.locator('.connection-status.failed[role="alert"]').count(),1,'a changed key stays red');
+// Title says what happened; the body says which computer, what it can mean and what to do (not the title again).
+{const b=page.locator('.connection-status.failed');const title=await b.locator('strong').textContent(),body=await b.locator('.grow>div').first().textContent();
+ assert.equal(title,'电脑指纹变了，已拒绝连接');assert(!/指纹变了|已拒绝/.test(body)&&/查看详情/.test(body),'body adds to the title: '+body);}
 assert.equal(await page.locator('.connection-status.info').count(),0);
 await page.getByText(OLD,{exact:true}).waitFor();await page.getByText(FP,{exact:true}).waitFor();
 assert.equal((await calls('forgetHost')).length,0);

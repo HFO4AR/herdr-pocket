@@ -228,8 +228,8 @@ async function qaSendMenu(menu,st,options,textRow){
  else{const row=options.find(o=>o.n===st.sel[0]);if(!row)return;args.action='select';args.option=row.n;args.label=row.screen;}
  st.busy=true;st.error='';renderComposer();
  try{await remote('answer',args);if(S.demo){toast('演示：没有真的回答');}else{st.sent=Date.now();toast(menu.kind==='approval'?'已选好':'已回答');setTimeout(()=>{if(S.chat?.agent?.agent_status==='blocked')renderComposer();},8200);}}
- catch(e){st.error='没完成：'+e.message+'。不会自动重试。';toast(st.error);}
- finally{st.busy=false;renderComposer();if(!S.demo)setTimeout(()=>{refreshStatus();fetchTerminal(true);fetchHistory();},700);}}
+ catch(e){st.error='没完成：'+e.message+'。不会自动重试。';}
+ finally{st.busy=false;renderComposer();if(st.error)toastUnlessShown(st.error,'.qa-error');if(!S.demo)setTimeout(()=>{refreshStatus();fetchTerminal(true);fetchHistory();},700);}}
 
 // ─── Codex async questions (agent idle) ─────────────────────────────────────
 function qaAsyncCard(m,p,late){
@@ -259,5 +259,5 @@ async function qaSendAsync(m,p,st,model){
  const text=qaAsyncReply(p,answers);st.busy=true;st.error='';paintTimeline();
  try{await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text,id:uuid()});
   if(S.demo)toast('演示：没有真的发送');else{st.sent=Date.now();toast('已回答');S.chat.sentAt=Date.now();S.chat.doneAt=0;S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();setTimeout(()=>fetchHistory(),900);}}
- catch(e){st.error=/^没发出去/.test(e.message)?e.message+'。可以再选一次。':'发送未确认：'+e.message+'。不会自动重发。';toast(st.error);}
- finally{st.busy=false;S.stick=true;paintTimeline();}}
+ catch(e){st.error=/^没发出去/.test(e.message)?e.message+'。可以再选一次。':'发送未确认：'+e.message+'。不会自动重发。';}
+ finally{st.busy=false;S.stick=true;paintTimeline();if(st.error)toastUnlessShown(st.error,'.qa-error');}}

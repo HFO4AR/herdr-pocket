@@ -170,7 +170,7 @@ await page.getByRole('button',{name:'设备',exact:true}).click();
 await page.getByText('workstation.local',{exact:true}).waitFor();
 // The demo's device card offers the way out, not bridge updates, a disconnect warning or another demo.
 assert(await page.getByRole('button',{name:'退出演示',exact:true}).isVisible());
-for(const name of ['断开连接','更新桥接程序','体验聊天演示'])assert.equal(await page.getByRole('button',{name,exact:true}).count(),0,name);
+for(const name of ['断开','更新桥接程序','体验聊天演示'])assert.equal(await page.getByRole('button',{name,exact:true}).count(),0,name);
 await page.screenshot({path:path.join(folder,'account-browser.png')});
 await page.getByRole('button',{name:'终端',exact:true}).click();
 await page.getByRole('button',{name:/开发终端/}).click();

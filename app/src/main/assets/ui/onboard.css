@@ -106,3 +106,32 @@ body:has(.dev-switch) #net-banner{display:none}
 .dev-pill .dot{width:7px;height:7px;box-shadow:none;opacity:.55}
 .dev-pill.active .dot{opacity:1;box-shadow:0 0 0 3px var(--success-soft)}
 .chip-links{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--sunken);color:var(--muted);font-size:var(--fs-2xs);font-weight:600;line-height:18px;text-align:center;font-variant-numeric:tabular-nums}
+
+/* 设备 page (onboard.js devicesPage): the computer on screen leads with its details and actions; other
+   connected and saved computers are compact cards, two columns when the page is wide. */
+.dev-state{color:var(--success);font-weight:500}
+.dev-state.work{color:var(--warn)}
+.dev-state.alert{color:var(--danger)}
+.dev-facts{margin-top:var(--sp-3);border-top:1px solid var(--line)}
+.account-card .dev-facts .setting-row:first-of-type{margin-top:0}
+.dev-fact{align-items:center;min-height:40px;padding:var(--sp-2) 0}
+.dev-fact>.dev-value{flex:1;min-width:0;text-align:right;color:var(--ink)}
+.dev-fact .dev-addr>span:first-child{color:var(--ink)}
+.dev-addr .dev-port{color:var(--muted)}
+.dev-hop{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.dev-fact>.dev-action{flex:0 0 auto;min-height:44px;margin:-8px -6px -8px -4px;padding:0 8px}
+.dev-facts .dev-fact:last-child{border-bottom:0}
+.account-card .key-callout{margin-top:var(--sp-2)}
+.account-card .device-actions{margin-top:var(--sp-4)}
+.device-card:not(.current) .device-line{margin-top:var(--sp-2)}
+.device-card:not(.current) .device-actions{margin-top:var(--sp-3)}
+.device-grid{display:grid;grid-template-columns:minmax(0,1fr);align-items:start}
+.device-add{width:100%;min-height:56px;margin-bottom:var(--sp-3);border:1.5px dashed var(--line-strong);border-radius:var(--radius-card);color:var(--ink-2);display:flex;align-items:center;justify-content:center;gap:var(--sp-2);font-size:var(--fs-sm);font-weight:500}
+.device-add svg{width:18px;height:18px;color:var(--muted)}
+.device-add:active{background:var(--press)}
+@media (min-width:720px){
+ .device-grid{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--sp-3)}
+ .device-grid>.device-add{min-height:100%}
+ .dev-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--sp-6)}
+ .dev-facts .dev-fact:nth-last-child(2):nth-child(odd){border-bottom:0}
+}
