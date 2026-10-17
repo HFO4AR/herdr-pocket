@@ -163,9 +163,12 @@ def select_session(request):
     return ["--session", name]
 
 
-def agents(prefix, include_history=False):
+def agents(prefix, include_history=False, screens=False):
+    """Herdr's agents with an identity digest. `screens`: also look at idle/done Claude / Codex
+    screens for a dialog Herdr missed (mark_screen_menus); a state folder there keeps its notes."""
     found = call(prefix + ["agent", "list"]).get("agents", [])
     result = [dict(a, identity=identity(a)) for a in found]
+    if screens is not False: mark_screen_menus(prefix, result, screens if isinstance(screens, Path) else None)
     if not include_history: return result
     global _remote_deadline
     _remote_deadline = time.monotonic() + 20
@@ -296,10 +299,88 @@ def herdr_draft(prefix, agent):
     try: raw = read_screen(prefix, agent, 0, ansi=True).get("text", "")
     except (BridgeError, OSError, ValueError): return None
     if not isinstance(raw, str): return None
+    seen = screen_input(raw, kind)
+    if seen["menu"]: return MENU_ON_SCREEN
+    return seen["box"] if "\x1b[" in raw else None
+
+
+def screen_input(raw, kind):
+    """{box, menu} of a Claude / Codex visible screen: the text in its input box ("" when empty, None
+    when the box is not on screen) and, only while the box is not there, the dialog parsed instead."""
     plain, colored = screen_pair(raw)
     box = claude_draft(plain, colored) if kind == "claude" else codex_draft(plain, colored)
-    if box is None and parse_menu(plain, kind): return MENU_ON_SCREEN
-    return box if "\x1b[" in raw else None
+    return {"box": box, "menu": parse_menu(plain, kind) if box is None else None}
+
+
+def screen_dialog(menu, kind):
+    """A dialog that waits for the person: an approval (Claude permission or folder trust, Codex
+    approval), the answer review, or a Claude question (AskUserQuestion: tabs, a text row, a "Chat
+    about this" row or checkboxes). A picker opened by a slash command (/model) is not one: the
+    person opened it on purpose and the command card on the phone handles it."""
+    if not menu: return False
+    if menu["kind"] in ("approval", "review"): return True
+    return kind == "claude" and menu["kind"] == "question" and bool(
+        menu["tabs"] or menu["multi"] or any(o["input"] or o["chat"] for o in menu["options"]))
+
+
+SCREEN_SETTLE = 3.0
+SCREEN_MEMO = "screens-v1.json"
+
+
+def mark_screen_menus(prefix, found, state_dir):
+    """Herdr can call a Claude / Codex idle or done while a question or approval dialog is up: in a
+    narrow pane the dialog's footer wraps and Herdr 0.8.2 no longer recognises it. Such an agent is
+    reported "blocked" (with `screen: "menu"` and Herdr's own `herdr_status`), so the phone shows the
+    answer card, holds queued messages and can answer it through the usual checked path.
+
+    Only idle/done Claude / Codex agents are read (their visible screen, one read each). One whose
+    input box was on screen at least SCREEN_SETTLE seconds after Herdr's last state change for it
+    is not read again until Herdr's state changes (a dialog only comes up after the agent worked);
+    that note lives in the state folder. A failed read changes nothing."""
+    want = [a for a in found if a.get("agent") in ("claude", "codex") and a.get("agent_status") in ("idle", "done")
+            and isinstance(a.get("terminal_id"), str)]
+    path = state_dir / SCREEN_MEMO if state_dir else None
+    memo = {}
+    if path:
+        try:
+            memo = json.loads(path.read_text())
+            if not isinstance(memo, dict): memo = {}
+        except (OSError, ValueError): memo = {}
+    before = json.dumps(memo, sort_keys=True)
+    now = time.time()
+    todo = []
+    for agent in want:
+        mark = [agent.get("state_change_seq"), agent.get("agent_status")]
+        entry = memo.get(agent["terminal_id"])
+        if not isinstance(entry, dict) or entry.get("mark") != mark:
+            entry = memo[agent["terminal_id"]] = {"mark": mark, "since": now}
+        if isinstance(entry.get("box"), (int, float)) and entry["box"] - entry.get("since", now) >= SCREEN_SETTLE: continue
+        todo.append((agent, entry))
+    def look(agent):
+        try: raw = read_screen(prefix, agent, 0, ansi=True).get("text", "")
+        except (BridgeError, OSError, ValueError): return None
+        return screen_input(raw, agent["agent"]) if isinstance(raw, str) and raw.strip() else None
+    if len(todo) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool: seen = list(pool.map(lambda t: look(t[0]), todo))
+    else: seen = [look(t[0]) for t in todo]
+    for (agent, entry), result in zip(todo, seen):
+        if not result: continue
+        if result["box"] is not None: entry["box"] = now
+        else:
+            entry.pop("box", None)
+            if screen_dialog(result["menu"], agent["agent"]):
+                agent.update(herdr_status=agent["agent_status"], agent_status="blocked", screen="menu")
+    # Forget terminals that are gone (the list is the whole session's).
+    live = {a.get("terminal_id") for a in found}
+    memo = {k: v for k, v in memo.items() if k in live}
+    if path and json.dumps(memo, sort_keys=True) != before:
+        try:
+            state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".%d.tmp" % os.getpid())
+            tmp.write_text(json.dumps(memo)); os.replace(tmp, path)
+        except OSError: pass
+    return found
 
 
 def relay_prompt(prefix, pane_id, text):
@@ -336,6 +417,7 @@ def mutate(request, prefix, agent, state_dir):
         text = request.get("text")
         key = request.get("key")
         if op == "prompt":
+            if agent.get("screen") == "menu": raise BridgeError(MENU_ON_SCREEN)
             if agent.get("agent_status") not in ("idle", "done"):
                 raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
             images = request.get("images")
@@ -2738,10 +2820,9 @@ MENU_ESC_ROW = re.compile(r"(?i)\((?:esc|escape)\)\s*$")
 def menu_esc(lines, run, last_line):
     """What Esc does on this dialog, as its own hint line says: {"action": "cancel"|"interrupt"|…,
     "option": n of the row marked "(esc)" or None}. None when the screen does not say."""
-    action = None
-    for raw in lines[last_line + 1:last_line + 14]:
-        found = MENU_ESC.search(raw)
-        if found: action = found.group(1).lower(); break
+    # The hint rows are read as one text: a narrow pane wraps "Esc to" / "cancel".
+    found = MENU_ESC.search(" ".join(x.strip() for x in lines[last_line + 1:last_line + 14]))
+    action = found.group(1).lower() if found else None
     option = next((r["n"] for r in run if MENU_ESC_ROW.search(r["label"] + " " + r["description"])), None)
     if not action and option is None: return None
     return {"action": action or "cancel", "option": option}
@@ -2797,6 +2878,18 @@ def menu_unwrap(lines, start, end, question):
     return parts[0][:600]
 
 
+def claude_trust_rows(run, lines):
+    """Claude's folder-trust dialog has no numbers ("❯ No, exit" / "Yes, I trust this folder").
+    Accepted only when it is exactly that: two rows, a "No…" and a "Yes…trust…", and the trust
+    question above them. Returns the "No" row number (what Esc does there), else None."""
+    if not run or len(run) != 2: return None
+    labels = [str(r["rest"]).strip().lower() for r in run]
+    no = next((r["n"] for r, x in zip(run, labels) if re.match(r"no\b", x)), None)
+    if no is None or not any(re.match(r"yes\b", x) and "trust" in x for x in labels): return None
+    above = " ".join(lines[max(0, run[0]["line"] - 16):run[0]["line"]]).lower()
+    return no if "trust" in above and "?" in above else None
+
+
 def parse_menu(text, provider=""):
     """Find the newest numbered menu at the bottom of an agent screen; None if unsure."""
     lines = [menu_clean(x) for x in str(text or "").split("\n")][-70:]
@@ -2812,6 +2905,11 @@ def parse_menu(text, provider=""):
     # The live menu is the last run; earlier runs are numbered lists in the transcript.
     runs = [r for r in runs if len(r) >= 2]
     if not runs and generic: runs = [r for r in [arrow_run(lines)] if r]
+    trust = None
+    if not runs and provider == "claude":
+        found = arrow_run(lines)
+        trust = claude_trust_rows(found, lines)
+        if trust: runs = [found]
     if not runs: return None
     run = runs[-1]
     last_line = run[-1]["line"]
@@ -2877,9 +2975,13 @@ def parse_menu(text, provider=""):
     context = context[-14:]
     question = next((x for x in reversed(context) if x.endswith(("?", "？"))), next((x for x in reversed(context) if x), ""))
     question = menu_unwrap(lines, max(0, run[0]["line"] - 16), run[0]["line"], question)
+    if trust:
+        asked = re.search(r"[^.:!?]*\btrust\?", " ".join(context))
+        if asked: question = asked.group(0).strip()
     words = " ".join(context + [r["label"] for r in run]).lower()
     labels = [r["label"] for r in run]
-    if "review your answers" in words or "submit answers" in [x.lower() for x in labels]: kind = "review"
+    if trust: kind = "approval"
+    elif "review your answers" in words or "submit answers" in [x.lower() for x in labels]: kind = "review"
     elif re.search(r"do you want to|would you like to|allow |approve|permission|proceed\?", words): kind = "approval"
     else: kind = "question"
     chat = next((r["n"] for r in run if r["label"].lower().startswith("chat about this")), None)
@@ -2891,7 +2993,10 @@ def parse_menu(text, provider=""):
         row["input"] = provider == "claude" and kind == "question" and (
             bool(MENU_INPUT.match(row["label"])) or row["n"] == (chat or 0) - 1 or bool(multi and submit and row is last_real))
     stable = [kind, multi, context, [(r["n"], r["label"]) for r in run if not r["input"]]]
-    return {"kind": kind, "multi": multi, "cursor": cursor, "question": question, "context": context, "esc": menu_esc(lines, run, last_line),
+    esc = menu_esc(lines, run, last_line)
+    # Esc on the trust dialog is its "No, exit" (Claude quits), not a refusal it waits after.
+    if trust: esc = {"action": (esc or {}).get("action", "cancel"), "option": trust}
+    return {"kind": kind, "multi": multi, "cursor": cursor, "question": question, "context": context, "esc": esc,
             "tabs": [t for t in tabs if t["label"].lower() != "submit"],
             "options": [{k: r[k] for k in ("n", "label", "description", "checked", "chosen", "input", "chat")} for r in run],
             "submit": submit["label"] if submit else None,
@@ -4759,11 +4864,13 @@ def hidden_records(request, state_dir):
     return {"ids": ids}
 
 
-def herdr_status(prefix):
-    """Cheap poll: Herdr state only, no process walk or history resolution."""
+def herdr_status(prefix, screens=False):
+    """Cheap poll: Herdr state only, no process walk or history resolution (plus, with `screens`,
+    a visible-screen look at idle/done Claude / Codex agents: mark_screen_menus)."""
     fields = ("pane_id", "agent", "agent_status", "agent_session", "terminal_id", "terminal_title",
               "terminal_title_stripped", "title", "cwd", "foreground_cwd", "workspace_id", "tab_id", "identity")
-    return [{k: a.get(k) for k in fields} for a in agents(prefix)]
+    extra = ("screen", "herdr_status")
+    return [dict({k: a.get(k) for k in fields}, **{k: a[k] for k in extra if k in a}) for a in agents(prefix, screens=screens)]
 
 
 def ssh_info():
@@ -4846,14 +4953,16 @@ def handle(request, state_dir=None):
         # every agent in a tmux pane, in one read-only poll.
         found = []
         if request.get("session"):
-            try: found = herdr_status(select_session(request))
+            try: found = herdr_status(select_session(request), state_dir or True)
             except HerdrMissing: found = []
         return {"agents": found + tmux_status_rows(), "tmux": True}
     prefix = select_session(request)
-    if op == "status": return {"agents": herdr_status(prefix)}
+    # The screen notes live in the state folder the request runs with (main passes the real one).
+    screens = state_dir or True
+    if op == "status": return {"agents": herdr_status(prefix, screens)}
     if op == "agents" and request.get("target") is not None:
         return follow_pane(request, prefix)
-    found = agents(prefix, include_history=op == "agents")
+    found = agents(prefix, include_history=op == "agents", screens=screens)
     if op == "agents":
         return {"agents": found}
     target = request.get("target")
@@ -4887,7 +4996,7 @@ def main():
         raw = sys.stdin.buffer.readline(LIMIT + 1)
         if len(raw) > LIMIT:
             raise BridgeError("Request too large")
-        response = {"ok": True, "data": handle(json.loads(raw))}
+        response = {"ok": True, "data": handle(json.loads(raw), Path.home() / ".local/state/herdr-pocket")}
     except Exception as exc:
         response = {"ok": False, "error": str(exc)[:2000]}
     print(json.dumps(response, ensure_ascii=False), flush=True)

@@ -44,6 +44,8 @@ class FollowTests(unittest.TestCase):
         if args[-3:-1] == ["pane", "get"]:
             if self.pane is None: raise bridge.BridgeError(str({"code": "pane_not_found", "message": "pane not found"}))
             return {"pane": self.pane}
+        # An idle Claude's visible screen is looked at for a dialog Herdr missed (mark_screen_menus).
+        if args[2:4] == ["agent", "read"] and "visible" in args: return {"text": ""}
         raise AssertionError("unexpected herdr call " + repr(args))
 
     def snapshot(self, pid):

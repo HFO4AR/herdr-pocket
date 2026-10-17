@@ -170,6 +170,25 @@ await page.waitForFunction(()=>fx.prompts.at(-1)?.text==='第六条半：输入�
 await status('working');await page.evaluate(()=>{fx.say('第六条半：输入框里有字');});await page.evaluate(()=>fetchHistory());
 console.log('PASS: a draft in the agent input box: not sent, kept in the queue, sent on 继续');
 
+// 5c. Herdr calls it idle while a question waits on its screen (a narrow pane wraps the dialog's
+// footer): the bridge reports it blocked with screen:"menu", so the queue holds. When the status look
+// was skipped, the bridge's own check before typing refuses ("停在一个提问或选择框上"): that clears up
+// once it is answered, so the message stays queued and goes out later, without a 继续.
+await page.evaluate(async()=>{fx.list=fx.list.map(a=>({...a,agent_status:'blocked',screen:'menu',herdr_status:'done'}));S.statusBusy=false;await refreshStatus();});
+await send('第六条¾：等它回答完');
+await bubble('第六条¾').getByText('排队中 · 处理完确认再发',{exact:true}).waitFor();
+const b6=await attempts();await page.waitForTimeout(3500);
+assert.equal(await attempts(),b6,'held while the question is on screen');
+await page.evaluate(()=>{fx.promptErrors.push('没发出去：它正停在一个提问或选择框上（电脑那边还显示它空闲），这时打字回车会直接选中选项。先回答它，或点“用按键操作”看屏幕');
+ fx.list=fx.list.map(({screen,herdr_status,...a})=>a);});
+// Answered: it works on, stops, and (the status look skipped this once) a dialog is up again.
+await status('working');await status('done');
+await bubble('第六条¾').getByText(/上次没发出去：它正停在一个提问或选择框上/).waitFor({timeout:8000});
+assert.equal(await page.locator('.queue-bar').filter({hasText:'队列先停下'}).count(),0,'not paused: it clears up once answered');
+await page.waitForFunction(()=>fx.prompts.at(-1)?.text==='第六条¾：等它回答完',null,{timeout:12000});
+await status('working');await page.evaluate(()=>{fx.say('第六条¾：等它回答完');});await page.evaluate(()=>fetchHistory());
+console.log('PASS: a dialog Herdr calls idle holds the queue; the bridge refusal is retried once it clears');
+
 // 6. The pane's conversation changes (/clear): the queue pauses and only continues on request.
 await status('working');await page.evaluate(()=>{fx.say('第六条：直接发');});await page.evaluate(()=>fetchHistory());
 await send('第七条：发给原来的对话');

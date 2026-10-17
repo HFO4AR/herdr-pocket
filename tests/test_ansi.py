@@ -101,7 +101,9 @@ class ReadOp(unittest.TestCase):
     def test_plain_read_is_unchanged(self):
         r = self.read()
         self.assertNotIn("ansi", r)
-        self.assertEqual(self.commands, [["agent", "read", "w1:p1", "--source", "recent-unwrapped", "--lines", "160"]])
+        # Before it, the done Claude's visible screen is looked at for a dialog Herdr missed.
+        self.assertEqual(self.commands, [["agent", "read", "w1:p1", "--source", "visible", "--format", "ansi"],
+                                         ["agent", "read", "w1:p1", "--source", "recent-unwrapped", "--lines", "160"]])
 
     def test_ansi_read_adds_the_colored_screen_and_keeps_text(self):
         r = self.read(ansi=True)
