@@ -161,7 +161,7 @@ class TmuxOnlyTests(unittest.TestCase):
 
     def test_new_session_validation_never_reaches_tmux(self):
         bad = [dict(name="a b"), dict(name="x;rm -rf ~"), dict(name="a.b"), dict(name="-t"), dict(name="x" * 65), dict(name=5),
-               dict(cwd="relative/dir"), dict(cwd=str(self.home / "missing")), dict(cwd="~/proj/../proj"), dict(cwd="/etc"),
+               dict(cwd="relative/dir"), dict(cwd=str(self.home / "missing")), dict(cwd="~/proj/../proj"), dict(cwd="/dev/null"), dict(cwd="~other"),
                dict(cwd="~/proj\n"), dict(extra=1), dict(name="main")]
         for i, extra in enumerate(bad):
             req = dict(op="tmuxNew", id="3234567%d-1234-4234-8234-123456789012" % (i % 10), cwd=self.proj); req.update(extra)
@@ -213,6 +213,14 @@ class TmuxOnlyTests(unittest.TestCase):
         self.state["rows"][0][11] = str(link / "proj"); self.save()
         r = self.h(op="tmuxNew", id="6234567%d-1234-4234-8234-123456789012" % 0, cwd=str(real))
         self.assertEqual(r["cwd"], str(real.resolve()))
+        # Any existing directory the user can enter, without a pane there: outside $HOME, hidden, linked.
+        other = self.dir / "srv/www"; other.mkdir(parents=True); (self.home / ".cache").mkdir(exist_ok=True)
+        for i, (cwd, want) in enumerate(((str(other), other), ("~/.cache", self.home / ".cache"))):
+            with self.subTest(cwd=cwd):
+                r = self.h(op="tmuxNew", id="8234567%d-1234-4234-8234-123456789012" % i, cwd=cwd)
+                self.assertEqual(r["cwd"], str(want.resolve()))
+        with self.assertRaisesRegex(bridge.BridgeError, "没创建：目录 ~/nope 不存在"):
+            self.h(op="tmuxNew", id="9234567%d-1234-4234-8234-123456789012" % 0, cwd="~/nope")
         for cwd in ("~root", "~root/x"):
             with self.subTest(cwd=cwd), self.assertRaisesRegex(bridge.BridgeError, "没创建：只能用自己的家目录"):
                 self.h(op="tmuxNew", id="7234567%d-1234-4234-8234-123456789012" % len(cwd), cwd=cwd)

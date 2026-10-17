@@ -66,14 +66,22 @@ function createForm(body,info){
  let showAll=dirs.findIndex(d=>d.path===f.dir)>=4;
  function dirRow(d){const on=!f.custom&&f.dir===d.path;const b=btn('','menu-item new-dir'+(on?' on':''),()=>{f.custom=false;f.dir=d.path;drawDirs();autoPlace();},'folder');b.setAttribute('role','radio');b.setAttribute('aria-checked',String(on));
   const t=el('span','grow');t.append(el('span','menu-label',newBase(d.path)));
-  const meta=(d.recentAt?(d===dirs[0]?'上次用的':'最近用过')+(d.agents?' · ':''):'')+(d.source==='pane'?(d.agents?d.agents+' 个 Agent 在用':d.recentAt?'':'有终端在这'):d.recentAt?'':d.modified?newAgo(d.modified):'用过');
+  const meta=d.source==='picked'?'刚在目录树里选的':(d.recentAt?(d===dirs[0]?'上次用的':'最近用过')+(d.agents?' · ':''):'')+(d.source==='pane'?(d.agents?d.agents+' 个 Agent 在用':d.recentAt?'':'有终端在这'):d.recentAt?'':d.modified?newAgo(d.modified):'用过');
   t.append(el('small','truncate',newShort(d.path)+' · '+meta));b.append(t);if(on)b.append(icon('check'));return b;}
  function drawDirs(){dirList.replaceChildren();const list=showAll?dirs:dirs.slice(0,4);list.forEach(d=>dirList.append(dirRow(d)));
   if(!showAll&&dirs.length>4)dirList.append(btn('更多目录 · '+(dirs.length-4),'link-btn new-more',()=>{showAll=true;drawDirs();}));
+  dirList.append(newBrowseRow(()=>browse()));
   const other=btn('','menu-item new-dir'+(f.custom?' on':''),()=>{f.custom=true;f.dir=pathInput.value.trim();drawDirs();autoPlace();setTimeout(()=>pathInput.focus(),30);},'edit');other.setAttribute('role','radio');other.setAttribute('aria-checked',String(f.custom));
-  const t=el('span','grow');t.append(el('span','menu-label','其他目录'),el('small','','家目录下的路径，要已经存在'));other.append(t);dirList.append(other);
+  const t=el('span','grow');t.append(el('span','menu-label','其他目录'),el('small','','手填路径，目录要已经存在'));other.append(t);dirList.append(other);
   if(f.custom)dirList.append(pathInput);}
  drawDirs();
+ // 浏览目录…: the folder tree (dirpick.js) over this form; the folder picked becomes the choice.
+ function browse(){
+  const start=f.custom?pathInput.value.trim():f.dir;
+  dirPickIn(body,{value:start||info.home||'~',home:info.home||'',title:'选起始目录',quick:dirs.slice(0,8).map(d=>({path:d.path,label:newBase(d.path)})),
+   onPick:path=>{let hit=dirs.find(d=>d.path.replace(/\/+$/,'')===path);if(!hit){hit={path,source:'picked'};dirs.unshift(hit);}
+    f.custom=false;f.dir=hit.path;if(dirs.indexOf(hit)>=4)showAll=true;drawDirs();autoPlace();
+    requestAnimationFrame(()=>dirList.querySelector('.new-dir.on')?.focus({preventScroll:false}));}});}
 
  // Where: a new tab in a workspace (matched by directory), or a new workspace.
  body.append(el('div','section-label','开在哪里'));
@@ -101,6 +109,9 @@ function createForm(body,info){
  const actions=el('div','sheet-actions');const go=btn('新建','primary',()=>createSubmit(first.value,go,status),'plus');go.setAttribute('aria-label','开始新建');
  actions.append(btn('取消','secondary',closeSheet),go);foot.append(actions);}
 
+// The 浏览目录… row both 新建 sheets show between their suggestions and 其他目录.
+function newBrowseRow(fn){const b=btn('','menu-item new-browse',fn,'folder');b.setAttribute('aria-label','浏览目录…，从家目录或根目录一层层找');
+ const t=el('span','grow');t.append(el('span','menu-label','浏览目录…'),el('small','','从家目录或根目录一层层找'));b.append(t,icon('chevron'));return b;}
 function newStatus(status,kind,text,extra){status.className='new-status '+kind;status.replaceChildren();if(kind==='busy')status.append(el('span','spinner'));else status.append(icon('alert'));const t=el('div','grow');t.append(el('div','',text));if(extra)t.append(extra);status.append(t);}
 
 async function createSubmit(text,go,status){
