@@ -28,6 +28,7 @@ await page.addInitScript(()=>{
    else if(a.op==='status')data={agents:fx.agents};
    else if(a.op==='glance')data={items:[]};
    else if(a.op==='account')data={ssh_user:'u',hostname:'fx'};
+   else if(a.op==='createInfo')data={kinds:[{kind:'codex',found:true},{kind:'claude',found:true},{kind:'ch',found:false}],home:'/home/u',workspaces:[{workspace_id:'w1',label:'proj',focused:true,dirs:[{path:'/home/u/proj',agents:1,panes:1}]}],dirs:[{path:'/home/u/proj',source:'pane',agents:1,workspace_id:'w1'}]};
    else if(a.op==='tmux'){if(!fx.tmuxKnown)throw Error('Unknown operation');data={available:true,panes:fx.tmux};}
    else if(a.op==='tmuxRead'){if(fx.readFail)throw Error(fx.readFail);const p=fx.tmux.find(x=>x.pane_id===a.target);
     if(!p||p.identity!==a.identity)throw Error('这个 tmux 窗格已经关了或换了，回到列表刷新一下');const ansi=fx.screen[a.target]||'$ ';data={text:ansi.replace(/\x1b\[[0-9;]*m/g,''),ansi,pane:p};}
@@ -62,8 +63,22 @@ assert.equal(await rows.nth(1).locator('.badge').count(),0,'only the pane on scr
 assert.match(await rows.nth(2).locator('.card-meta').textContent(),/窗格 1/,'a split window says which pane');
 const box=await rows.nth(0).boundingBox();assert.ok(box.height>=44,'rows are touch-sized');
 assert.equal(await overflow(),false);
+// The row-gesture hint is said once, after every list (not between the Herdr list and tmux).
+const hints=page.locator('.close-hint');assert.equal(await hints.count(),1,'one row hint');
+assert.ok(await page.evaluate(()=>{const h=document.querySelector('.close-hint'),lists=[...document.querySelectorAll('.list-card')];return lists.every(l=>!!(l.compareDocumentPosition(h)&Node.DOCUMENT_POSITION_FOLLOWING))&&!h.closest('.agent-list');}),'the hint comes after the Herdr and tmux lists');
 await shot('list');await dark('list');
 console.log('PASS: tmux panes are listed under the agents with session:window, command and 活动');
+
+// ── 1b. 新建会话 offers 新建 tmux 会话 on top, set apart from the Agent form ──
+await page.getByRole('button',{name:'新建会话',exact:true}).click();
+{const sheet=page.getByRole('dialog',{name:'新建会话'});await sheet.getByRole('radio',{name:'Codex',exact:true}).waitFor();
+ const row=sheet.locator('.new-tmux');await row.waitFor();
+ const gap=await page.evaluate(()=>{const r=document.querySelector('.new-tmux').getBoundingClientRect(),n=document.querySelector('.new-body .section-label').getBoundingClientRect();return n.top-r.bottom;});
+ assert.ok(gap>=16,'space under 新建 tmux 会话: '+gap);
+ assert.ok((await row.boundingBox()).height>=44);
+ await page.waitForTimeout(450);await shot('new-sheet');await dark('new-sheet');
+ await sheet.getByRole('button',{name:'关闭',exact:true}).click();}
+console.log('PASS: 新建 tmux 会话 sits apart above the Agent form');
 
 // ── 2. Open: terminal screen only, colored, header = session:window ──
 await rows.nth(0).click();

@@ -45,3 +45,14 @@
 .new-pending .row-side .spinner{border-top-color:var(--warn)}
 .new-pending .card-meta .sep{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:359px){.new-kind{padding:9px 8px 8px}.new-kind strong{font-size:13px}.new-btn{padding:0 12px 0 9px}}
+/* 正在启动 / 没起来 sheets: what was started and where, instead of a pane id. */
+.new-facts{margin:12px 0 4px;border:1px solid var(--line);border-radius:var(--radius-control);padding:2px 12px}
+.new-fact{display:flex;align-items:baseline;gap:12px;min-height:40px;padding:9px 0;font-size:var(--fs-sm);border-bottom:1px solid var(--line)}
+.new-fact:last-child{border-bottom:0}
+.new-fact-key{flex:0 0 auto;color:var(--muted)}
+.new-fact-value{flex:1;min-width:0;text-align:right;color:var(--ink);overflow-wrap:anywhere}
+.new-fact-value.mono{font-family:var(--mono);font-size:var(--fs-xs)}
+/* The 新建 tmux 会话 row on top of the 新建会话 sheet, set apart from the Agent form below it. */
+.new-sheet>.new-tmux{margin-bottom:var(--sp-2);border:1px solid var(--line);border-radius:var(--radius-card)}
+.new-sheet>.new-tmux+.new-body>.section-label:first-child{margin-top:var(--sp-4)}
+.new-acts>button{white-space:nowrap;padding-left:var(--sp-3);padding-right:var(--sp-3)}

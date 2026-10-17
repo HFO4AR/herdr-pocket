@@ -13,9 +13,9 @@
 const HELP=[
  {id:'start',title:'开始使用',parts:[
   {id:'start-need',h:'需要准备什么',body:[
-   ['一台装了 Herdr 的电脑，开着 SSH（含 SFTP），装有 Python 3.9 或更新版本。','Herdr 要用你 SSH 登录的同一个用户运行。','Android 8.0 或更新的手机。','手机能访问到电脑：同一个 Wi-Fi 填局域网 IP；不在一起可以用 Tailscale，或者 frp 这类 TCP 转发（填转发出来的地址和端口）。']]},
+   ['一台开着 SSH（含 SFTP）的电脑，装有 Python 3.9 或更新版本。','电脑上再装 Herdr 或 tmux（至少一个）。Codex、Claude 和其他 Agent 在 Herdr 里都能用；只有 tmux 的话，能用终端，也能和 tmux 里跑的 Claude / Codex 对话。','Herdr 和 tmux 都要用你 SSH 登录的同一个用户运行。','Android 8.0 或更新的手机。','手机能访问到电脑：同一个 Wi-Fi 填局域网 IP；不在一起可以用 Tailscale，或者 frp 这类 TCP 转发（填转发出来的地址和端口）。']]},
   {id:'start-add',h:'添加电脑',body:[
-   '「设备」页点「添加第一台设备」（之后是右上角的 +）。填名称、主机地址、端口和 SSH 用户名；直接粘贴 `user@host:port` 会自动拆开。',
+   '「设备」页点「添加第一台设备」（之后是右上角的 +）。填主机地址、端口和 SSH 用户名；直接粘贴 `user@host:port` 会自动拆开。设备名称可以不填，默认用主机地址。',
    '登录方式选「密码」或「密钥」。勾选「记住密码」后，密码用 Android Keystore 加密存在这台手机上；不勾就每次连接时输入。']},
   {id:'start-fingerprint',h:'第一次连接：核对指纹',body:[
    '第一次连一台电脑会弹出「核对电脑指纹」。在电脑的终端里运行下面的命令（弹窗里也能复制），输出里的 SHA256:… 要和手机上一字不差，再点「信任并连接」。',
@@ -23,7 +23,7 @@ const HELP=[
    '以后指纹变了，App 会直接拒绝连接，也不会自动重连。只有确定电脑那边换过密钥（重装系统、换机器），才在「电脑指纹变了」里选「重新核对」。']},
   {id:'start-bridge',h:'安装桥接程序',body:[
    '连上后 App 会请你在电脑上装一个小的桥接程序，用来读取会话、转发你发的消息。它随 App 一起发布、开源，用 Python 运行。',
-   ['经 SFTP 放进 `~/.herdr-pocket`，按内容的 SHA-256 命名，传完回读校验。','不用 sudo，不重启 Herdr，不开放新端口。','App 更新后会提示换成配套的新版本；「设备」页的「更新桥接程序」可以随时重装。'],
+   ['经 SFTP 放进 `~/.herdr-pocket`，按内容的 SHA-256 命名，传完回读校验。','不用 sudo，不重启 Herdr，不开放新端口。','App 更新后，连接时会提示换成配套的新版本，平时不用管它。真要重装：「设备」页「桥接程序」那一行点「…」。'],
    '提示「电脑上还差 Python」或「Python 太旧」时，先在电脑上装好 Python 3.9+ 再连。']}]},
  {id:'chat',title:'和 Agent 对话',parts:[
   {id:'chat-send',h:'发消息',body:[
@@ -172,7 +172,7 @@ function helpJump(box,id){
  const focus=n.tagName==='DETAILS'?n.querySelector('summary'):n.querySelector('h3,h4');if(focus){focus.tabIndex=-1;focus.focus({preventScroll:true});}}
 function helpOpen(topic){
  helpIcons();const box=sheet('帮助');box.classList.add('help-sheet');
- const lead=el('div','help-lead');lead.append(el('p','','Herdr Pocket 通过 SSH 连到运行 Herdr 的电脑，在手机上看 Agent 在做什么、回它的消息。下面是常用操作和常见问题。'));box.append(lead);
+ const lead=el('div','help-lead');lead.append(el('p','','Herdr Pocket 通过 SSH 连到你的电脑，在手机上看 Herdr 或 tmux 里的 Agent 在做什么、回它的消息。下面是常用操作和常见问题。'));box.append(lead);
  const toc=el('nav','help-toc');toc.setAttribute('aria-label','目录');
  HELP.forEach(s=>{const b=btn(s.title,'help-toc-item',()=>helpJump(box,s.id));toc.append(b);});
  toc.append(btn('反馈问题','help-toc-item accent',()=>helpJump(box,'feedback')));box.append(toc);

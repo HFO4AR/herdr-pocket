@@ -112,11 +112,13 @@ async function createSubmit(text,go,status){
  // The bridge answers in a few seconds (tab open, start handed to Herdr); the rest shows on the list.
  newStatus(status,'busy','正在开标签页，把 '+label+' 叫起来…');
  const req={session:S.session,id:uuid(),kind:f.kind,cwd:f.dir,workspace:f.place};
+ // Named for the 正在启动 / 没起来 sheets (the pane id means nothing to a person).
+ const ws=f.place==='new'?null:(NEW.info?.workspaces||[]).find(w=>w.workspace_id===f.place),placeName=ws?ws.label||'工作区 '+ws.workspace_id.slice(1):'';
  try{
   const r=await remote('create',req);NEW.busy=false;
   if(!r||!r.created){newStatus(status,'error','没创建：Herdr 没接受，可以改一下再试');restoreGo(go);return;}
   newPref('kind',f.kind);newRecentSave(f.dir.replace(/\/+$/,''),f.kind);NEW.info=null;
-  if(status.isConnected)closeSheet();createDone(r,text.trim()?text:'',label);}
+  if(status.isConnected)closeSheet();createDone({...r,place_label:placeName},text.trim()?text:'',label);}
  catch(e){NEW.busy=false;const m=e.message||String(e);
   if(/^没创建/.test(m)){if(status.isConnected){newStatus(status,'error',m);restoreGo(go);}else toast(m);return;}
   // Unknown outcome: something may have been created. Never retry on its own.
@@ -153,7 +155,7 @@ NEW.pending=[];
 const NEW_POLL=1500,NEW_SLOW=45000,NEW_GIVE_UP=120000;
 function newPendingHere(){const dev=S.device?.id||'';return NEW.pending.filter(p=>p.device===dev&&p.session===S.session);}
 function createPending(r,text,label){
- const p={device:S.device?.id||'',session:S.session,pane:r.pane_id,kind:r.kind,label,cwd:r.cwd||'',text,at:Date.now(),state:'starting',newWorkspace:!!r.new_workspace};
+ const p={device:S.device?.id||'',session:S.session,pane:r.pane_id,kind:r.kind,label,cwd:r.cwd||'',text,at:Date.now(),state:'starting',newWorkspace:!!r.new_workspace,place:r.place_label||''};
  NEW.pending=NEW.pending.filter(x=>!(x.device===p.device&&x.pane===p.pane)).concat(p);
  toast('标签页开好了，'+label+' 正在启动，出来后自动打开');
  if(S.tab==='live'&&!S.chat&&!(typeof T!=='undefined'&&T.view))render();
@@ -203,11 +205,20 @@ function newPendingRow(p){
  t.append(meta);
  const side=el('div','row-side');if(p.state!=='lost')side.append(el('span','spinner mini'));const tm=since(p.at);tm.classList.add('row-time');side.append(tm);
  b.append(avatar(newKind(p.kind)[1],slow?'alert':'work'),t,side);return b;}
+// What was started and where, in words: the Agent, its directory and the workspace it went into.
+function newFacts(box,kind,cwd,newWorkspace,place){
+ const [label,,detail]=newKind(kind);const list=el('div','new-facts');
+ const row=(k,v,cls)=>{const n=el('div','new-fact');n.append(el('span','new-fact-key',k),el('span','new-fact-value'+(cls?' '+cls:''),v));list.append(n);};
+ row('Agent',label+(detail&&NEW_KINDS[kind]?' · '+detail:''));
+ if(cwd)row('目录',shortPath(cwd),'mono');
+ row('开在',newWorkspace?'新工作区':place?'「'+place+'」里的新标签页':'已有工作区里的新标签页');
+ box.append(list);}
 function newPendingSheet(p){
  const box=sheet(p.state==='starting'?'正在启动 '+p.label:p.label+' 还没出现');
- box.append(el('p','muted',(p.newWorkspace?'新工作区':'新标签页')+'已经开好了（'+p.pane+'），'+(p.state==='starting'?p.label+' 正在启动，出来后这里会自动打开它。':'可 '+p.label+' 一直没出现。可能停在了终端里（比如登录、更新提示），去终端看看。')),
-  el('p','fine','不会再启动一次。'+(!p.text?'':p.state==='lost'?'第一条消息没发；它之后出来的话，会放在它的输入框里。':'第一条消息等它出来再发。')));
- const row=el('div','sheet-actions');
+ box.append(el('p','muted',(p.newWorkspace?'新工作区':'新标签页')+'已经开好了，'+(p.state==='starting'?p.label+' 正在启动，出来后这里会自动打开它。':'可 '+p.label+' 一直没出现。可能停在了终端里（比如登录、更新提示），去终端看看。')));
+ newFacts(box,p.kind,p.cwd,p.newWorkspace,p.place);
+ box.append(el('p','fine','不会再启动一次。'+(!p.text?'':p.state==='lost'?'第一条消息没发；它之后出来的话，会放在它的输入框里。':'第一条消息等它出来再发。')));
+ const row=el('div','sheet-actions new-acts');
  row.append(btn('不等了','secondary',()=>{newPendingDrop(p);closeSheet();newPendingPaint();toast('不等了，标签页还留在电脑上');}),btn('去终端看看','primary',()=>newPaneOpen(p.pane),'terminal'));
  box.append(row);}
 // 去终端看看: straight to that tab's terminal (the 终端 list shows several look-alike idle shells).
@@ -220,6 +231,7 @@ async function newPaneOpen(paneId){
  if(pane&&S.tab==='terminals'&&!T.view)openPane(pane);else if(!pane&&S.tab==='terminals')toast('没在普通窗格里找到它（可能已经起了 Agent 或被关了），看看会话列表');}
 function createFailed(r,text,label){
  const box=sheet(label+' 没起来');
- box.append(el('p','muted','新标签页已经开好了（'+r.pane_id+'），但 '+label+' 没启动成功'+(r.detail?'：'+r.detail:'')+'。'),
-  el('p','fine',(r.typed?'启动命令可能已经输进去了，':'')+'标签页留在电脑上，没有关掉。'+(text?'第一条消息没发。':'')));
- const row=el('div','sheet-actions');row.append(btn('知道了','secondary',closeSheet),btn('去终端看看','primary',()=>newPaneOpen(r.pane_id),'terminal'));box.append(row);}
+ box.append(el('p','muted',(r.new_workspace?'新工作区':'新标签页')+'已经开好了，但 '+label+' 没启动成功'+(r.detail?'：'+r.detail:'')+'。'));
+ newFacts(box,r.kind,r.cwd,!!r.new_workspace,r.place_label);
+ box.append(el('p','fine',(r.typed?'启动命令可能已经输进去了，':'')+'标签页留在电脑上，没有关掉。'+(text?'第一条消息没发。':'')));
+ const row=el('div','sheet-actions new-acts');row.append(btn('知道了','secondary',closeSheet),btn('去终端看看','primary',()=>newPaneOpen(r.pane_id),'terminal'));box.append(row);}

@@ -139,7 +139,8 @@ const newAgent=(status,extra={})=>({pane_id:'w1:p9',identity:'id-new',agent:'cla
  await page.getByRole('button',{name:'新建会话',exact:true}).click();
  await page.getByRole('dialog',{name:'新建会话'}).getByRole('button',{name:'开始新建',exact:true}).click();
  const failed=page.getByRole('dialog',{name:'Codex 没起来'});
- await failed.getByText(/新标签页已经开好了（w1:p9）.*codex: command not found/).waitFor();
+ await failed.getByText(/新标签页已经开好了，但 Codex 没启动成功：codex: command not found/).waitFor();
+ assert.equal(await failed.getByText(/w1:p9/).count(),0,'no raw pane id');
  await failed.getByText(/标签页留在电脑上，没有关掉/).waitFor();
  await failed.getByRole('button',{name:'去终端看看',exact:true}).waitFor();
  await page.close();
@@ -168,7 +169,12 @@ const newAgent=(status,extra={})=>({pane_id:'w1:p9',identity:'id-new',agent:'cla
  // The row explains and offers the terminal; nothing starts again from here.
  await row.click();
  const info=page.getByRole('dialog',{name:'正在启动 Codex'});
- await info.getByText(/新标签页已经开好了（w1:p9），Codex 正在启动/).waitFor();
+ await info.getByText(/新标签页已经开好了，Codex 正在启动/).waitFor();
+ // In words, not the pane id: which Agent, which directory, which workspace.
+ assert.equal(await info.getByText(/w1:p9/).count(),0,'no raw pane id');
+ await info.locator('.new-fact').filter({hasText:'Agent'}).getByText('Codex · 本机运行',{exact:true}).waitFor();
+ await info.locator('.new-fact').filter({hasText:'目录'}).getByText('~/IterxAI/stm32_host',{exact:true}).waitFor();
+ await info.locator('.new-fact').filter({hasText:'开在'}).getByText('「stm32_host」里的新标签页',{exact:true}).waitFor();
  await info.getByText(/不会再启动一次/).waitFor();
  await info.getByRole('button',{name:'去终端看看',exact:true}).waitFor();
  await page.waitForTimeout(450);// the sheet's rise animation
@@ -212,7 +218,9 @@ const newAgent=(status,extra={})=>({pane_id:'w1:p9',identity:'id-new',agent:'cla
  assert.equal(await page.evaluate(()=>NEW.pending[0].state),'lost');
  await slow.click();
  const info=page.getByRole('dialog',{name:'Claude 还没出现'});
- await info.getByText(/新工作区已经开好了（w7:p1），可 Claude 一直没出现/).waitFor();
+ await info.getByText(/新工作区已经开好了，可 Claude 一直没出现/).waitFor();
+ await info.locator('.new-fact').filter({hasText:'开在'}).getByText('新工作区',{exact:true}).waitFor();
+ await info.locator('.new-fact').filter({hasText:'目录'}).getByText('~/notes',{exact:true}).waitFor();
  await info.getByRole('button',{name:'不等了',exact:true}).click();
  await page.getByText('不等了，标签页还留在电脑上',{exact:true}).waitFor();
  assert.equal(await page.locator('.new-pending').count(),0);

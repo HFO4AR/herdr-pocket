@@ -67,11 +67,13 @@ function obHead(label,action){const h=el('div','section-head');h.append(el('span
 
 function firstRunGuide(){
  const card=el('section','card ob-guide');const top=el('div','ob-guide-icon');top.append(icon('device'));
- card.append(top,el('h2','',S.demo?'连上你自己的电脑':'连上你的电脑'),el('p','muted','Herdr Pocket 通过 SSH 连到运行 Herdr 的电脑，在手机上看 Agent 在做什么、回它的消息。'));
+ card.append(top,el('h2','',S.demo?'连上你自己的电脑':'连上你的电脑'),el('p','muted','Herdr Pocket 通过 SSH 连到你的电脑，在手机上看 Agent 在做什么、回它的消息，也能直接用终端。'));
  const steps=el('ol','ob-steps');
  const step=(title,detail)=>{const li=el('li');const t=el('div');t.append(el('strong','',title),el('span','',detail));li.append(t);steps.append(li);return li;};
  step('电脑开着 SSH','能用用户名和密码登录；只允许密钥的话，选「密钥」登录。');
- step('装好 Herdr 和 Python 3.9+','App 会在电脑上放一个小的桥接程序，靠 Python 运行。');
+ step('装好 Python 3.9+','App 会在电脑上放一个小的桥接程序，靠 Python 运行。');
+ // Herdr is not required any more: a tmux-only computer lists its tmux panes (tmux.js).
+ step('装好 Herdr 或 tmux','Codex、Claude 和其他 Agent 用 Herdr；只用终端，或者 Claude / Codex 跑在 tmux 里，有 tmux 就够了。');
  const net=step('手机能访问到电脑','不知道填什么地址？看下面。');
  const more=el('details','ob-net');const sum=el('summary','','怎么填地址');more.append(sum);
  [['同一个 Wi-Fi','填电脑的局域网 IP，比如 192.168.1.20，端口 22。'],['不在一起：Tailscale','两边都登录 Tailscale，填 100. 开头的地址或 xxx.ts.net。'],['不在一起：frp 等转发','填服务器地址和映射出来的端口（不是 22）。']]
@@ -105,12 +107,24 @@ function deviceCard(d){
  text.append(title,el('div','card-meta truncate',d.user+'@'+d.host+(Number(d.port)===22?'':':'+d.port)));row.append(text,ib('edit','编辑 '+d.name,()=>deviceForm(d)));card.append(row);
  const line=el('div','device-line');line.append(icon(d.auth==='key'?'key':'lock'),document.createTextNode(obAuthText(d)));card.append(line);
  if(d.jumps?.length)card.append(hopLine(d));
- const actions=el('div','device-actions');const busy=S.loading&&S.connecting?.id===d.id||resumeBusy(d.id);resumeLine(card,d);
- const connect=btn(busy?'正在连接…':linked?'切换到这台':'连接设备',!linked&&d.id===obFocusId()?'primary':'secondary',()=>linked?switchDevice(d):connectDevice(d));connect.disabled=S.loading||busy;
+ // Connecting this one: its card says so once, in place of its buttons (no resume row, no page
+ // banner on this page, see connectionBanner) and the progress line follows the native stages.
+ if(S.loading&&S.connecting?.id===d.id||resumeBusy(d.id)){card.append(obConnecting(d));return card;}
+ resumeLine(card,d);
+ const actions=el('div','device-actions');
+ const connect=btn(linked?'切换到这台':'连接设备',!linked&&d.id===obFocusId()?'primary':'secondary',()=>linked?switchDevice(d):connectDevice(d));connect.disabled=S.loading;
  actions.append(connect);
  if(linked)actions.append(btn('断开','link-btn device-unlink',()=>obUnlink(d)));
  actions.append(obDeleteBtn(d,linked));
  card.append(actions);return card;}
+
+function obConnecting(d){
+ const auto=resumeBusy(d.id),here=S.loading&&S.connecting?.id===d.id;
+ const box=el('div','dev-connecting');box.setAttribute('role','status');box.setAttribute('aria-live','polite');
+ const t=el('div','grow');t.append(el('strong','',auto?'正在自动连接…':'正在连接…'),el('span','',here?S.connectStage||'正在建立 SSH 连接并验证身份…':'上次连着，在后台连；连好可以切过去'));
+ box.append(el('span','spinner'),t);return box;}
+// Is a saved computer's own card on the 设备 page right now (devicesPage's "rest")?
+function obCardShown(id){const shown=S.device&&!S.demo?S.device.id:'';return !!id&&S.devices.some(x=>x.id===id&&(S.demo||x.id!==shown&&!linkConnected(x.id)));}
 
 // The computer on screen: what it is connected to, and everything that can be done with it.
 function currentCard(d){
@@ -126,13 +140,24 @@ function currentCard(d){
  fact('SSH 用户',a?.ssh_user||d.user);
  fact('电脑主机名',a?.hostname||'读取中…');
  fact('登录方式',key?'这台手机的密钥':d.remember?'密码 · 已加密保存':'密码 · 连接时输入');
- const up=btn('更新','link-btn dev-action',()=>setupBridge({manual:true}));up.setAttribute('aria-label','更新桥接程序');
- fact('桥接程序',a?a.bridge?a.bridge:'—':'读取中…',up);
+ // The bridge the app runs is the file named after the SHA-256 of the copy bundled with it, and a
+ // connect only finishes once that file answers `hello` (MainActivity.connect: else the install /
+ // 更新桥接程序 sheet comes first). So a version here is the matching one and there is nothing to
+ // update: reinstalling stays one tap away under 「…」. Only a bridge that stopped answering gets a
+ // visible button.
+ if(!a)fact('桥接程序','读取中…');
+ else if(a.bridge){const v=el('span','dev-bridge');v.append(el('span','',a.bridge),el('span','dev-match','配套'));
+  const more=ib('more','桥接程序选项',()=>obBridgeMenu(a.bridge));more.classList.add('dev-action');fact('桥接程序',v,more);}
+ else{const up=btn('重新安装','link-btn dev-action',()=>setupBridge({manual:true}));up.setAttribute('aria-label','重新安装桥接程序');fact('桥接程序','没回应',up);}
  card.append(facts);
  if(!key)card.append(keyCallout());
  const actions=el('div','device-actions');
  actions.append(btn('回到会话','primary',()=>setTab('live')),btn('断开','secondary device-unlink-main',()=>obUnlink(d)),obDeleteBtn(d,true));
  card.append(actions);return card;}
+function obBridgeMenu(version){
+ const box=sheet('桥接程序');
+ box.append(el('p','muted close-sub','电脑上运行的是 '+version+'，就是这个 App 自带的那份（文件按内容的 SHA-256 命名），不用更新。App 更新后，连接时会提示换成配套的新版本。'));
+ menuItem(box,'重新安装桥接程序',()=>setupBridge({manual:true}),'refresh','一般用不到：把 App 自带的版本再传一遍并校验');}
 // The offline demo has nothing to update or disconnect: one plain way out, and what it is.
 function demoCard(){
  const d=S.device;const card=el('section','card device-card account-card current demo-card');
@@ -154,22 +179,26 @@ function obDeleteBtn(d,linked){
 function obAutofocus(box,field){setTimeout(()=>{const a=document.activeElement;if(box.isConnected&&(!a||a===document.body||!box.contains(a)))field.focus();},60);}
 function deviceForm(d={}){
  rpc('protect').catch(error);const editing=!!d.id;const box=sheet(editing?'编辑设备':'添加设备');box.classList.add('ob-form');
- const name=obField(box,'设备名称',{value:d.name||'',placeholder:'例如：家里的电脑',enter:'next'});
+ // Order follows what a first-time user has at hand: the address (often pasted as user@host:port,
+ // which fills three fields), the login, and last an optional name that defaults to the address.
  const grid=el('div','form-grid');box.append(grid);
  const host=obField(grid,'主机地址',{value:d.host||'',placeholder:'域名或 IP',mode:'url',enter:'next'});
  const port=obField(grid,'端口',{value:String(d.port||22),mode:'numeric',enter:'next'});port.maxLength=5;
  const user=obField(box,'SSH 用户名',{value:d.user||'',placeholder:'登录电脑用的用户名',enter:'next'});
- const pass=obField(box,'登录密码',{type:'password',placeholder:d.remember?'已保存；留空保留原密码':'SSH 密码',enter:'done'});
+ const pass=obField(box,'登录密码',{type:'password',placeholder:d.remember?'已保存；留空保留原密码':'SSH 密码',enter:'next'});
  const check=el('label','check');const remember=el('input');remember.type='checkbox';remember.checked=d.remember!==false;check.append(remember,document.createTextNode('记住密码 · 本机加密保存'));box.append(check);
  const passParts=[pass.closest('label'),check];
  if(editing){const note=el('p','fine','改了主机、端口、用户名或跳板机，要重新输入密码。');box.append(note);passParts.push(note);}
  // 密码 stays the default: it is what works on a fresh computer; 密钥 needs the public key installed first.
  const auth=keyAuthChoice(box,passParts[0],d,passParts);
+ // Empty is fine (SecureProfiles names it after the host); the placeholder shows that name.
+ const name=obField(box,'设备名称',{value:d.name||'',placeholder:'例如：家里的电脑',enter:'done',hint:'可不填，不填就用主机地址'});name.classList.add('ob-name');
+ const namePh=()=>{const h=host.value.trim();name.placeholder=h&&!/[\s@\/]/.test(h)?h:'例如：家里的电脑';};namePh();host.addEventListener('input',namePh);
  // Optional jump hosts (hops.js), between the login choice and the buttons.
  const hopAnchor=el('div');box.append(hopAnchor);const hops=hopEditor(box,d,hopAnchor,()=>name.value.trim()||host.value.trim(),()=>auth.get());
  // Pasted "user@host:port" is split into the three fields.
  const split=()=>{const s=obSplitAddress(host.value);if(!s)return;host.value=s.host;obError(host,'');if(s.port){port.value=s.port;obError(port,'');}if(s.user&&!user.value.trim())user.value=s.user;if(user.value.trim())obError(user,'');if(s.user&&user.value.trim()!==s.user)return;toast('已拆成地址'+(s.user?'、用户名':'')+(s.port?'和端口':''));};
- host.addEventListener('change',split);host.addEventListener('paste',()=>setTimeout(split,0));
+ host.addEventListener('change',()=>{split();namePh();});host.addEventListener('paste',()=>setTimeout(()=>{split();namePh();},0));
  const values=()=>({id:d.id||'',name:name.value.trim(),host:host.value.trim(),port:port.value.trim(),user:user.value.trim()});
  // A tap on the dimmed page must not throw away what was typed (a long form with jump hosts); × still closes.
  const typedNow=()=>JSON.stringify([values(),auth.get(),hops.path()]);const typedAt=typedNow();box.keepOpen=()=>!!pass.value||typedNow()!==typedAt;
@@ -181,8 +210,10 @@ function deviceForm(d={}){
    const saved=r.devices.find(x=>x.id===(r.id||d.id));render();
    if(andConnect&&saved){if(typed)doConnect(saved,typed,remember.checked);else connectDevice(saved);}else toast('设备已保存');}
   catch(e){toast(e.message||String(e));}finally{buttons.forEach(b=>b.disabled=false);}};
- [name,host,port,user].forEach((n,i,all)=>n.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();if(!all[i+1]&&auth.get()==='key')save(!editing);else(all[i+1]||pass).focus();}}));
- pass.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();save(!editing);}});
+ // Enter walks the form in its visual order (the password is skipped for key login); the name saves.
+ [host,port,user].forEach((n,i,all)=>n.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();(all[i+1]||(auth.get()==='key'?name:pass)).focus();}}));
+ pass.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();name.focus();}});
+ name.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();save(!editing);}});
  const actions=el('div','sheet-actions');let buttons;
  if(editing)buttons=[btn('取消','secondary',closeSheet),btn('保存设备','primary',()=>save(false))];
  else buttons=[btn('保存设备','secondary',()=>save(false)),btn('保存并连接','primary',()=>save(true))];
@@ -287,6 +318,8 @@ async function recheckHost(b){if(b)b.disabled=true;try{hostCheck(await remote('d
 // Under the top bar of list pages: connecting progress, a failed connect, or a host problem.
 function connectionBanner(root){
  const f=S.connectFail;
+ // On the 设备 page the card of the computer being connected carries the progress (obConnecting).
+ if(S.loading&&S.tab==='devices'&&!S.chat&&obCardShown(S.connecting?.id))return;
  if(S.loading){const box=el('div','connection-status');box.setAttribute('role','status');box.append(el('span','spinner'));const t=el('div','grow');t.append(el('strong','','正在连接 '+(S.connecting?.name||S.device?.name||'')),el('div','',S.connectStage));box.append(t);root.append(box);return;}
  if(S.connectError){
   // 第一次核对指纹 is a normal step: a calm info banner. Red stays for real failures and a changed key.

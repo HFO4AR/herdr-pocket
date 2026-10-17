@@ -44,7 +44,11 @@ await page.evaluate(()=>{
  void doConnect(S.devices[0]);
 });
 await page.getByText('正在建立 SSH 连接并验证身份…',{exact:true}).waitFor();
-assert(await page.getByRole('button',{name:'正在连接…',exact:true}).isDisabled());
+// Said once, on the card being connected: no page banner on 设备, no disabled button, no extra row.
+assert.equal(await page.locator('.device-card .dev-connecting[role="status"]').count(),1);
+assert.equal(await page.locator('.connection-status').count(),0,'no banner on top of the card');
+assert.equal(await page.getByRole('button',{name:/正在连接/}).count(),0,'no 正在连接… button');
+assert.equal(await page.getByText('正在连接…',{exact:true}).count(),1);
 await page.evaluate(()=>nativeProgress(pendingConnect,'等待你核对并确认 SSH 主机指纹…'));
 await page.getByText('等待你核对并确认 SSH 主机指纹…',{exact:true}).waitFor();
 await page.waitForTimeout(4600);

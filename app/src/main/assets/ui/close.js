@@ -115,7 +115,7 @@ async function closeSession(a){
  place.append(el('span','close-loading',' · 正在读取位置…'));
  try{const r=await remote('closeInfo',{session:S.session,target:a.pane_id,identity:a.identity});if(!box.isConnected)return;info=r;draw();}
  catch(e){if(!box.isConnected)return;place.querySelector('.close-loading')?.remove();const m=e.message||String(e);
-  if(/Unknown operation|不支持的操作/.test(m)){closeStatus(status,'error','电脑上的桥接程序太旧，先到「设备」里点「更新桥接程序」');go.disabled=true;opts.querySelectorAll('button').forEach(b=>b.disabled=true);}
+  if(/Unknown operation|不支持的操作/.test(m)){closeStatus(status,'error','电脑上的桥接程序太旧，到「设备」页重新安装（桥接程序那一行的「…」）');go.disabled=true;opts.querySelectorAll('button').forEach(b=>b.disabled=true);}
   else closeStatus(status,'error',/^没关/.test(m)?m:'读不到窗格信息：'+m);}}
 function closeStatus(status,kind,text,extra){status.className='close-status '+kind;status.replaceChildren();status.append(kind==='busy'?el('span','spinner'):icon('alert'));const t=el('div','grow');t.append(el('div','',text));if(extra)t.append(extra);status.append(t);}
 async function closeInterrupt(a){
@@ -137,7 +137,7 @@ async function closeRun(a,how,go,status,info,ui){
   // Refused before anything happened: say why, the person can choose again.
   // Bridge checks that run before anything is written or closed are definite refusals too.
   const old=/^(Unknown operation|不支持的操作)/.test(m),changed=/^Agent changed or disappeared/.test(m),offline=/^Session is offline/.test(m);
-  if(old||changed||offline||/^(没关|没发出去)/.test(m)){const text=old?'没关：电脑上的桥接程序太旧，先到「设备」里点「更新桥接程序」':changed?'没关：这个窗格里的 Agent 变了，刷新列表再看':offline?'没关：Herdr 会话不在了，刷新一下':m;if(status.isConnected){closeStatus(status,'error',text);ui.redraw();}else toast(text);return;}
+  if(old||changed||offline||/^(没关|没发出去)/.test(m)){const text=old?'没关：电脑上的桥接程序太旧，到「设备」页重新安装（桥接程序那一行的「…」）':changed?'没关：这个窗格里的 Agent 变了，刷新列表再看':offline?'没关：Herdr 会话不在了，刷新一下':m;if(status.isConnected){closeStatus(status,'error',text);ui.redraw();}else toast(text);return;}
   // Unknown outcome: it may have happened. Never retry on its own.
   const look=btn('刷新看看','link-btn',()=>{closeSheet();closeRefresh(a);});
   if(status.isConnected){closeStatus(status,'error',/^关闭结果未知：/.test(m)?m.replace(/^关闭/,''):'结果未知：'+m+'。刷新看看，别直接再点',look);ui.lock();}
