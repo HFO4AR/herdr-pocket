@@ -17,7 +17,7 @@ await page.addInitScript(()=>{
  const H={r1:[msg('user','把发布脚本整理一下',300),msg('assistant','好，我先看看现在的脚本。',290)],r2:[msg('user','新对话的问题',20),msg('assistant','新对话的回答。',10)]};
  const ref=r=>({status:'matched',source:'native-process',record_id:r.id,thread:r.thread,record:r});
  const A1={pane_id:'w1:p1',terminal_id:'term1',agent:'claude',agent_status:'working',identity:'id-1',cwd:'/work/proj',title:'整理发布脚本',history_ref:ref(R.r1)};
- window.fx={R,H,A1,ref,list:[A1],follow:null,calls:[],attempts:[],prompts:[],promptErrors:[],nx:[],
+ window.fx={R,H,A1,ref,list:[A1],follow:null,calls:[],attempts:[],prompts:[],promptErrors:[],promptExtra:[],nx:[],
   say(text,rid='r1',pic=false){H[rid].push(msg('user',text+(pic?'\n\n[图片] /home/u/.herdr-pocket/uploads/2026-10-15/'+'e'.repeat(64)+'.jpg':''),1));},
   pic(label){const c=document.createElement('canvas');c.width=240;c.height=180;const g=c.getContext('2d');const gr=g.createLinearGradient(0,0,240,180);gr.addColorStop(0,'hsl(200,55%,62%)');gr.addColorStop(1,'hsl(240,60%,38%)');g.fillStyle=gr;g.fillRect(0,0,240,180);g.fillStyle='#fff';g.font='600 26px sans-serif';g.fillText(label,20,100);return c.toDataURL('image/jpeg',0.8);}};
  const device={id:'fx',name:'测试电脑',user:'u',host:'fixture.invalid',port:22,remember:true};
@@ -33,7 +33,7 @@ await page.addInitScript(()=>{
    else if(a.op==='history')data={record:Object.values(R).find(r=>r.id===a.record_id),messages:H[a.record_id]||[],before:0,has_more:false,children:[]};
    else if(a.op==='read')data={text:'$ '};
    else if(a.op==='catalog')data={records:[],total:0,next:null};
-   else if(a.op==='prompt'){fx.attempts.push(a);const e=fx.promptErrors.shift();if(e)throw Error(e);fx.prompts.push(a);data={sent:true,receipt:a.id};}
+   else if(a.op==='prompt'){fx.attempts.push(a);const e=fx.promptErrors.shift();if(e)throw Error(e);fx.prompts.push(a);data={sent:true,receipt:a.id,...(fx.promptExtra.shift()||{})};}
    else if(a.op==='account')data={ssh_user:'u',hostname:'fx'};
    else throw Error('unexpected remote op '+a.op);}
   else if(op==='pickImages')data={images:[{id:'att-'+(++att),thumb:fx.pic('截图'),width:800,height:600,bytes:40000,type:'jpg'}],failed:0};
@@ -155,20 +155,22 @@ assert.equal(await box().inputValue(),'');
 await page.waitForFunction(()=>fx.prompts.at(-1)?.text==='第六条：直接发',null,{timeout:12000});
 console.log('PASS: direct send refused as not sent is queued and goes out later');
 
-// 5b. Text already sits in the agent's own input box (the bridge read its screen): not sent, kept in
-// the queue, and the queue waits for 继续 instead of retrying (the text does not go away by itself).
+// 5b. Text already sat in the agent's own input box: the bridge replaced it and sent this one. It goes
+// out at once (no queue, no pause) with a quiet note. A send the screen could not confirm says so.
 await status('working');await page.evaluate(()=>{fx.say('第六条：直接发');});await page.evaluate(()=>fetchHistory());await status('idle');
-await page.evaluate(()=>{fx.promptErrors.push('没发出去：它的输入框里已经有字了，发出去会连在一起。先在「终端」里看一眼');});
+await page.evaluate(()=>{fx.promptExtra.push({replaced:true,verified:true});});
 const b5=await attempts();
 await send('第六条半：输入框里有字');
-await bubble('第六条半').getByText(/上次没发出去：它的输入框里已经有字了/).waitFor();
-assert.equal(await box().inputValue(),'','the message moved into the queue, nothing lost');
-await page.locator('.queue-bar').getByText('上一条没发出去，队列先停下。处理好再点继续').waitFor();
-await page.waitForTimeout(6500);assert.equal(await attempts(),b5+1,'not retried on its own');
-await page.locator('.queue-bar').getByRole('button',{name:'继续',exact:true}).click();
-await page.waitForFunction(()=>fx.prompts.at(-1)?.text==='第六条半：输入框里有字',null,{timeout:8000});
-await status('working');await page.evaluate(()=>{fx.say('第六条半：输入框里有字');});await page.evaluate(()=>fetchHistory());
-console.log('PASS: a draft in the agent input box: not sent, kept in the queue, sent on 继续');
+await page.locator('#toast').getByText('覆盖了它输入框里原来的字',{exact:true}).waitFor();
+assert.equal(await attempts(),b5+1);assert.equal(await page.evaluate(()=>fx.prompts.at(-1).text),'第六条半：输入框里有字');
+assert.equal(await page.locator('.queue-bar').count(),0,'nothing paused');
+assert.equal(await box().inputValue(),'');
+await status('working');await page.evaluate(()=>{fx.say('第六条半：输入框里有字');});await page.evaluate(()=>fetchHistory());await status('idle');
+await page.evaluate(()=>{fx.promptExtra.push({replaced:true,verified:false});});
+await send('第六条⅔：没确认到');
+await page.locator('#toast').getByText('覆盖了它输入框里原来的字，屏幕上没确认到它收下了，留意一下',{exact:true}).waitFor();
+await status('working');await page.evaluate(()=>{fx.say('第六条⅔：没确认到');});await page.evaluate(()=>fetchHistory());
+console.log('PASS: a draft in the agent input box is replaced: sent at once, with a quiet note');
 
 // 5c. Herdr calls it idle while a question waits on its screen (a narrow pane wraps the dialog's
 // footer): the bridge reports it blocked with screen:"menu", so the queue holds. When the status look

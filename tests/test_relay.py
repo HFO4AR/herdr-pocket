@@ -61,19 +61,18 @@ class RelayTests(unittest.TestCase):
         self.send(text="第一行\r\n第二行")
         self.assertEqual(self.writes()[1:], [["pane", "send-text", "w1:p1", "\x1b[200~第一行\n第二行\x1b[201~"], ["pane", "send-keys", "w1:p1", "enter"]])
 
-    def test_text_left_in_a_relay_claude_box_is_never_joined(self):
-        # Herdr refuses agent reads on a relay pane too: the box is read at the pane level.
+    def test_text_left_in_a_relay_claude_box_is_cleared_at_the_pane_level(self):
+        # Herdr refuses agent reads on a relay pane too: the box is read, and cleared, at the pane level.
+        # This fake screen never changes, so the old text stays: refused, nothing pasted, no Enter.
         rule = "\x1b[38;5;244m" + "─" * 40 + "\x1b[0m"
         self.screen = "\n".join(["● 好了。", "", rule, "\x1b[39m❯\u00a0写一首关于终端的诗\x1b[7m \x1b[0m", rule, "  ⏵⏵ accept edits on"])
-        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它的输入框里已经有字"):
+        with patch.object(bridge.time, "sleep", side_effect=lambda s: None), \
+                self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它输入框里原来的字没能清干净"):
             self.send(text="继续")
-        self.assertEqual(self.writes(), [])
         self.assertIn(["pane", "read", "w1:p1", "--source", "visible", "--format", "ansi"], self.commands)
-        self.assertEqual(sqlite3.connect(self.state / "receipts.sqlite").execute("SELECT count(*) FROM receipts").fetchone()[0], 0)
-        # Cleared on the computer: the same request goes out.
-        self.screen = self.screen.replace("写一首关于终端的诗", "")
-        self.assertTrue(self.send(text="继续")["sent"])
-        self.assertEqual(self.writes(), [["agent", "prompt", "w1:p1", "继续"], ["pane", "run", "w1:p1", "继续"]])
+        writes = self.writes()
+        self.assertTrue(writes and all(c[:2] == ["pane", "send-keys"] and set(c[3:]) <= set(bridge.BOX_CLEAR) for c in writes), writes)
+        self.assertEqual(self.receipt(), {"sent": False, "rejected": "draft"})
 
     def test_keys_and_exit_go_to_the_pane(self):
         self.agent["agent_status"] = "working"
