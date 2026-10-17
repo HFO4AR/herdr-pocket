@@ -21,7 +21,7 @@ class RelayTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
         self.state = Path(directory.name)
         self.agent = {"pane_id": "w1:p1", "terminal_id": "term_r", "agent": "claude", "agent_status": "done"}
-        self.commands, self.broken = [], None
+        self.commands, self.broken, self.screen = [], None, ""
         self.probe = {"ok": True, "route": ROUTE, "native": False}
         for target, fake in ((bridge, "call"), (bridge, "probe_pane"), (bridge.time, "sleep")):
             side = {"call": self.call, "probe_pane": lambda *a: dict(self.probe), "sleep": lambda s: None}[fake]
@@ -34,9 +34,14 @@ class RelayTests(unittest.TestCase):
         self.commands.append(args)
         if self.broken and args[:2] == self.broken: raise bridge.BridgeError("link dropped")
         # Herdr lists the agent but refuses its agent commands on a relay pane.
-        if args[0] == "agent" and args[1] in ("prompt", "send-keys") and self.probe.get("route") and not self.probe.get("native"):
+        if args[0] == "agent" and args[1] in ("prompt", "send-keys", "read") and self.probe.get("route") and not self.probe.get("native"):
             raise bridge.HerdrRejected("agent_not_ready", "agent w1:p1 is no longer the pane foreground process")
+        if args[1] == "read": return {"text": self.screen}
         return {"type": "ok"}
+
+    def writes(self):
+        """What reached Herdr apart from screen reads (a prompt first reads the input box)."""
+        return [c for c in self.commands if c[1] != "read"]
 
     def send(self, op="prompt", **extra):
         req = dict(v=1, op=op, session="default", target="w1:p1", identity=bridge.identity(self.agent),
@@ -49,12 +54,26 @@ class RelayTests(unittest.TestCase):
 
     def test_one_line_prompt_runs_in_the_pane(self):
         result = self.send(text="继续，把测试跑一下")
-        self.assertEqual(self.commands, [["agent", "prompt", "w1:p1", "继续，把测试跑一下"], ["pane", "run", "w1:p1", "继续，把测试跑一下"]])
+        self.assertEqual(self.writes(), [["agent", "prompt", "w1:p1", "继续，把测试跑一下"], ["pane", "run", "w1:p1", "继续，把测试跑一下"]])
         self.assertTrue(result["sent"]); self.assertTrue(self.receipt()["sent"])
 
     def test_several_lines_are_one_bracketed_paste_then_enter(self):
         self.send(text="第一行\r\n第二行")
-        self.assertEqual(self.commands[1:], [["pane", "send-text", "w1:p1", "\x1b[200~第一行\n第二行\x1b[201~"], ["pane", "send-keys", "w1:p1", "enter"]])
+        self.assertEqual(self.writes()[1:], [["pane", "send-text", "w1:p1", "\x1b[200~第一行\n第二行\x1b[201~"], ["pane", "send-keys", "w1:p1", "enter"]])
+
+    def test_text_left_in_a_relay_claude_box_is_never_joined(self):
+        # Herdr refuses agent reads on a relay pane too: the box is read at the pane level.
+        rule = "\x1b[38;5;244m" + "─" * 40 + "\x1b[0m"
+        self.screen = "\n".join(["● 好了。", "", rule, "\x1b[39m❯\u00a0写一首关于终端的诗\x1b[7m \x1b[0m", rule, "  ⏵⏵ accept edits on"])
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它的输入框里已经有字"):
+            self.send(text="继续")
+        self.assertEqual(self.writes(), [])
+        self.assertIn(["pane", "read", "w1:p1", "--source", "visible", "--format", "ansi"], self.commands)
+        self.assertEqual(sqlite3.connect(self.state / "receipts.sqlite").execute("SELECT count(*) FROM receipts").fetchone()[0], 0)
+        # Cleared on the computer: the same request goes out.
+        self.screen = self.screen.replace("写一首关于终端的诗", "")
+        self.assertTrue(self.send(text="继续")["sent"])
+        self.assertEqual(self.writes(), [["agent", "prompt", "w1:p1", "继续"], ["pane", "run", "w1:p1", "继续"]])
 
     def test_keys_and_exit_go_to_the_pane(self):
         self.agent["agent_status"] = "working"
@@ -68,17 +87,17 @@ class RelayTests(unittest.TestCase):
     def test_local_agent_keeps_herdr_agent_commands(self):
         self.probe = {"ok": True, "route": None, "native": True}
         self.send(text="hi")
-        self.assertEqual(self.commands, [["agent", "prompt", "w1:p1", "hi"]])
+        self.assertEqual(self.writes(), [["agent", "prompt", "w1:p1", "hi"]])
 
     def test_unreadable_process_tree_keeps_herdr_agent_commands(self):
         self.probe = {"ok": False, "route": None}
         self.send(text="hi")
-        self.assertEqual(self.commands[0][:2], ["agent", "prompt"])
+        self.assertEqual(self.writes()[0][:2], ["agent", "prompt"])
 
     def test_agent_running_locally_under_a_ch_parent_is_not_a_relay(self):
         self.probe = {"ok": True, "route": ROUTE, "native": True}
         self.send(text="hi")
-        self.assertEqual(self.commands[0][:2], ["agent", "prompt"])
+        self.assertEqual(self.writes()[0][:2], ["agent", "prompt"])
 
     def test_enter_failing_after_the_paste_leaves_the_outcome_unknown(self):
         self.broken = ["pane", "send-keys"]
@@ -87,7 +106,7 @@ class RelayTests(unittest.TestCase):
         self.assertIsNone(self.receipt())
         with self.assertRaisesRegex(bridge.BridgeError, "outcome is unknown"):
             self.send(text="a\nb")
-        self.assertEqual([c for c in self.commands if c[0] == "pane"], [["pane", "send-text", "w1:p1", "\x1b[200~a\nb\x1b[201~"], ["pane", "send-keys", "w1:p1", "enter"]], "never typed twice")
+        self.assertEqual([c for c in self.writes() if c[0] == "pane"], [["pane", "send-text", "w1:p1", "\x1b[200~a\nb\x1b[201~"], ["pane", "send-keys", "w1:p1", "enter"]], "never typed twice")
 
     def test_not_ready_on_a_local_agent_is_not_rerouted(self):
         self.probe = {"ok": True, "route": None, "native": True}

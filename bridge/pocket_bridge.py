@@ -68,6 +68,12 @@ NOT_SENT = {
     "agent_not_ready": "没发出去：Agent 还没准备好，等它空闲了再发",
     "pane_not_found": "没发出去：这个窗格已经不在了，回到列表刷新一下",
 }
+# Text already in the agent's own input box would be sent together with the prompt (seen live with
+# Claude Code after Esc, and with Codex): refused before anything is typed.
+DRAFT_NOT_SENT = {
+    "claude": "没发出去：它的输入框里已经有字了（可能是刚被中断、退回来的那条），发出去会连在一起。先在「终端」里看一眼",
+    "codex": "没发出去：它的输入框里已经有字了，发出去会连在一起。先在「终端」里看一眼",
+}
 
 
 def herdr_error(raw):
@@ -273,6 +279,19 @@ def colored_screen(prefix, agent, text):
     return merged if len(merged) <= ANSI_LIMIT else screen
 
 
+def herdr_draft(prefix, agent):
+    """Text in a Herdr Claude / Codex input box, from its coloured visible screen ("" when empty).
+    None when that cannot be told (no colours from this Herdr, an unreadable screen, no input box
+    on screen): the prompt then goes as before, Herdr's own state is what lets it through."""
+    kind = agent.get("agent")
+    if kind not in ("claude", "codex"): return None
+    try: raw = read_screen(prefix, agent, 0, ansi=True).get("text", "")
+    except (BridgeError, OSError, ValueError): return None
+    if not isinstance(raw, str) or "\x1b[" not in raw: return None
+    plain, colored = screen_pair(raw)
+    return claude_draft(plain, colored) if kind == "claude" else codex_draft(plain, colored)
+
+
 def relay_prompt(prefix, pane_id, text):
     """Type a prompt into a relay pane. One line: `pane run` (text, then Enter). Several lines go in
     as one bracketed paste, so the agent's input box keeps the line breaks, then Enter submits."""
@@ -288,6 +307,9 @@ def mutate(request, prefix, agent, state_dir):
     if not isinstance(req_id, str) or not re.fullmatch(r"[a-f0-9-]{36}", req_id):
         raise BridgeError("Mutation requires a UUID request id")
     digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    # The input box is read before the receipts database is locked (a screen read may take a while);
+    # it only refuses below, after a request already handled has answered from its receipt.
+    draft = herdr_draft(prefix, agent) if op == "prompt" and agent.get("agent_status") in ("idle", "done") else None
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     db = sqlite3.connect(state_dir / "receipts.sqlite", timeout=5)
     try:
@@ -310,6 +332,8 @@ def mutate(request, prefix, agent, state_dir):
             files = request.get("files")
             if not isinstance(text, str) or (not text.strip() and not images and not files) or len(text.encode()) > 15000 or "\x00" in text:
                 raise BridgeError("Prompt must contain 1–15000 UTF-8 bytes without NUL")
+            # Before the receipt: a refusal here sent nothing.
+            if draft: raise BridgeError(DRAFT_NOT_SENT[agent["agent"]])
             if images is not None or files is not None:
                 # Checked and (for ch routes) shared before the receipt: a failure here sent nothing.
                 text = compose_prompt(text, (prompt_images(images, request, prefix, agent) if images is not None else [])
@@ -2415,6 +2439,7 @@ CODEX_GOALS = (("Pursuing goal", "active"), ("Goal paused", "paused"), ("Goal st
                ("Goal hit usage limits", "usage_limited"), ("Goal unmet", "unmet"), ("Goal achieved", "complete"))
 CODEX_GOAL_RE = re.compile(r"(Pursuing goal|Goal paused|Goal stalled|Goal hit usage limits|Goal unmet|Goal achieved)(?: \(([^)]{1,30})\))?")
 CODEX_FOOTER_RE = re.compile(r"for shortcuts|esc to interrupt|Context \d+% used|% context left|to cycle\)|tab to queue")
+CODEX_MENU_ROW = re.compile(r"^›[ \t]*\d{1,2}\.[ \t]")
 RULE_RE = re.compile(r"^\s*[─━]{8,}")
 
 
@@ -2434,13 +2459,88 @@ def claude_footer(lines):
     return None
 
 
+SGR_RUN = re.compile(r"\x1b\[([0-9;:]*)m|([^\x1b])")
+
+
+def sgr_chars(colored):
+    """[(char, dim, reverse, fg)] for each visible character of one coloured line. fg is None (default),
+    (n,) for 30–37 / 90–97, (5, n) for 256 colours or (2, r, g, b)."""
+    out, dim, rev, fg = [], False, False, None
+    for m in SGR_RUN.finditer(colored):
+        if m.group(2) is not None:
+            out.append((m.group(2), dim, rev, fg)); continue
+        params = [int(x) if x.isdigit() else 0 for x in re.split("[;:]", m.group(1) or "0")]
+        i = 0
+        while i < len(params):
+            n = params[i]
+            if n == 0: dim, rev, fg = False, False, None
+            elif n == 2: dim = True
+            elif n == 22: dim = False
+            elif n == 7: rev = True
+            elif n == 27: rev = False
+            elif n == 39: fg = None
+            elif 30 <= n <= 37 or 90 <= n <= 97: fg = (n,)
+            elif n in (38, 48, 58):
+                # Extended colours carry their own numbers (a 2 there is not "dim").
+                size = 2 if i + 1 < len(params) and params[i + 1] == 5 else 4 if i + 1 < len(params) and params[i + 1] == 2 else 0
+                if n == 38 and size: fg = tuple(params[i + 1:i + 1 + size])
+                i += size
+            i += 1
+    return out
+
+
+def sgr_grey(fg):
+    if not fg: return False
+    if fg in ((90,), (5, 8)): return True
+    if fg[0] == 5 and len(fg) == 2: return 232 <= fg[1] <= 250
+    if fg[0] == 2 and len(fg) == 4: return max(fg[1:]) <= 200 and max(fg[1:]) - min(fg[1:]) <= 24
+    return False
+
+
+def placeholder_only(colored):
+    """Every visible character after the prompt sign is dim or grey (a reverse-video cursor and spaces
+    aside): a placeholder or a suggestion the agent drew, not text someone typed."""
+    chars = [c for c in sgr_chars(colored) if c[0].strip() and c[0] != "\u00a0" and not c[2]]
+    return bool(chars) and all(c[1] or sgr_grey(c[3]) for c in chars)
+
+
+def codex_composer(lines):
+    """Index of Codex's composer line (the last › line, with its footer under it), or None.
+    While a picker is up (approval, request_user_input question, model switch) the composer is
+    hidden and the last › line is the picker's pointer row ("› 1. Red"): no composer then, even
+    though the question's own hint line reads "esc to interrupt" (seen live, Codex 0.163)."""
+    for i in range(len(lines) - 1, max(-1, len(lines) - 25), -1):
+        line = lines[i].lstrip()
+        if line.startswith("›"):
+            if CODEX_MENU_ROW.match(line): return None
+            return i if any(CODEX_FOOTER_RE.search(x) for x in lines[i + 1:i + 13]) else None
+    return None
+
+
 def codex_footer(lines):
     """Lines under Codex's composer (the last › line), when they look like its footer."""
-    for i in range(len(lines) - 1, max(-1, len(lines) - 25), -1):
-        if lines[i].lstrip().startswith("›"):
-            foot = lines[i + 1:i + 13]
-            return foot if any(CODEX_FOOTER_RE.search(x) for x in foot) else None
-    return None
+    i = codex_composer(lines)
+    return None if i is None else lines[i + 1:i + 13]
+
+
+def codex_draft(text, ansi):
+    """Text already in Codex's composer ("" when empty), or None without the composer on screen.
+    An empty composer shows a dim placeholder ("Ask Codex to do anything", other suggestions);
+    typed text is not dim (without colours the two cannot be told apart: counted as a draft).
+    A draft may span lines; a blank line separates it from the status line."""
+    lines, colored = str(text or "").split("\n"), str(ansi or "").split("\n")
+    if len(colored) != len(lines): colored = [""] * len(lines)
+    while lines and not lines[-1].strip(): lines.pop(); colored.pop()
+    i = codex_composer(lines)
+    if i is None: return None
+    body = [lines[i].lstrip()[1:]]
+    for line in lines[i + 1:]:
+        if not line.strip(): break
+        body.append(line)
+    draft = "\n".join(body).strip(" \u00a0\n\t")
+    if not draft: return ""
+    after = colored[i].split("›", 1)[1] if "›" in colored[i] else ""
+    return "" if len(body) == 1 and placeholder_only(after) else draft
 
 
 def shift_tab_offered(text):
@@ -2586,7 +2686,8 @@ ARROW_ROW = re.compile(r"^(?P<pad>[ \t]*)(?P<ptr>[❯›▶➤●◉→])[ \t]+(
 ARROW_HINT = re.compile(r"(?i)↑\s*/?\s*↓|arrow keys|to navigate|navigate|to select|enter to (?:confirm|select|submit)|enter (?:confirm|select|submit)")
 MENU_SUBMIT = re.compile(r"^(?P<ptr>[❯›>▶➤])?[ \t]*(?P<label>Submit answers|Submit|Next)[ \t]*$")
 MENU_CHECK = re.compile(r"^(?:\[(?P<box>[ ✔✓×xX√])\]|(?P<sym>[☐☒◻◼]))[ \t]*")
-MENU_FOOTER = re.compile(r"(?i)(enter to |esc to |to navigate|tab to |to cancel|ctrl\+\w to |press enter|↑/↓|←/→)")
+# Codex's model-switch picker: "enter select · esc back".
+MENU_FOOTER = re.compile(r"(?i)(enter to |esc to |to navigate|tab to |to cancel|ctrl\+\w to |press enter|↑/↓|←/→|\benter select\b|\besc back\b)")
 MENU_MORE = re.compile(r"^[↑↓]\s*(\d+\s*more (above|below).*)?$")
 MENU_INPUT = re.compile(r"(?i)^(type something|type your answer|other)\b")
 BOX_EDGE = "│┃║"
@@ -2725,6 +2826,9 @@ def parse_menu(text, provider=""):
     for raw in reversed(lines[max(0, run[0]["line"] - 16):run[0]["line"]]):
         value = raw.strip()
         if menu_rule(raw) and context: break
+        # Codex draws its pickers without a border; two blank rows part them from the conversation
+        # above (approval, question and model-switch pickers, seen live in 0.163).
+        if provider == "codex" and not value and len(context) >= 2 and not context[0] and any(context): break
         if menu_rule(raw) or MENU_MORE.match(value): continue
         if "←" in value and "→" in value and re.search(r"[☐☒✔√]", value):
             tabs = [{"label": m[2].strip(), "done": m[1] in "☒✔√"}
@@ -4048,8 +4152,7 @@ def claude_draft(text, ansi):
         if not draft: return ""
         first = colored[body[0]] if len(colored) == len(lines) else ""
         after = first.split("❯", 1)[1] if "❯" in first else ""
-        hint = re.match(r"^[\s\u00a0]*(?:\x1b\[[0-9;]*m)*\x1b\[7m.(?:\x1b\[[0-9;]*m)*?\x1b\[(?:2|38;5;2[3-5]\d|90)m", after)
-        return "" if hint and len(body) == 1 else draft
+        return "" if len(body) == 1 and placeholder_only(after) else draft
     return None
 
 
@@ -4058,6 +4161,9 @@ def tmux_state(pane, found, text):
     When the screen alone cannot tell (an open prompt, no spinner) its transcript decides; without
     one it stays working, so nothing is typed into a turn that may still run."""
     state = tmux_screen_state(text, found["kind"])
+    # Codex: idle only with its composer and footer on screen. Anything else (an overlay, a dialog
+    # this bridge does not parse) could take typed letters as shortcuts (y/p approve a command).
+    if state == "idle" and found["kind"] == "codex" and codex_composer(screen_lines(text)) is None: return "working"
     if state != "idle" or found["kind"] != "claude" or not claude_turn_open(text): return state
     try: done = claude_transcript_turn_done(found)
     except (OSError, ValueError): done = None
@@ -4153,6 +4259,11 @@ def tmux_target(request, agent=False):
 def tmux_capture(pane_id):
     try: raw = tmux_run(["capture-pane", "-p", "-e", "-J", "-t", pane_id, "-S", str(-TMUX_SCROLL)])
     except TmuxFailed as exc: raise BridgeError("读不到这个 tmux 窗格：" + str(exc)) from exc
+    return screen_pair(raw)
+
+
+def screen_pair(raw):
+    """(plain text, SGR-only coloured screen) of a raw terminal screen, row for row."""
     screen = clean_ansi(raw)
     rows = screen.split("\n")
     while rows and not strip_sgr(rows[-1]).strip(): rows.pop()
@@ -4327,8 +4438,8 @@ def tmux_kill(request, state_dir):
 #  · status (target): the cheap poll of one open chat; `status` with `tmux: true` and no target
 #    lists every tmux agent next to Herdr's (the background watcher). Reads only.
 #  · prompt: refused unless the screen says it is idle (same rule as Herdr: the phone queues
-#    instead); pictures and files name the phone's uploads by local path (the pane runs here),
-#    re-hashed first. One receipt per request id, through tmux_send.
+#    instead) and its input box is empty (claude_draft, codex_draft); pictures and files name
+#    the phone's uploads by local path (the pane runs here), re-hashed first. One receipt per request id, through tmux_send.
 #  · answer: answer_question with tmux keys (tmux_answer_io): every key is followed by a screen
 #    read, Enter only on a verified cursor; its receipt is written before the first key.
 #  · key: ↑ ↓ Enter Esc Ctrl+C and Shift+Tab (BTab, only while the agent's own input footer is on
@@ -4467,7 +4578,13 @@ def tmux_agent_request(request, state_dir):
     if found["kind"] == "claude":
         plain, colored = tmux_capture(pane["pane_id"])
         if claude_draft(plain, colored):
-            raise BridgeError("没发出去：它的输入框里已经有字了（可能是刚被中断、退回来的那条），发出去会连在一起。先在「终端」里看一眼")
+            raise BridgeError(DRAFT_NOT_SENT["claude"])
+    elif found["kind"] == "codex":
+        # Text typed into the pane (or left there) would be sent together with this prompt (seen live).
+        plain, colored = tmux_capture(pane["pane_id"])
+        draft = codex_draft(plain, colored)
+        if draft is None: raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
+        if draft: raise BridgeError(DRAFT_NOT_SENT["codex"])
     if attached:
         # Checked before the receipt: a refusal here sent nothing.
         text = compose_prompt(text, tmux_attachments(request))

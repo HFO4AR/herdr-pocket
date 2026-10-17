@@ -155,6 +155,21 @@ assert.equal(await box().inputValue(),'');
 await page.waitForFunction(()=>fx.prompts.at(-1)?.text==='第六条：直接发',null,{timeout:12000});
 console.log('PASS: direct send refused as not sent is queued and goes out later');
 
+// 5b. Text already sits in the agent's own input box (the bridge read its screen): not sent, kept in
+// the queue, and the queue waits for 继续 instead of retrying (the text does not go away by itself).
+await status('working');await page.evaluate(()=>{fx.say('第六条：直接发');});await page.evaluate(()=>fetchHistory());await status('idle');
+await page.evaluate(()=>{fx.promptErrors.push('没发出去：它的输入框里已经有字了，发出去会连在一起。先在「终端」里看一眼');});
+const b5=await attempts();
+await send('第六条半：输入框里有字');
+await bubble('第六条半').getByText(/上次没发出去：它的输入框里已经有字了/).waitFor();
+assert.equal(await box().inputValue(),'','the message moved into the queue, nothing lost');
+await page.locator('.queue-bar').getByText('上一条没发出去，队列先停下。处理好再点继续').waitFor();
+await page.waitForTimeout(6500);assert.equal(await attempts(),b5+1,'not retried on its own');
+await page.locator('.queue-bar').getByRole('button',{name:'继续',exact:true}).click();
+await page.waitForFunction(()=>fx.prompts.at(-1)?.text==='第六条半：输入框里有字',null,{timeout:8000});
+await status('working');await page.evaluate(()=>{fx.say('第六条半：输入框里有字');});await page.evaluate(()=>fetchHistory());
+console.log('PASS: a draft in the agent input box: not sent, kept in the queue, sent on 继续');
+
 // 6. The pane's conversation changes (/clear): the queue pauses and only continues on request.
 await status('working');await page.evaluate(()=>{fx.say('第六条：直接发');});await page.evaluate(()=>fetchHistory());
 await send('第七条：发给原来的对话');
