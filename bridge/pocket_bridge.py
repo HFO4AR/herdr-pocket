@@ -313,11 +313,13 @@ def herdr_box(prefix, agent):
 # in as one bracketed paste, Enter waits until the box shows it, and the box is read again after
 # Enter: it only counts as sent once the box has emptied.
 #
-# Why (seen live, Claude Code 2.1.268): a paste naming a picture that is not a local file (the ch
-# route's "[图片 · ch-local fetch] ch-file://….png" line) makes Claude read the clipboard first
-# (`xclip … || wl-paste`); meanwhile it shows "Pasting…" under an empty box and drops any Enter.
-# The text lands in the box afterwards, unsent, and stayed there. Herdr's `agent prompt` and the
-# relay path both pressed Enter about 0.15 s after the paste.
+# Why (seen live, Claude Code 2.1.268): a paste ending in a picture name that is not a local file
+# (the ch route's "[图片 · ch-local fetch] ch-file://….png" line, before CH_IMAGE_NOTE; Claude checks
+# every line) makes Claude
+# read the clipboard first (`xclip … || wl-paste`); meanwhile it shows "Pasting…" under an empty box
+# and drops any Enter. The text landed in the box afterwards, unsent, and stayed there. Herdr's
+# `agent prompt` and the relay path both pressed Enter about 0.15 s after the paste. Other pastes
+# can still take a moment (a long one, a local picture path Claude turns into "[Image #1]").
 #
 # Clearing: one round of BOX_CLEAR (end of line, delete to the line start, on the now empty line
 # delete the line break after it, then the one before it) removes one line wherever the cursor is;
@@ -3491,9 +3493,19 @@ def share_image(path, sha):
     return address
 
 
+# Said after each ch-file:// address, on the same line. Claude Code 2.1.268 checks every line of a
+# paste (split at LF) that ends in a picture name (….png, .jpg, .jpeg, .gif, .webp) as a picture
+# path; one that is no local file, as a ch-file:// address never is there, makes it read the
+# clipboard first (`xclip … || wl-paste`: "Pasting…" on screen, Enter dropped meanwhile). A line
+# that ends in anything else is taken in one go (checked live through Herdr and tmux). The phone
+# hides the whole line in history (images.js IMG_LINE), with or without this note.
+CH_IMAGE_NOTE = "（用 ch-local fetch 取回再看）"
+
+
 def compose_prompt(text, refs):
     # One short line per picture after the person's words, so the agent knows to open it.
-    lines = [{"local": "[图片] ", "remote": "[图片 · ch-local fetch] ", "file": "[文件] "}[kind] + ref for kind, ref in refs]
+    lines = [{"local": "[图片] ", "remote": "[图片 · ch-local fetch] ", "file": "[文件] "}[kind] + ref
+             + (" " + CH_IMAGE_NOTE if kind == "remote" else "") for kind, ref in refs]
     body = text.rstrip()
     return (body + "\n\n" if body.strip() else "") + "\n".join(lines)
 

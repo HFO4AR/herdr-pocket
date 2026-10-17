@@ -49,7 +49,10 @@ async function imgUpload(list,progress){
  return list.map(a=>({name:a.name,sha256:a.sha256}));}
 
 // ─── History ────────────────────────────────────────────────────────────────
-const IMG_LINE=/^\[图片[^\]\n]*\]\s*(\S+)\s*$/;
+// A picture line: "[图片…] <path or ch-file://…>", optionally followed by a short （…） note. The
+// bridge puts one after a ch-file:// address (CH_IMAGE_NOTE: a pasted line ending in "….png" made
+// Claude read the clipboard); older messages have none. Either way the whole line is hidden.
+const IMG_LINE=/^\[图片[^\]\n]*\]\s*(\S+)(?:\s+（[^（）\n]{1,40}）)?\s*$/;
 function imgRef(ref){
  let m=ref.match(/\/\.herdr-pocket\/uploads\/(\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}\.(?:jpg|png))$/);if(m)return {kind:'upload',name:m[1]};
  if(/^ch-file:\/\/[a-f0-9]{64}\.(?:png|jpe?g|gif|webp)$/.test(ref))return {kind:'ch',address:ref};return null;}
