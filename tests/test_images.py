@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import re
 import os
 from pathlib import Path
 import sqlite3
@@ -99,7 +100,9 @@ class ImageTests(unittest.TestCase):
         with patch.object(bridge.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, address + "\n", "")) as run:
             bridge.handle(self.prompt(), self.state)
         self.assertEqual(run.call_args.args[0][1:], ["share-image", str(self.folder / (self.sha + ".png"))])
-        self.assertEqual(self.sent()[0][-1], "看看这个报错\n\n[图片 · ch-local fetch] " + address)
+        # A note after the address: a pasted line ending in "….png" makes Claude read the clipboard ("Pasting…").
+        self.assertEqual(self.sent()[0][-1], "看看这个报错\n\n[图片 · ch-local fetch] " + address + " " + bridge.CH_IMAGE_NOTE)
+        self.assertFalse(any(re.search(r"\.(png|jpe?g|gif|webp)\s*$", line) for line in self.sent()[0][-1].split("\n")))
 
     def test_failed_share_or_plain_ssh_pane_is_not_sent(self):
         self.probe = {"ok": True, "route": {"ssh": ["host"], "workspace": "w", "key": "k"}, "remote": True}

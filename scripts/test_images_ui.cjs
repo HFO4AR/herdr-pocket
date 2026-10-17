@@ -77,6 +77,19 @@ assert(served.some(x=>x.kind==='transcript'&&x.record_id==='rec-img'&&x.item==='
 assert(served.every(x=>!('path' in x)),'never an arbitrary path');
 // Image-only prompt: no empty bubble.
 assert.equal(await page.locator('.message.user').nth(2).locator('.bubble').count(),0);
+// The newer ch format: a note after the address (no pasted line ending in "….png"), here the way
+// Claude keeps a collapsed paste, and a picture-only prompt. The note goes with the picture line.
+await page.evaluate(sha=>{const t=new Date(Date.UTC(2026,9,15,9,20)).toISOString(),m=(n,kind,text)=>({id:n*100+':0',kind,text,title:'',call_id:'',timestamp:t});
+ fx.messages.push(m(9,'user','<pasted_content id="c1">\n远端截图里的报错\n\n[图片 · ch-local fetch] ch-file://'+sha+'.png （用 ch-local fetch 取回再看）\n</pasted_content id="c1">'),
+  m(10,'assistant','新格式的那张也看到了。'),m(11,'user','[图片 · ch-local fetch] ch-file://'+sha+'.png （用 ch-local fetch 取回再看）'),m(12,'assistant','只有图的那条也收到了。'));
+ return fetchHistory();},SHA2);
+await page.getByText('远端截图里的报错',{exact:true}).waitFor();
+assert.equal(await page.getByText(/ch-local fetch/).count(),0,'the ch line and its note are hidden');
+assert.equal(await page.locator('.message.user').nth(5).locator('.bubble').count(),0,'picture + note only: no empty bubble');
+assert.deepEqual(await page.evaluate(sha=>{const L='[图片 · ch-local fetch] ch-file://'+sha+'.png',N=' （用 ch-local fetch 取回再看）';
+ const a=imgSplit({text:'看图\n\n'+L+N}),b=imgSplit({text:'看图\n\n'+L});
+ return [a.text,a.specs.map(x=>x.address),msgSig(a.text)===msgSig(b.text),imgSplit({text:'看图\n\n'+L+' 还有别的话'}).specs.length];},SHA2),
+ ['看图',['ch-file://'+SHA2+'.png'],true,0],'old and new lines read the same; other words after it keep the line');
 await page.evaluate(()=>{document.getElementById('chat-scroll').scrollTop=0;});
 await shot(path.join(folder,'images-history-390.png'));
 await page.locator('.img-tile.broken').scrollIntoViewIfNeeded();await page.waitForTimeout(200);await shot(path.join(folder,'images-history-mid-390.png'));
