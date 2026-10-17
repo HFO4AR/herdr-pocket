@@ -120,9 +120,11 @@ for(const dark of [false,true]){
  // Back to work, then done with the reply: gone, 做完了 in the rail.
  await page.evaluate(()=>{fx.status='working';fx.read={text:'$ '};});
  await act(page).waitFor({timeout:6000});
+ // 做完了 shows for 8 s only: note it the moment it appears, so a slow machine can't miss it.
+ await page.evaluate(()=>{window.__sawDone=false;const seen=()=>{if(document.querySelector('#foot-rail .foot-lead.t-done'))window.__sawDone=true;};new MutationObserver(seen).observe(document.body,{subtree:true,childList:true,attributes:true});});
  await page.evaluate(()=>{fx.kids={total:3,running:0,stamp:'k2',items:[]};fx.status='done';fx.H.push(fx.msg('assistant','测试都过了，42 个。',0,{phase:'final_answer'}));});
  await until(page,()=>!document.getElementById('act'),null,8000);
- await page.locator('#foot-rail .foot-lead.t-done').waitFor({timeout:6000});
+ await until(page,()=>window.__sawDone,null,8000);
  await page.context().close();}
 console.log('PASS: send → 等它开始 → 正在执行 / 输出 / 思考 with the agent\'s clock and words, sub-agents, gone on blocked / done');
 
