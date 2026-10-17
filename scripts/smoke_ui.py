@@ -207,7 +207,7 @@ def main():
     tap('返回列表');tap('历史');expect('全部');screenshot('history')
     tap('设备');expect('workstation.local');screenshot('account')
     tap('终端');tap('开发终端');screenshot('herdr-terminal')
-    fill('终端输入','demo-command');run('shell','input','keyevent','4');tap('执行');expect('终端演示：未发送')
+    fill('终端输入','demo-command');hide_keyboard();tap_expect('执行','终端演示：未发送')
     tap('返回终端列表');tap('打开 SSH 终端');time.sleep(1);screenshot('ssh-terminal')
     # The first notice must be gone first, or a stale toast passes the check; Esc is on screen
     # without scrolling the key row (Ctrl+C is past the right edge on a phone).
@@ -285,6 +285,26 @@ def wait_for(texts,timeout=20):
         if time.monotonic()>end:
             raise AssertionError('None of %s appeared within %ds\n  On screen: %s'%(texts,timeout,' | '.join(v[:70] for v in seen[:90])))
         time.sleep(1)
+
+
+def hide_keyboard():
+    """Back closes the soft keyboard; wait until it is really gone so the next tap lands where the dump said."""
+    def shown():
+        out=subprocess.run(['adb','shell','dumpsys','input_method'],capture_output=True,text=True).stdout
+        return 'mInputShown=true' in out
+    if shown(): run('shell','input','keyevent','4')
+    end=time.monotonic()+6
+    while shown() and time.monotonic()<end: time.sleep(.3)
+    time.sleep(.4)
+
+
+def tap_expect(action,text):
+    """A notice on a slow emulator can be missed when the tap lands during a relayout; the demo
+    sends nothing, so one more tap is harmless."""
+    tap(action)
+    try: expect(text)
+    except AssertionError:
+        tap(action);expect(text)
 
 
 def expect_gone(text,timeout=8):
