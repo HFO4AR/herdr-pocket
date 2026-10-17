@@ -20,4 +20,5 @@
 .tmux-name-note{margin:6px 2px 0}
 .tmux-name-note.bad{color:var(--danger)}
 .tmux-dir-loading{margin:6px 10px;color:var(--faint)}
+.tmux-dir-loading.bad{color:var(--warn)}
 .new-sheet .new-tmux{margin:0 0 6px;border:1px solid var(--line);border-radius:var(--radius-card)}

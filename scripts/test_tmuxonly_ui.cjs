@@ -36,8 +36,9 @@ await page.addInitScript(()=>{
     else if(a.op==='doctor')data=A?{herdr:false,running:null,tmux:!fx.noTmux}:{herdr:true,running:1,tmux:true};
     else if(a.op==='tmux'){if(A&&fx.noTmux){data={available:false,panes:[]};}
      else data={available:true,panes:fx.tmux[a.device].map(p=>p.pane_id==='%1'?{...p,agent:{...claude(),...(a.resolve?{history_ref:{status:'matched',source:'open-file',record_id:'rec1',thread:'T1',record:rec}}:{})}}:p)};}
+    else if(a.op==='tmuxInfo'&&fx.infoFail)throw Error(fx.infoFail);
     else if(a.op==='tmuxInfo')data={available:true,home:'/home/pi',dirs:[{path:'/home/pi/logs',source:'tmux'},{path:'/home/pi/src',source:'history',modified:now-7200}],sessions:['main','work']};
-    else if(a.op==='tmuxNew'){if(fx.newFail)throw Error(fx.newFail);const p=pane('%7',{session:a.name||'3',cwd:a.cwd});fx.tmux.A.push(p);data={created:true,session:p.session,cwd:a.cwd,pane:p};}
+    else if(a.op==='tmuxNew'){if(fx.newFail)throw Error(fx.newFail);const n=fx.made=(fx.made||0)+1;const p=pane('%'+(6+n),{session:a.name||String(2+n),cwd:a.cwd==='~'?'/home/pi':a.cwd});fx.tmux.A.push(p);data={created:true,session:p.session,cwd:a.cwd,pane:p};}
     else if(a.op==='tmuxKill'){if(fx.killFail)throw Error(fx.killFail);const p=fx.tmux.A.find(x=>x.pane_id===a.target);fx.tmux.A=fx.tmux.A.filter(x=>a.scope==='session'?x.session!==p.session:x.pane_id!==a.target);data={closed:true,scope:a.scope,session:p.session};}
     else if(a.op==='tmuxRead'){const p=fx.tmux.A.concat(fx.tmux.B).find(x=>x.pane_id===a.target);if(!p)throw Error('这个 tmux 窗格已经关了或换了，回到列表刷新一下');data={text:'pi@pi:~$ ',ansi:'pi@pi:~$ ',pane:p};}
     else if(a.op==='history')data={record:rec,messages:fx.history,before:0,has_more:false,children:[]};
@@ -58,7 +59,7 @@ await page.addInitScript(()=>{
    else if(op==='cacheGet')data={value:null};
    else throw Error('unexpected native op '+op);
   }catch(e){setTimeout(()=>nativeResult(id,{ok:false,error:e.message}),10);return;}
-  setTimeout(()=>nativeResult(id,{ok:true,data}),10);}};
+  setTimeout(()=>nativeResult(id,{ok:true,data}),op==='remote'&&a.op==='tmuxInfo'&&fx.infoDelay||10);}};
 });
 await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
 await page.evaluate(()=>{window.followInterval=()=>1e9;});
@@ -145,6 +146,33 @@ assert.equal(await page.locator('.term-head h2').textContent(),'scratch:bash');
 await role('button','返回列表').click();
 await page.waitForFunction(()=>document.querySelectorAll('.tmux-row').length===3);
 console.log('PASS: 新建 tmux 会话 validates the name, picks a directory and opens the new pane');
+
+// ── 3b. The directory list is slow or cannot be read: 家目录 still works (sent as ~) ──
+await page.evaluate(()=>{fx.infoDelay=4000;TX_NEW.info=null;TX_NEW.infoFor='';});
+await role('button','新建 tmux 会话').click();await sheetBox.waitFor();
+await sheetBox.getByText('正在读取最近用过的目录…',{exact:true}).waitFor();
+assert.equal(await sheetBox.getByRole('radio',{name:/^家目录/}).getAttribute('aria-checked'),'true');
+await role('button','开始新建 tmux 会话').click();
+await page.locator('#pane-screen').waitFor();
+assert.equal((await calls('tmuxNew')).at(-1).cwd,'~','home before the list arrived goes out as ~ (the bridge expands it)');
+await role('button','返回列表').click();await page.locator('.tmux-only-note').waitFor();
+await page.evaluate(()=>{fx.infoDelay=0;fx.infoFail='tmux 没有及时回应';TX_NEW.info=null;TX_NEW.infoFor='';});
+await role('button','新建 tmux 会话').click();await sheetBox.waitFor();
+await sheetBox.getByText('读不到最近用过的目录（tmux 没有及时回应），家目录和手填的路径照样能用',{exact:true}).waitFor();
+assert.equal(await role('button','开始新建 tmux 会话').isDisabled(),false,'a failed list does not block creating');
+await shot('new-noinfo');
+// An empty typed path says what to type, in the sheet.
+await sheetBox.getByRole('radio',{name:/^其他目录/}).click();
+await role('button','开始新建 tmux 会话').click();
+await sheetBox.getByText('先填目录路径，比如 ~/projects/app',{exact:true}).waitFor();
+await page.getByRole('textbox',{name:'目录路径'}).fill('~/src/');
+await role('button','开始新建 tmux 会话').click();
+await page.locator('#pane-screen').waitFor();
+assert.equal((await calls('tmuxNew')).at(-1).cwd,'~/src/');
+await role('button','返回列表').click();await page.locator('.tmux-only-note').waitFor();
+await page.evaluate(()=>{fx.infoFail='';fx.tmux.A=fx.tmux.A.filter(p=>!['%8','%9'].includes(p.pane_id));TX_NEW.info=null;TX_NEW.infoFor='';tmuxLoad();});
+await page.waitForFunction(()=>document.querySelectorAll('.tmux-row').length===3);
+console.log('PASS: 新建 tmux 会话 works while the directory list is slow or unreadable, errors stay in the sheet');
 
 // ── 4. 关闭 with a confirmation ──
 const row=page.locator('.tmux-row').filter({hasText:'work:build'});

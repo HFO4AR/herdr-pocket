@@ -3440,11 +3440,22 @@ CREATE_KINDS = ("codex", "claude", "ch")
 CREATE_MORE = ("opencode", "gemini", "pi", "devin", "agy", "cline", "omp", "mastracode", "copilot", "kimi", "kiro",
                "droid", "amp", "grok", "hermes", "kilo", "qodercli", "qwen", "maki")
 CREATE_KEYS = {"v", "op", "session", "id", "kind", "cwd", "workspace"}
-CREATE_BUDGET = 26.0   # seconds for one create; the app waits 35 s for any request
+CREATE_BUDGET = 26.0   # seconds for one create at most; the app waits 35 s for any request
+# A create answers within a few seconds: the tab, then the start handed to Herdr. The phone shows
+# 「正在启动」 and polls until the agent is there, instead of a spinner for the whole startup.
+# Herdr 0.8 needs `agent start --timeout` above 3000 ms; on its timeout the agent keeps starting.
+CREATE_START_WAIT_MS = 3100
+CREATE_SHELL_WAIT = 8.0   # a fresh shell can take a few seconds (rc files) to reach its prompt
+CREATE_CH_WAIT = 3.0      # ch new: look this long for Claude, then answer "starting"
 CH_NEW = "ch new"      # ch-cli: new Claude for the shell's current directory (default account)
 # Herdr refuses these before typing anything into the pane.
-CREATE_PRE_START = {"agent_pane_unavailable", "agent_pane_not_found", "agent_name_taken", "invalid_agent",
+CREATE_PRE_START = {"agent_pane_unavailable", "agent_pane_busy", "agent_pane_not_found", "agent_name_taken", "invalid_agent",
                     "invalid_agent_name", "invalid_agent_argument", "invalid_agent_timeout", "pane_not_found"}
+# A brand-new pane whose shell has not reached its prompt yet (Herdr 0.8.2 says agent_pane_busy,
+# "not an available shell"; older builds agent_pane_unavailable). Nothing was typed: retry.
+CREATE_SHELL_NOT_READY = ("agent_pane_unavailable", "agent_pane_busy")
+# Folders SSH exec shells often miss on PATH (Homebrew, Linuxbrew, user installs).
+SYSTEM_BIN_DIRS = ("/usr/local/bin", "/opt/homebrew/bin", "/home/linuxbrew/.linuxbrew/bin")
 
 
 def find_executable(name):
@@ -3453,7 +3464,7 @@ def find_executable(name):
     if found: return found
     home = Path.home()
     folders = [home / ".local/bin", home / "bin", home / ".cargo/bin", home / ".npm-global/bin", home / ".bun/bin",
-               home / ".volta/bin", home / ".deno/bin", Path("/usr/local/bin"), Path("/opt/homebrew/bin")]
+               home / ".volta/bin", home / ".deno/bin", home / ".linuxbrew/bin"] + [Path(x) for x in SYSTEM_BIN_DIRS]
     folders += sorted((home / ".nvm/versions/node").glob("*/bin"), reverse=True)
     for folder in folders:
         path = folder / name
@@ -3525,21 +3536,29 @@ def create_info(prefix):
 
 
 def create_dir(raw, known):
-    """A real directory: under $HOME, or one a pane or recent history already uses. No `..`, no tricks."""
+    """A real directory: under $HOME, or one a pane or recent history already uses. No `..`, no tricks.
+    `~`, `~/x` and a path relative to $HOME ("projects/app", as the hint says) all mean under $HOME.
+    Known directories are compared by their real path: a pane or transcript may name a directory
+    through a symlink (a linked home, /mnt/... mounted into ~) that resolves somewhere else."""
     if not isinstance(raw, str) or not raw.strip() or len(raw) > 1024 or any(ord(c) < 32 or ord(c) == 127 for c in raw):
         raise BridgeError("没创建：目录路径不对")
     text = raw.strip()
     home = Path.home()
     if text == "~" or text.startswith("~/"): text = str(home) + text[1:]
+    elif text.startswith("~"): raise BridgeError("没创建：只能用自己的家目录（~ 或 ~/…）")
     path = Path(text)
-    if not path.is_absolute(): raise BridgeError("没创建：目录要写完整路径（以 / 或 ~/ 开头）")
+    if not path.is_absolute(): path = home / path
     if ".." in path.parts: raise BridgeError("没创建：目录里不能有 ..")
     try: resolved = path.resolve(strict=True)
     except (OSError, RuntimeError): raise BridgeError("没创建：这个目录不存在") from None
     if not resolved.is_dir(): raise BridgeError("没创建：这不是一个目录")
     home = home.resolve()
-    if str(resolved) in known() or (resolved.is_relative_to(home) and not any(p.startswith(".") for p in resolved.relative_to(home).parts)):
+    if resolved.is_relative_to(home) and not any(p.startswith(".") for p in resolved.relative_to(home).parts):
         return str(resolved)
+    for d in known():
+        try:
+            if os.path.realpath(d) == str(resolved): return str(resolved)
+        except (OSError, ValueError, TypeError): continue
     raise BridgeError("没创建：只能用家目录下的目录，或已经有窗格在用的目录")
 
 
@@ -3588,36 +3607,44 @@ def pane_agent_state(pane, kind):
 
 
 def start_in_pane(prefix, pane_id, kind, name, deadline):
-    tries = 0
+    """Hand the start to Herdr and wait only briefly (CREATE_START_WAIT_MS): a ready agent answers
+    "ready" at once; a slower one is "starting" and keeps starting after Herdr's wait ends (checked
+    with Herdr 0.8.2). The phone then polls. A shell that is not at its prompt yet is retried for
+    up to CREATE_SHELL_WAIT seconds: Herdr refused before typing anything."""
+    began, wait_ms = time.monotonic(), CREATE_START_WAIT_MS
     while True:
-        remaining = deadline - time.monotonic()
-        if remaining < 5: return {"state": "starting"}
-        wait_ms = int(min(remaining - 2, 22) * 1000)
+        if deadline - time.monotonic() < wait_ms / 1000 + 2: return {"state": "starting", "agent_name": name}
         try:
             call(prefix + ["agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", str(wait_ms)],
-                 timeout=wait_ms / 1000 + 3)
+                 timeout=wait_ms / 1000 + 4)
             return {"state": "ready", "agent_name": name}
         except HerdrRejected as exc:
-            # A fresh shell may still be starting up; Herdr typed nothing, so trying again is safe.
-            if exc.code == "agent_pane_unavailable" and tries < 6:
-                tries += 1; time.sleep(0.8); continue
+            if exc.code in CREATE_SHELL_NOT_READY and time.monotonic() - began < CREATE_SHELL_WAIT:
+                time.sleep(0.4); continue
+            # Another Herdr build with another minimum: nothing was typed, so one longer wait is safe.
+            if exc.code == "invalid_agent_timeout" and wait_ms < 20000:
+                wait_ms = 20000; continue
             if exc.code == "agent_not_ready": return {"state": "blocked", "agent_name": name}
             if "timeout" in exc.code: return {"state": "starting", "agent_name": name}
-            return {"state": "failed", "code": exc.code, "detail": exc.detail[:300], "typed": exc.code not in CREATE_PRE_START}
+            detail = exc.detail[:300]
+            if exc.code in CREATE_SHELL_NOT_READY: detail = "新终端过了 %d 秒还没到命令提示符，没输入启动命令" % CREATE_SHELL_WAIT
+            return {"state": "failed", "code": exc.code, "detail": detail, "typed": exc.code not in CREATE_PRE_START}
         except BridgeError:
             return {"state": "starting", "agent_name": name}
 
 
 def start_ch(prefix, pane_id, deadline):
+    """Type `ch new` into the new shell and look for Claude for a moment (CREATE_CH_WAIT); ch then
+    still has to log in to the other computer, so "starting" is the usual answer. The phone polls."""
     try:
         call(prefix + ["pane", "run", pane_id, CH_NEW])
     except HerdrRejected as exc:
         return {"state": "failed", "code": exc.code, "detail": exc.detail[:300], "typed": exc.code not in CREATE_PRE_START}
     except BridgeError:
         return {"state": "starting"}
-    seen = None
-    while time.monotonic() < deadline - 1:
-        time.sleep(1)
+    seen, until = None, min(deadline - 1, time.monotonic() + CREATE_CH_WAIT)
+    while time.monotonic() < until:
+        time.sleep(0.5)
         try: pane = call(prefix + ["pane", "get", pane_id]).get("pane") or {}
         except BridgeError: continue
         seen = pane_agent_state(pane, "ch") or seen
@@ -3640,12 +3667,17 @@ def create_agent(request, prefix, state_dir):
         raise BridgeError("没创建：位置不对")
     if not find_executable(kind):
         raise BridgeError("没创建：这台电脑上没找到 " + kind + " 命令")
-    workspaces = create_workspaces(prefix)
-    if place != "new" and not any(w["workspace_id"] == place for w in workspaces):
-        raise BridgeError("没创建：那个工作区已经不在了，刷新一下")
-    pane_dirs = {d["path"] for w in workspaces for d in w["dirs"]}
-    known = lambda: pane_dirs | {d["path"] for d in history_dirs(40)}
-    cwd = create_dir(request.get("cwd"), known)
+    # Reads only so far: a failure here created nothing, and says so (not "outcome unknown").
+    try:
+        workspaces = create_workspaces(prefix)
+        if place != "new" and not any(w["workspace_id"] == place for w in workspaces):
+            raise BridgeError("没创建：那个工作区已经不在了，刷新一下")
+        pane_dirs = {d["path"] for w in workspaces for d in w["dirs"]}
+        known = lambda: pane_dirs | {d["path"] for d in history_dirs(40)}
+        cwd = create_dir(request.get("cwd"), known)
+    except (BridgeError, OSError) as exc:
+        if str(exc).startswith("没创建"): raise
+        raise BridgeError("没创建：读不到 Herdr 的工作区（" + str(exc)[:160] + "）") from exc
     digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     db, previous = receipt_open(state_dir, req_id, digest)
     if previous is not None: return previous
@@ -3864,6 +3896,12 @@ def close_pane(request, prefix, state_dir):
 # tmux on another computer behind a ch-cli route is not listed: local only.
 TMUX_PANE_ID = re.compile(r"%\d{1,9}")
 TMUX_SEP = "\x1f"
+# Some tmux builds do not pass control characters through -F output: they print \x1f as the
+# four characters "\037" (read back as is) or as "_" (utf8_sanitize). For the latter the list is
+# read again with a printable separator; tmux_sep remembers which one this server needs.
+TMUX_SEP_ESCAPED = "\\037"
+TMUX_SEP_PRINTABLE = "\u00a0|hp|\u00a0"
+TMUX_SEP_PLAIN = " |hp| "
 TMUX_FIELDS = ("pid", "pane_id", "pane_pid", "session_name", "window_index", "window_name", "window_active",
                "pane_index", "pane_active", "session_attached", "pane_current_command", "pane_current_path",
                "pane_width", "pane_height", "pane_dead", "window_panes", "pane_title", "session_id")
@@ -3896,7 +3934,8 @@ class TmuxFailed(BridgeError):
 
 
 def tmux_binary():
-    return shutil.which("tmux")
+    # Like the agents: SSH exec shells often miss Homebrew / Linuxbrew / ~/.local/bin on PATH.
+    return find_executable("tmux")
 
 
 def tmux_run(args, timeout=6, data=None):
@@ -3923,18 +3962,41 @@ def tmux_public(pane):
     return {k: v for k, v in pane.items() if not k.startswith("_")}
 
 
+_tmux_sep = {}
+
+
+def tmux_rows(args, fields):
+    """Run a tmux -F list with one field per name and split its lines into fields, coping with
+    builds that escape the 0x1f separator (see TMUX_SEP_ESCAPED). Lines that do not split into
+    exactly len(fields) parts are dropped."""
+    count = len(fields)
+    cached = _tmux_sep.get("sep")
+    order = [cached] if cached else []
+    order += [x for x in (TMUX_SEP, TMUX_SEP_PRINTABLE, TMUX_SEP_PLAIN) if x != cached]
+    for sep in order:
+        out = tmux_run(args + ["-F", sep.join("#{%s}" % f for f in fields)])
+        lines = [x for x in out.split("\n") if x.strip()]
+        if not lines: return []
+        for split in ((sep, TMUX_SEP_ESCAPED) if sep == TMUX_SEP else (sep,)):
+            rows = [x.split(split) for x in lines if len(x.split(split)) == count]
+            if rows:
+                # Control characters came back as "_": the next list asks with a printable one
+                # right away (the plain one for builds that also turn non-ASCII into "_").
+                if sep != TMUX_SEP: _tmux_sep["sep"] = sep
+                return rows
+    return []
+
+
 def tmux_panes():
     """Every live pane of the user's default tmux server, in session / window / pane order.
     Private keys (_pid, _sid, _title) stay in the bridge; tmux_public strips them."""
     if not tmux_binary(): return None
-    try: out = tmux_run(["list-panes", "-a", "-F", TMUX_FORMAT])
+    try: rows = tmux_rows(["list-panes", "-a"], TMUX_FIELDS)
     except TmuxFailed as exc:
         if TMUX_NO_SERVER.search(str(exc)): return []
         raise
     found = []
-    for line in out.split("\n"):
-        parts = line.split(TMUX_SEP)
-        if len(parts) != len(TMUX_FIELDS): continue
+    for parts in rows:
         (server, pane_id, pane_pid, session, win, win_name, win_active, pane_index, pane_active,
          attached, command, path, width, height, dead, win_panes, title, session_id) = parts
         if not TMUX_PANE_ID.fullmatch(pane_id) or dead == "1" or command in TMUX_SKIP: continue
@@ -4223,18 +4285,12 @@ def tmux_send(request, state_dir):
 
 
 # ─── New and closed tmux sessions ───────────────────────────────────────────
-def tmux_known_dirs():
-    found = set()
-    for pane in tmux_panes() or []:
-        if pane["cwd"].startswith("/"): found.add(pane["cwd"])
-    return found
-
-
 def tmux_info(request):
     """Directories to offer for a new session: where tmux panes are now, then recent history."""
     available = tmux_binary() is not None
+    panes = (tmux_panes() or []) if available else []
     dirs, seen = [], set()
-    for pane in (tmux_panes() or []) if available else []:
+    for pane in panes:
         path = pane["cwd"]
         try: real = os.path.realpath(path)
         except (OSError, ValueError): continue
@@ -4246,7 +4302,7 @@ def tmux_info(request):
         real = os.path.realpath(d["path"])
         if real in seen: continue
         seen.add(real); dirs.append({"path": d["path"], "source": "history", "modified": d["modified"]})
-    sessions = sorted({p["session"] for p in (tmux_panes() or [])}) if available else []
+    sessions = sorted({p["session"] for p in panes})
     return {"available": available, "home": str(Path.home()), "dirs": dirs[:16], "sessions": sessions[:TMUX_MAX]}
 
 
@@ -4264,9 +4320,15 @@ def tmux_new(request, state_dir):
     # A request already handled answers from its receipt before any check against today's state.
     done = receipt_peek(state_dir, req_id, digest)
     if done is not None: return done
-    panes = tmux_panes() or []
-    if name and any(p["session"] == name for p in panes): raise BridgeError("没创建：已经有叫 " + name + " 的 tmux 会话了")
-    cwd = create_dir(request.get("cwd"), lambda: tmux_known_dirs() | {d["path"] for d in history_dirs(40)})
+    # Reads only so far: a failure (a tmux server of another version, a hung server) created nothing.
+    try:
+        panes = tmux_panes() or []
+        if name and any(p["session"] == name for p in panes): raise BridgeError("没创建：已经有叫 " + name + " 的 tmux 会话了")
+        known = {p["cwd"] for p in panes if p["cwd"].startswith("/")}
+        cwd = create_dir(request.get("cwd"), lambda: known | {d["path"] for d in history_dirs(40)})
+    except (BridgeError, OSError) as exc:
+        if str(exc).startswith("没创建"): raise
+        raise BridgeError("没创建：读不到 tmux（" + str(exc)[:160] + "）") from exc
     db, previous = receipt_open(state_dir, req_id, digest, "上次新建的结果未知：先刷新列表看看，别直接重试")
     if previous is not None: return previous
     try:
@@ -4274,18 +4336,40 @@ def tmux_new(request, state_dir):
         try: out = tmux_run(args, timeout=10)
         except TmuxFailed as exc:
             receipt_save(db, req_id, {"created": False})
+            if re.search(r"(?i)unknown option|usage:", str(exc)):
+                raise BridgeError("没创建：这台电脑上的 tmux 太旧（要 1.9 或更新），升级一下再试") from exc
             raise BridgeError("没创建：tmux 没接受（" + str(exc)[:160] + "）") from exc
         except BridgeError as exc:
             raise BridgeError("新建结果未知：tmux 没及时回应。先刷新列表看看，别直接重试") from exc
-        parts = out.strip().split(TMUX_SEP)
-        pane_id = parts[0] if parts and TMUX_PANE_ID.fullmatch(parts[0]) else ""
-        result = {"created": True, "session": parts[1][:120] if len(parts) > 1 else (name or ""), "cwd": cwd, "pane": None}
-        pane = next((p for p in tmux_panes() or [] if p["pane_id"] == pane_id), None) if pane_id else None
-        if pane: result["pane"] = tmux_public(pane)
+        # "%7\x1fscratch"; some builds print the separator as "\037" or "_" (pane ids are digits).
+        made = re.match(r"(%\d{1,9})(?:\x1f|\\037|_)(.*)", out.strip())
+        pane_id, session = (made.group(1), made.group(2)[:120]) if made else ("", name or "")
+        result = {"created": True, "session": session, "cwd": cwd, "pane": None}
+        receipt_save(db, req_id, result)
+        try: pane = tmux_new_pane(pane_id, session, {p["pane_id"] for p in panes})
+        except BridgeError: pane = None
+        if pane: result.update(pane=tmux_public(pane), session=pane["session"])
         receipt_save(db, req_id, result)
         return result
     finally:
         db.close()
+
+
+def tmux_new_pane(pane_id, session, before):
+    """The new session's pane, once its shell runs: for a moment after new-session the pane's
+    foreground process is still tmux's own child (pane_current_command "tmux"), which the list
+    would show as the command. Looks for at most about a second; never fails the create."""
+    pane = None
+    for attempt in range(6):
+        panes = tmux_panes() or []
+        if pane_id: pane = next((p for p in panes if p["pane_id"] == pane_id), None)
+        else:
+            # The -P output was not readable: the one pane that was not there before, in that session.
+            fresh = [p for p in panes if p["pane_id"] not in before and (not session or p["session"] == session)]
+            pane = fresh[0] if len(fresh) == 1 else None
+        if not pane or pane.get("command") != "tmux": return pane
+        time.sleep(0.2)
+    return pane
 
 
 def tmux_kill(request, state_dir):
@@ -4582,7 +4666,11 @@ def handle(request, state_dir=None):
             return call(prefix + ["pane", "read", target, "--source", "recent-unwrapped", "--lines", "400"])
         return mutate(request, prefix, pane, state_dir or Path.home() / ".local/state/herdr-pocket")
     if op in ("createInfo", "create"):
-        prefix = select_session(request)
+        try: prefix = select_session(request)
+        except BridgeError as exc:
+            # Nothing was created: the phone shows this in the sheet and lets the person try again.
+            if op == "create": raise BridgeError("没创建：" + str(exc)) from exc
+            raise
         if op == "createInfo": return create_info(prefix)
         return create_agent(request, prefix, state_dir or Path.home() / ".local/state/herdr-pocket")
     if op == "hidden": return hidden_records(request, state_dir or Path.home() / ".local/state/herdr-pocket")

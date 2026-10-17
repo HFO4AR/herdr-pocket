@@ -15,8 +15,18 @@ from test_bridge import bridge
 from test_tmux import row
 
 FAKE = r'''#!%s
-import json, os, sys
+import json, os, re, sys
 st = json.load(open(os.environ["FAKE_TMUX_STATE"]))
+def save(): json.dump(st, open(os.environ["FAKE_TMUX_STATE"], "w"))
+def sep():
+    """The separator of the -F format, as this fake build prints it: "escaped" builds write \x1f as
+    \037, "sanitize" builds turn every control or non-ASCII character into "_" (older tmux)."""
+    fmt = args[args.index("-F") + 1]
+    found = re.search(r"\}(.*?)#\{", fmt)
+    value = found.group(1) if found else "\x1f"
+    if st.get("mode") == "escaped": value = value.replace("\x1f", "\\037")
+    if st.get("mode") == "sanitize": value = "".join(c if 0x1f < ord(c) < 0x7f else "_" for c in value)
+    return value
 args = sys.argv[1:]
 data = sys.stdin.read() if "load-buffer" in args else None
 with open(os.environ["FAKE_TMUX_LOG"], "a") as f:
@@ -28,13 +38,20 @@ if fail:
 if cmd == "list-panes" and "-s" in args:
     sys.stdout.write("".join(c + "\n" for c in st.get("session_cmds", ["bash"])))
 elif cmd == "list-panes":
-    sys.stdout.write("".join("\x1f".join(r) + "\n" for r in st["rows"]))
+    # A new pane shows tmux's own child as its command for a moment, then the shell.
+    if st.get("settle"):
+        st["settle"] -= 1
+        if not st["settle"]:
+            for r in st["rows"]:
+                if r[10] == "tmux": r[10] = "bash"
+        save()
+    sys.stdout.write("".join(sep().join(r) + "\n" for r in st["rows"]))
 elif cmd == "capture-pane":
     target = args[args.index("-t") + 1]
     sys.stdout.write(st.get("screens", {}).get(target, "$ "))
 elif cmd == "new-session":
-    st["rows"].append(st["new_row"]); json.dump(st, open(os.environ["FAKE_TMUX_STATE"], "w"))
-    sys.stdout.write(st["new_row"][1] + "\x1f" + st["new_row"][3] + "\n")
+    st["rows"].append(st["new_row"]); save()
+    sys.stdout.write(st["new_row"][1] + sep() + st["new_row"][3] + "\n")
 ''' % sys.executable
 
 UUID = "12345678-1234-4234-8234-123456789012"
@@ -64,6 +81,9 @@ class TmuxOnlyTests(unittest.TestCase):
         # PATH: the fake tmux only. HOME: an empty folder, so ~/.local/bin/herdr does not exist either.
         env = {"PATH": str(self.dir / "bin"), "HOME": str(self.home), "FAKE_TMUX_STATE": str(self.state_file), "FAKE_TMUX_LOG": str(self.log)}
         p = patch.dict(os.environ, env, clear=True); p.start(); self.addCleanup(p.stop)
+        # Only the fixture's tmux: not the one this machine may have in /usr/local/bin or Linuxbrew.
+        d = patch.object(bridge, "SYSTEM_BIN_DIRS", ()); d.start(); self.addCleanup(d.stop)
+        self.addCleanup(bridge._tmux_sep.clear)
         h = patch.object(bridge.Path, "home", return_value=self.home); h.start(); self.addCleanup(h.stop)
         # Fake process tree: 200 is a shell running Claude (201), 300 a node launcher of Codex.
         self.procs = {
@@ -159,6 +179,62 @@ class TmuxOnlyTests(unittest.TestCase):
         self.state["fail"] = {}; self.save(); self.reset_log()
         self.assertEqual(self.h(**req), {"created": False})
         self.assertFalse(any(a[1] == "new-session" for a in self.argvs()))
+
+    def test_new_session_on_tmux_that_escapes_the_separator(self):
+        # Older / other builds print \x1f as "\037" or "_": the list and the new pane still come through.
+        for i, mode in enumerate(("escaped", "sanitize")):
+            with self.subTest(mode=mode):
+                self.state["mode"] = mode; self.state["rows"] = self.state["rows"][:3]; self.save()
+                self.assertEqual([p["pane_id"] for p in self.panes()], ["%0", "%1", "%2"])
+                self.assertEqual(self.pane("%1")["session"], "main")
+                r = self.h(op="tmuxNew", id="4234567%d-1234-4234-8234-123456789012" % i, cwd="~/notes")
+                self.assertEqual((r["created"], r["session"], r["pane"]["pane_id"], r["pane"]["cwd"]), (True, "scratch", "%7", str(self.home / "notes")))
+        # The sanitizing build is asked again with a printable separator, not given up on.
+        formats = [a[a.index("-F") + 1] for a in self.argvs() if a[1] == "list-panes" and "-a" in a]
+        self.assertTrue(any(" |hp| " in f for f in formats))
+
+    def test_new_pane_waits_for_its_shell(self):
+        # Right after new-session the pane runs tmux's own child; the answer names the shell.
+        self.state["new_row"][10] = "tmux"; self.state["settle"] = 3; self.save()
+        with patch.object(bridge.time, "sleep", lambda s: None):
+            r = self.h(op="tmuxNew", id=UUID, cwd="~/notes")
+        self.assertEqual(r["pane"]["command"], "bash")
+
+    def test_new_session_directories(self):
+        notes = str((self.home / "notes").resolve())
+        for i, cwd in enumerate(("~", "~/", "~/notes/", "notes", str(self.home) + "/")):
+            with self.subTest(cwd=cwd):
+                r = self.h(op="tmuxNew", id="5234567%d-1234-4234-8234-123456789012" % i, cwd=cwd)
+                self.assertEqual(r["cwd"], notes if "notes" in cwd else str(self.home.resolve()))
+        # A directory outside $HOME that a pane uses through a symlink: compared by its real path.
+        real = self.dir / "mnt/E/proj"; real.mkdir(parents=True); link = self.dir / "linked"; link.symlink_to(self.dir / "mnt/E")
+        self.state["rows"][0][11] = str(link / "proj"); self.save()
+        r = self.h(op="tmuxNew", id="6234567%d-1234-4234-8234-123456789012" % 0, cwd=str(real))
+        self.assertEqual(r["cwd"], str(real.resolve()))
+        for cwd in ("~root", "~root/x"):
+            with self.subTest(cwd=cwd), self.assertRaisesRegex(bridge.BridgeError, "没创建：只能用自己的家目录"):
+                self.h(op="tmuxNew", id="7234567%d-1234-4234-8234-123456789012" % len(cwd), cwd=cwd)
+
+    def test_tmux_outside_path_is_found(self):
+        # SSH exec shells often lack Homebrew / Linuxbrew on PATH; tmux there is still used.
+        brew = self.dir / "brew/bin"; brew.mkdir(parents=True); (brew / "tmux").write_text(FAKE); (brew / "tmux").chmod(0o755)
+        with patch.dict(os.environ, {"PATH": str(self.dir / "nothing")}), patch.object(bridge, "SYSTEM_BIN_DIRS", (str(brew),)):
+            self.assertTrue(self.h(op="doctor")["tmux"])
+            self.assertEqual([p["pane_id"] for p in self.panes()], ["%0", "%1", "%2"])
+
+    def test_unreadable_server_is_a_clean_refusal(self):
+        # A running server of another tmux version: nothing was created, so the sheet may try again.
+        self.state["fail"] = {"list-panes": "protocol version mismatch (client 8, server 7)"}; self.save(); self.reset_log()
+        with self.assertRaisesRegex(bridge.BridgeError, "^没创建：读不到 tmux（protocol version mismatch"):
+            self.h(op="tmuxNew", id=UUID, cwd=self.proj)
+        self.assertFalse(any(a[1] == "new-session" for a in self.argvs()))
+        self.state["fail"] = {}; self.save()
+        self.assertTrue(self.h(op="tmuxNew", id=UUID, cwd=self.proj)["created"], "no receipt was taken")
+
+    def test_old_tmux_without_new_session_options(self):
+        self.state["fail"] = {"new-session": "unknown option -- c\nusage: new-session [-d] [-n window-name] [-s session-name]"}; self.save()
+        with self.assertRaisesRegex(bridge.BridgeError, "没创建：这台电脑上的 tmux 太旧"):
+            self.h(op="tmuxNew", id=UUID, cwd=self.proj)
 
     def test_info_offers_tmux_dirs_and_sessions(self):
         info = self.h(op="tmuxInfo")

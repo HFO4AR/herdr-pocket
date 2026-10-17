@@ -232,8 +232,10 @@ function livePage(main){
  const counts=S.agents.length&&!S.liveError&&!(S.liveLoading&&!S.agents.length);
  actions.append(counts?liveStatus():el('span','grow'),ib('refresh','刷新会话',loadLive));
  // With no sessions the empty state carries the one 新建 button.
- if(S.device&&S.session&&S.agents.length)actions.append(createButton());
+ if(S.device&&S.session&&(S.agents.length||typeof newPendingHere==='function'&&newPendingHere().length))actions.append(createButton());
  main.append(actions);
+ // Starts still on their way (create.js 正在启动) go first, also above an empty or loading list.
+ const starting=typeof newPendingSection==='function'?newPendingSection(main):0;
  if(S.liveLoading&&!S.agents.length){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并关联历史记录…');skeleton(main,3);return;}
  if(S.liveError){empty(main,'会话读取失败',S.liveError,btn('重新读取','primary',loadLive));return;}
  if(S.agents.length)glanceKick();
@@ -246,7 +248,7 @@ function livePage(main){
  function draw(){list.replaceChildren();const q=S.agents.length>8?S.search.trim().toLowerCase():'';const matches=S.agents.filter(a=>liveMatch(a,q)&&(!S.liveProject||(projectOf(a)||'其他')===S.liveProject));
   if(!matches.length){
    if(q||S.liveProject)empty(list,'没有匹配的 Agent','换个关键词，或者看看全部会话。',btn('清除筛选','secondary',()=>{S.search='';S.liveProject='';render();}));
-   else empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&(S.session||tmuxCan())?createButton():undefined);
+   else if(!starting)empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&(S.session||tmuxCan())?createButton():undefined);
    return;}
   // 子 Agent 运行中 (kids.js) sits with 执行中: the agent is not done while its sub-agents work.
   // An idle Codex with an unanswered question (glance.js) waits for you too.

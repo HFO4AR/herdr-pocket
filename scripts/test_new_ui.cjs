@@ -143,17 +143,77 @@ const newAgent=(status,extra={})=>({pane_id:'w1:p9',identity:'id-new',agent:'cla
  await page.close();
  console.log('PASS: refused, unknown and failed starts are reported in place without retries');}
 
-// 5. Agent not visible yet: the tab exists, the chat opens once Herdr shows it.
+// 5. Agent not visible yet: the sheet answers in seconds, a 正在启动 row is on the list right away,
+//    and the chat opens (first message sent) once Herdr shows the agent. Never a second create.
 {const page=await fresh();await live(page);
- await page.evaluate(a=>{fx.created={created:true,kind:'ch',pane_id:'w1:p9',state:'starting',detected:false};fx.newAgent=a;fx.newVisible=false;},newAgent('idle'));
+ await page.evaluate(a=>{fx.created={created:true,kind:'codex',cwd:'/home/me/IterxAI/stm32_host',pane_id:'w1:p9',tab_id:'w1:t5',state:'starting',new_workspace:false};fx.newAgent=a;fx.newVisible=false;},newAgent('idle',{agent:'codex',cwd:'/home/me/IterxAI/stm32_host'}));
  await page.getByRole('button',{name:'新建会话',exact:true}).click();
- await page.getByRole('dialog',{name:'新建会话'}).getByRole('button',{name:'开始新建',exact:true}).click();
- await page.getByText('标签页开好了，Codex 还在启动，出来后自动打开',{exact:true}).waitFor();
+ const sheet=page.getByRole('dialog',{name:'新建会话'});
+ await sheet.getByRole('textbox',{name:'第一条消息',exact:true}).fill('跑一下测试');
+ await sheet.getByRole('button',{name:'开始新建',exact:true}).click();
+ await page.getByText('标签页开好了，Codex 正在启动，出来后自动打开',{exact:true}).waitFor();
+ const row=page.getByRole('button',{name:/^正在启动 Codex… · stm32_host/});
+ await row.waitFor();
+ assert.equal(await page.getByRole('dialog').count(),0,'the sheet is gone at once');
  assert.equal(await page.evaluate(()=>!!S.chat),false);
+ assert.equal(await page.locator('.new-pending-label').textContent(),'正在启动1');
+ await row.getByText('标签页开好了，等它出来',{exact:true}).waitFor();
+ await page.evaluate(()=>document.getElementById('toast').classList.remove('show'));await page.waitForTimeout(350);
+ await page.screenshot({path:path.join(folder,'new-starting-390.png')});
+ await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});await page.waitForTimeout(150);
+ await page.screenshot({path:path.join(folder,'new-starting-390-dark.png')});
+ await page.evaluate(()=>{document.documentElement.dataset.theme='light';});
+ // The row explains and offers the terminal; nothing starts again from here.
+ await row.click();
+ const info=page.getByRole('dialog',{name:'正在启动 Codex'});
+ await info.getByText(/新标签页已经开好了（w1:p9），Codex 正在启动/).waitFor();
+ await info.getByText(/不会再启动一次/).waitFor();
+ await info.getByRole('button',{name:'去终端看看',exact:true}).waitFor();
+ await page.waitForTimeout(450);// the sheet's rise animation
+ await page.screenshot({path:path.join(folder,'new-starting-sheet-390.png')});
+ await info.getByRole('button',{name:'关闭',exact:true}).click();
+ // Polled with the cheap status read; the agent shows up → its chat opens, the message goes out once.
+ await page.waitForFunction(()=>fx.calls.filter(c=>c.op==='status').length>=2,null,{timeout:8000});
  await page.evaluate(()=>{fx.newVisible=true;});
- await page.waitForFunction(()=>S.chat?.agent?.pane_id==='w1:p9',null,{timeout:12000});
+ await page.waitForFunction(()=>S.chat?.agent?.pane_id==='w1:p9',null,{timeout:8000});
+ await page.waitForFunction(()=>fx.calls.some(c=>c.op==='prompt'));
+ const prompts=await calls(page,'prompt');
+ assert.equal(prompts.length,1);assert.equal(prompts[0].text,'跑一下测试');assert.equal(prompts[0].target,'w1:p9');
+ assert.equal((await calls(page,'create')).length,1,'one create, never repeated');
+ await page.getByRole('button',{name:'返回列表',exact:true}).click();
+ await page.getByRole('button',{name:/检查设备显示/}).waitFor();
+ assert.equal(await page.locator('.new-pending').count(),0,'no 正在启动 row once the agent is listed');
  await page.close();
- console.log('PASS: a slow start opens the chat once the agent appears');}
+ console.log('PASS: a slow start answers at once, shows 正在启动 and opens the chat once the agent appears');}
+
+// 5b. It never shows up: the row says so, then stops asking; 不等了 removes it, nothing is retried.
+{const page=await fresh();await live(page);
+ await page.evaluate(()=>{fx.created={created:true,kind:'claude',cwd:'/home/me/notes',pane_id:'w7:p1',state:'starting',new_workspace:true};fx.newVisible=false;});
+ await page.getByRole('button',{name:'新建会话',exact:true}).click();
+ const sheet=page.getByRole('dialog',{name:'新建会话'});
+ await sheet.getByRole('radio',{name:'Claude',exact:true}).click();
+ await sheet.getByRole('button',{name:'开始新建',exact:true}).click();
+ await page.getByRole('button',{name:/^正在启动 Claude…/}).waitFor();
+ await page.evaluate(()=>{NEW.pending[0].at-=50000;});
+ const slow=page.getByRole('button',{name:/^Claude 还没出现/});await slow.waitFor({timeout:5000});
+ await slow.getByText('等得有点久，点开看看',{exact:true}).waitFor();
+ await page.evaluate(()=>document.getElementById('toast').classList.remove('show'));await page.waitForTimeout(350);
+ await page.screenshot({path:path.join(folder,'new-slow-390.png')});
+ await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});await page.waitForTimeout(150);
+ await page.screenshot({path:path.join(folder,'new-slow-390-dark.png')});
+ await page.evaluate(()=>{document.documentElement.dataset.theme='light';});
+ await page.evaluate(()=>{NEW.pending[0].at-=100000;});
+ await slow.getByText('没等到，去电脑上看看那个标签页',{exact:true}).waitFor({timeout:5000});
+ assert.equal(await page.evaluate(()=>NEW.pending[0].state),'lost');
+ await slow.click();
+ const info=page.getByRole('dialog',{name:'Claude 还没出现'});
+ await info.getByText(/新工作区已经开好了（w7:p1），可 Claude 一直没出现/).waitFor();
+ await info.getByRole('button',{name:'不等了',exact:true}).click();
+ await page.getByText('不等了，标签页还留在电脑上',{exact:true}).waitFor();
+ assert.equal(await page.locator('.new-pending').count(),0);
+ assert.equal((await calls(page,'create')).length,1);assert.equal((await calls(page,'prompt')).length,0);
+ await page.close();
+ console.log('PASS: a start that never shows up says so, stops waiting, and is never retried');}
 
 // 6. Small screens: no horizontal overflow, the sheet fits.
 for(const [w,h] of [[320,640],[390,844]]){
