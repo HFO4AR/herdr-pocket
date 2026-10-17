@@ -1,0 +1,68 @@
+/* 文件 (sftp.js): folder browser, transfer dock and sheets. Tokens from app.css; rows reuse files.css chips. */
+.files-head .avatar.files-av,.files-row .avatar.files-av{background:var(--soft);color:var(--accent)}
+.files-head .files-av svg,.files-row .files-av svg{width:19px;height:19px}
+.files-sub{max-width:100%}
+.files-crumbs{display:flex;align-items:center;gap:2px;min-height:44px;padding:0 var(--sp-3);overflow-x:auto;scrollbar-width:none;background:var(--bg);border-bottom:1px solid var(--line);flex-shrink:0;white-space:nowrap}
+.files-crumbs::-webkit-scrollbar{display:none}
+.files-crumb{display:inline-flex;align-items:center;gap:5px;flex-shrink:0;min-height:40px;padding:0 8px;border-radius:8px;font-size:var(--fs-sm);color:var(--muted);max-width:60vw;overflow:hidden;text-overflow:ellipsis}
+.files-crumb svg{width:15px;height:15px}
+.files-crumb.here{color:var(--ink);font-weight:600}
+.files-crumb:active{background:var(--press);transform:none}
+.files-sep{color:var(--faint);font-size:var(--fs-sm);flex-shrink:0}
+.files-crumb-wait{color:var(--faint);font-size:var(--fs-sm);padding:0 8px}
+.files-main{padding-top:var(--sp-2)}
+.files-bar{min-height:44px;margin:0 2px 4px}
+.files-facts{display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--fs-xs);color:var(--muted);white-space:nowrap;overflow:hidden}
+.files-hidden-note{color:var(--faint)}
+.files-sort{flex-shrink:0}
+.files-card{margin-bottom:var(--sp-3)}
+.file-row-wrap{display:flex;align-items:stretch;min-width:0;background:var(--surface)}
+.file-row-wrap+.file-row-wrap,.file-up+.file-row-wrap{border-top:1px solid var(--line)}
+.file-row-wrap.picked,.file-row-wrap.picked .file-row{background:var(--soft)}
+.file-row{flex:1;min-width:0;min-height:58px;padding:7px 4px 7px 14px;gap:12px}
+.file-row .file-badge{width:34px;height:38px}
+.file-row .file-text{min-width:0}
+.file-row .file-name{font-size:var(--fs-md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-icon{display:grid;place-items:center;flex-shrink:0;width:34px;height:38px;border-radius:7px;background:var(--sunken);color:var(--muted)}
+.file-icon svg{width:20px;height:20px}
+.file-icon.dir{background:var(--soft);color:var(--accent)}
+.file-icon.link{color:var(--ink-2)}
+.file-icon.busy svg{animation:connection-spin 1.4s linear infinite}
+.file-up .file-name{color:var(--ink-2)}
+.file-more{flex-shrink:0;color:var(--faint);border-radius:0}
+.file-check{display:grid;place-items:center;flex-shrink:0;width:24px;height:24px;border-radius:7px;border:2px solid var(--line-strong);color:transparent}
+.file-check svg{width:15px;height:15px}
+.file-check.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.files-loading{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:var(--fs-sm);padding:var(--sp-3) 4px}
+.files-error{text-align:center;padding:var(--sp-5) var(--sp-4);color:var(--muted);font-size:var(--fs-sm);background:var(--surface);border:1px solid var(--danger-line);border-radius:var(--radius-card);margin-bottom:var(--sp-3)}
+.files-error h2{color:var(--ink);margin-bottom:6px}
+.files-error p{max-width:320px;margin:0 auto;overflow-wrap:anywhere}
+.files-error-actions{display:flex;gap:10px;justify-content:center;margin-top:var(--sp-4);flex-wrap:wrap}
+.files-note{margin-top:var(--sp-4)}
+/* Dock above the gesture area: transfers in progress, or the selection actions. */
+.files-dock{display:none;flex-shrink:0;padding:8px var(--sp-3) 10px;background:var(--surface);border-top:1px solid var(--line)}
+.files-dock.show{display:block}
+.files-dock-btn{display:flex;align-items:center;gap:12px;width:100%;min-height:52px;padding:4px 6px;border-radius:var(--radius-control);text-align:left}
+.files-dock-btn:active{background:var(--press);transform:none}
+.files-progress{display:block;height:4px;border-radius:2px;background:var(--sunken);overflow:hidden;margin-top:5px}
+.files-progress>span{display:block;height:100%;background:var(--accent);border-radius:2px;transition:width .3s var(--ease)}
+.files-select-bar{display:flex;align-items:center;gap:6px;min-height:48px;font-size:var(--fs-sm);font-weight:600}
+.files-select-bar .secondary{flex-shrink:0;padding:0 10px}
+.files-select-bar .secondary svg{width:16px;height:16px}
+.danger-text{color:var(--danger)}
+.menu-item.danger-item,.menu-item.danger-item svg{color:var(--danger)}
+.files-input{font-family:var(--mono);font-size:var(--fs-md)}
+.files-all{display:flex;align-items:center;gap:10px;min-height:44px;font-size:var(--fs-sm);color:var(--ink-2)}
+.files-all input{width:20px;height:20px;accent-color:var(--accent)}
+.files-choices{display:flex;flex-direction:column;gap:8px;margin-top:var(--sp-3)}
+.files-choices button{flex-direction:column;align-items:flex-start;gap:1px;min-height:52px;padding:6px var(--sp-4);text-align:left}
+.files-choices small{font-size:var(--fs-xs);font-weight:400;opacity:.8;overflow-wrap:anywhere}
+.transfer-list{display:flex;flex-direction:column;gap:2px;margin:0 -4px}
+.transfer-row{display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--line)}
+.transfer-row:last-child{border-bottom:0}
+.transfer-row .file-text{min-width:0}
+.transfer-row.failed .file-meta:first-of-type{color:var(--danger);white-space:normal}
+.transfer-row.done .file-icon{background:var(--success-soft);color:var(--success)}
+.transfer-where{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.transfer-acts{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.files-row .badge.plain{background:var(--soft);color:var(--accent);padding:5px 12px;font-size:12px}

@@ -322,6 +322,24 @@ class SshTransport : AutoCloseable {
             } finally { sftp.disconnect() }
         } finally { release(ssh) }
     }
+    /**
+     * One SFTP channel on the current session for the 文件 screen ([RemoteFiles], [Transfers]); [block]
+     * gets the channel and the home folder. A channel that does not open is [NotSent] (nothing reached
+     * the computer), so the caller may reconnect and try again; [block] itself never runs twice.
+     * The session stays pinned while [block] runs, so a make-before-break reconnect lets a long
+     * transfer finish on the old session.
+     */
+    fun <T> sftp(block: (ChannelSftp, String) -> T): T {
+        val (ssh, gen) = acquire()
+        try {
+            if (!ssh.isConnected) throw NotSent(gen, true, IllegalStateException("SSH 已断开"))
+            val sftp = try { ssh.openChannel("sftp") as ChannelSftp } catch (e: JSchException) { throw NotSent(gen, !ssh.isConnected, e) }
+            try {
+                try { sftp.connect(10000) } catch (e: JSchException) { throw NotSent(gen, !ssh.isConnected, e) }
+                return block(sftp, home)
+            } finally { sftp.disconnect() }
+        } finally { release(ssh) }
+    }
     /** Creates or checks each folder below [base] as a real folder (not a link), 0700. */
     private fun folder(sftp: ChannelSftp, base: String, parts: List<String>): String {
         var path = base

@@ -39,10 +39,14 @@ private const val PICK_CAMERA = 42
 private const val PICK_FILES = 43
 private const val ASK_PHOTOS = 44
 private const val PICK_KEY = 45
+private const val PICK_UPLOAD = 46
+private const val SAVE_AS = 47
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/resume.css", "ui/hops.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/glyphs.css", "ui/ansi.css", "ui/kids.css", "ui/bg.css", "ui/mode.css", "ui/foot.css", "ui/tmux.css", "ui/layout.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/ansi.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/hops.js", "ui/onboard.js", "ui/resume.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/bg.js", "ui/mode.js", "ui/foot.js", "ui/app.js", "ui/tmux.js", "ui/layout.js")
+private const val MAX_UPLOAD_PICK = 50
+
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/create.css", "ui/slash.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/resume.css", "ui/hops.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/glyphs.css", "ui/ansi.css", "ui/kids.css", "ui/bg.css", "ui/mode.css", "ui/foot.css", "ui/tmux.css", "ui/sftp.css", "ui/layout.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/ansi.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/create.js", "ui/slash.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/hops.js", "ui/onboard.js", "ui/resume.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/bg.js", "ui/mode.js", "ui/foot.js", "ui/app.js", "ui/tmux.js", "ui/sftp.js", "ui/layout.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -500,6 +504,19 @@ class MainActivity : Activity() {
                             val bytes = android.util.Base64.decode(data.getString("data"), android.util.Base64.DEFAULT)
                             success(id, ImagePrep.shrink(bytes, if (req.optString("variant") == "full") 1600 else 800))
                         }
+                        // 文件: SFTP over the computer's own SSH session (RemoteFiles / Transfers); no shell, no bridge.
+                        "sftpList", "sftpMkdir", "sftpRename", "sftpDelete" -> success(id, RemoteFiles.op(op, dev(req), req))
+                        "sftpPickUpload" -> runOnUiThread { pickUploads(id) }
+                        "sftpDropPicks" -> { val ids = req.optJSONArray("ids") ?: JSONArray(); for (i in 0 until ids.length()) Transfers.drop(ids.optString(i)); success(id, JSONObject()) }
+                        "sftpUpload" -> success(id, try { Transfers.upload(this@MainActivity, dev(req), req) } catch (e: IllegalArgumentException) { throw Friendly("sftp_name", e.message ?: "名字不行") })
+                        "sftpDownload" -> if (req.optBoolean("saveAs")) runOnUiThread { saveAs(id, req) } else success(id, Transfers.download(this@MainActivity, dev(req), req, null))
+                        "sftpTransfers" -> success(id, Transfers.list())
+                        "sftpCancel" -> success(id, Transfers.cancel(req.getString("transfer")))
+                        "sftpForget" -> success(id, Transfers.forget())
+                        "sftpOpen" -> {
+                            val intent = Transfers.intent(req.getString("transfer"), req.optBoolean("share"))
+                            runOnUiThread { try { startActivity(intent); success(id, JSONObject()) } catch (e: ActivityNotFoundException) { failure(id, IllegalStateException("手机上没有能打开这种文件的应用")) } }
+                        }
                         "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> success(id, core.terminal(dev(req), op, req))
                         // The phone's SSH key (SshIdentity). Only the public half ever reaches the page.
                         "identity" -> success(id, core.identity.info())
@@ -579,6 +596,47 @@ class MainActivity : Activity() {
         }
     }
 
+    /** 文件 → 上传: any number of documents (Storage Access Framework, no storage permission). */
+    private fun pickUploads(id: String) {
+        if (pickId != null) { failure(id, IllegalStateException("正在选文件，先把上一个选完")); return }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        try { pickId = id; startActivityForResult(intent, PICK_UPLOAD) }
+        catch (e: ActivityNotFoundException) { pickId = null; failure(id, IllegalStateException("手机上没找到文件选择器")) }
+    }
+    private fun onUploadsPicked(resultCode: Int, data: Intent?) {
+        val id = pickId ?: return
+        pickId = null
+        val uris = if (resultCode != RESULT_OK) emptyList()
+            else data?.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data?.data)
+        executor.execute {
+            val files = JSONArray(); var failed = 0; var reason = ""
+            for (uri in uris.take(MAX_UPLOAD_PICK)) {
+                // Keep read access while the upload runs, also if this activity is recreated meanwhile.
+                try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { }
+                try { files.put(Transfers.describe(contentResolver, uri)) } catch (e: Exception) { failed++; reason = e.message ?: "" }
+            }
+            success(id, JSONObject().put("files", files).put("failed", failed).put("reason", reason).put("extra", (uris.size - MAX_UPLOAD_PICK).coerceAtLeast(0)).put("cancelled", uris.isEmpty()))
+        }
+    }
+    /** 另存为: the person creates the document (name and place); the download then writes into it. */
+    private var saveReq: JSONObject? = null
+    private fun saveAs(id: String, req: JSONObject) {
+        if (pickId != null) { failure(id, IllegalStateException("正在选位置，先把上一个选完")); return }
+        val name = SftpPath.cleanName(SftpPath.base(req.optString("path")))
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(Transfers.mimeOf(name)).putExtra(Intent.EXTRA_TITLE, name)
+        try { pickId = id; saveReq = req; startActivityForResult(intent, SAVE_AS) }
+        catch (e: ActivityNotFoundException) { pickId = null; saveReq = null; failure(id, IllegalStateException("手机上没找到文件选择器")) }
+    }
+    private fun onSaveAs(resultCode: Int, data: Intent?) {
+        val id = pickId ?: return
+        val req = saveReq; pickId = null; saveReq = null
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null || req == null) { success(id, JSONObject().put("cancelled", true)); return }
+        executor.execute { try { success(id, Transfers.download(this, dev(req), req, uri)) } catch (e: Exception) {
+            try { android.provider.DocumentsContract.deleteDocument(contentResolver, uri) } catch (_: Exception) { }
+            failure(id, RemoteFiles.friendly(e)) } }
+    }
+
     /** Document picker for an existing private key; the file is read natively and never reaches the page. */
     private fun pickKey(id: String) {
         if (pickId != null) { failure(id, IllegalStateException("正在选文件，先把上一个选完")); return }
@@ -614,6 +672,8 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == PICK_FILES) { onFilesPicked(resultCode, data); return }
         if (requestCode == PICK_KEY) { onKeyPicked(resultCode, data); return }
+        if (requestCode == PICK_UPLOAD) { onUploadsPicked(resultCode, data); return }
+        if (requestCode == SAVE_AS) { onSaveAs(resultCode, data); return }
         if (requestCode != PICK_GALLERY && requestCode != PICK_CAMERA) return
         val id = pickId ?: return
         pickId = null

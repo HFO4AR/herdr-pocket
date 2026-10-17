@@ -122,3 +122,13 @@ A Claude Code / Codex process found in a tmux pane of the SSH user (`tmux` op, `
 - `answer`: same request as for Herdr. The receipt is written before the first key; keys are `tmux send-keys Up|Down|Enter`, the text row gets `send-keys -l -- <text>`, and the screen is re-read after every key (`capture-pane`), stopping before Enter on any doubt.
 - `key`: the agent key list; `shift+tab` is sent as `BTab` only while the agent's input footer is on screen and no menu waits.
 - `exitAgent` is refused (close the pane with `tmuxKill`).
+
+## 文件: SFTP browsing and transfers (native, not bridge ops)
+
+These requests never reach the bridge; they run on an SFTP channel of the named computer's own SSH session (`device` is required by the page for each of them), with that SSH user's permissions. A channel that fails to open is "not sent" and retried once after a reconnect, like a bridge request; nothing else is retried.
+
+- `sftpList {device, path}`: `path` is absolute, `~` or `~/…` (normalized on the text, then `realpath`). Returns `{path, home, parent, entries: [{name, type: dir|file|link|other, size, mtime, perm, target?}], truncated, downloads}`; at most 3000 entries; a link gets `target` (`dir`, `file`, `broken`, …) from one `stat`. `downloads` is false below Android 10 (only 另存为 then).
+- `sftpMkdir {device, dir, name}`, `sftpRename {device, path, name}` (same folder, never onto an existing name), `sftpDelete {device, path, recursive?, confirm?}`: refusals carry `code` (`sftp_exists`, `sftp_not_empty`, `sftp_confirm`, `sftp_missing`, `sftp_denied`, `sftp_too_many`, `sftp_partial`, `sftp_name`, …). `recursive` requires `confirm` equal to the folder's name.
+- `sftpPickUpload {}` opens the system document picker (several files, ≤ 50); returns `{files: [{id, name, size}], failed, reason, extra, cancelled}`. `sftpDropPicks {ids}` forgets picks that will not be uploaded.
+- `sftpUpload {device, dir, id, name, mode: new|keep|replace}` and `sftpDownload {device, path, size, saveAs?}` start a transfer and return it at once; `saveAs` first opens the system "create document" screen (`{cancelled: true}` when backed out). A transfer is `{id, device, deviceName, kind: up|down, name, remote, size, done, state: queued|running|done|failed|cancelled, error, where, saved, canOpen}`.
+- `sftpTransfers {}` lists the last 40 (all computers); `sftpCancel {transfer}`; `sftpForget {}` clears finished rows; `sftpOpen {transfer, share?}` opens or shares a finished download (`ACTION_VIEW` / `ACTION_SEND` chooser) by its id.

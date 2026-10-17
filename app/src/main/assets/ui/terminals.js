@@ -49,7 +49,7 @@ function terminalsPage(main){
  const av=el('div','avatar term-av ssh');av.append(icon('globe'));if(live)av.append(el('span','status-dot ok'));
  const info=el('div','grow');info.append(el('div','card-title','SSH 终端'),el('div','card-meta truncate',(S.device?.user||'')+'@'+(S.device?.host||'')));
  const side=el('div','row-side');side.append(el('span','badge '+(live?'ok':T.shell?'muted':'plain'),live?'已打开':T.shell?'已结束':'打开'));
- open.append(av,info,side);sshCard.append(open);main.append(sshCard);
+ open.append(av,info,side);sshCard.append(open);if(typeof filesRow==='function')sshCard.append(filesRow());main.append(sshCard);
  // 2. Herdr's plain panes (not agents), grouped by workspace. No Herdr: tmux lives in 会话.
  if(S.herdr===false){main.append(el('p','fine','这台电脑没装 Herdr。tmux 会话在「会话」里打开；这里的 SSH 终端是手机自己开的 shell。'));pullRefresh(main,loadPanes);return;}
  const label=el('div','section-label group-label');label.append(el('span','','电脑上的 Herdr 窗格'),el('span','group-count',T.loading&&!T.panes.length?'…':String(T.panes.length)));main.append(label);
@@ -252,6 +252,7 @@ function terminalMenu(){const entry=T.view;const box=sheet('终端选项');
  menuItem(box,'选择文字',()=>terminalSelect(entry),'textCursor','长按选择任意一段，含往上的历史');
  menuItem(box,'刷新 / 恢复读取',()=>{if(entry.kind!=='ssh'){entry.readAt=0;entry.paused=false;entry.notice='';paintStatus(entry);}else if(entry.paused){toast('SSH 输入异常后需关闭并重新打开；不自动恢复输入');return;}pollTerminal();},'refresh');
  menuItem(box,'回到底部',()=>termBottom(entry),'down');
+ if(typeof filesTermItem==='function')filesTermItem(box,entry);
  if(entry.kind==='tmux')tmuxMenu(box);
  if(entry.kind==='ssh')menuItem(box,'关闭 SSH shell',()=>confirmAction('关闭 SSH shell？','这会关闭独立 SSH 通道，里面运行的程序可能随之结束。Herdr 窗格不受影响。','关闭 shell',async()=>{try{if(!entry.demo)await rpc('shellClose',{terminalId:entry.id});entry.disposed=true;entry.observer.disconnect();entry.term.dispose();if(T.shell===entry)T.shell=null;leaveTerminal();render();}catch(e){error(e);}},true),'x','里面运行的程序可能随之结束');
  else box.append(el('p','fine','返回列表只退出手机查看，不关闭电脑上的窗格。'));
