@@ -52,13 +52,20 @@ const app=document.getElementById('app'),overlay=document.getElementById('overla
 
 // ─── Feedback ───────────────────────────────────────────────────────────────
 let toastTimer;
-function toast(text){const n=document.getElementById('toast');const c=document.getElementById('composer');n.style.bottom=c?Math.min(c.offsetHeight+14,Math.round(innerHeight*.42))+'px':'';n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>{n.classList.remove('show');
+function toast(text){const n=document.getElementById('toast');toastSpot(n);n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>{n.classList.remove('show');
  // Empty once faded so screen readers never find an old message (aria-hidden toggling made Android WebView drop the next one).
  toastTimer=setTimeout(()=>{n.textContent='';},400);},4200);}
 function error(e){toast(e.message||String(e));}
+// Where the toast may sit without covering what it talks about: above an open sheet, above the
+// composer (with its question card), or under the header when those leave no room.
+function toastSpot(n){
+ const c=document.getElementById('composer'),sh=document.querySelector('#overlay .sheet');let below=0;
+ if(sh)below=sh.offsetHeight+12;else if(c)below=c.offsetHeight+14;
+ if(below&&below>innerHeight*(sh?.66:.45)){const head=document.querySelector('.chat-tabs,.app-header,header');n.style.bottom='auto';n.style.top=(sh?12:Math.round(head?head.getBoundingClientRect().bottom+8:12))+'px';}
+ else{n.style.top='';n.style.bottom=below?below+'px':'';}}
 async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const t=el('textarea');t.value=text;document.body.append(t);t.select();document.execCommand('copy');t.remove();}toast('已复制');}
-function sheet(title){dropGhost();overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);back.onclick=e=>{if(e.target!==back)return;if(body.keepOpen&&body.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();};overlay.append(back);return body;}
-function closeSheet(){ghostSheet();overlay.replaceChildren();}
+function sheet(title){dropGhost();overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);requestAnimationFrame(()=>{const t=document.getElementById('toast');if(t?.classList.contains('show'))toastSpot(t);});back.onclick=e=>{if(e.target!==back)return;if(body.keepOpen&&body.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();};overlay.append(back);return body;}
+function closeSheet(){ghostSheet();overlay.replaceChildren();const t=document.getElementById('toast');if(t?.classList.contains('show'))toastSpot(t);}
 // Exit animation without delaying the real close: an inert copy of the closing sheet lives in a closed
 // shadow root (invisible to queries and assistive tech) and slides away on its own.
 let sheetGhost=null,ghostCss=null;
@@ -233,7 +240,9 @@ function livePage(main){
  actions.append(counts?liveStatus():el('span','grow'),ib('refresh','刷新会话',loadLive));
  // With no sessions the empty state carries the one 新建 button.
  if(S.device&&S.session&&S.agents.length)actions.append(createButton());
- main.append(actions);
+ // Loading, failed and empty pages carry their own status and action (and new agents appear by
+ // themselves): a lone refresh icon over them only looks unfinished.
+ if(counts||S.sessions.length>1)main.append(actions);
  if(S.liveLoading&&!S.agents.length){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并关联历史记录…');skeleton(main,3);return;}
  if(S.liveError){empty(main,'会话读取失败',S.liveError,btn('重新读取','primary',loadLive));return;}
  if(S.agents.length)glanceKick();
@@ -246,6 +255,8 @@ function livePage(main){
  function draw(){list.replaceChildren();const q=S.agents.length>8?S.search.trim().toLowerCase():'';const matches=S.agents.filter(a=>liveMatch(a,q)&&(!S.liveProject||(projectOf(a)||'其他')===S.liveProject));
   if(!matches.length){
    if(q||S.liveProject)empty(list,'没有匹配的 Agent','换个关键词，或者看看全部会话。',btn('清除筛选','secondary',()=>{S.search='';S.liveProject='';render();}));
+   // tmux sessions listed below (tmux.js) are sessions too: only Herdr has no agent yet.
+   else if(typeof tmuxPanes==='function'&&tmuxPanes().length){const n=el('div','herdr-none');n.setAttribute('role','note');const t=el('div','grow');t.append(el('strong','','Herdr 里还没有 Agent'),el('span','fine','新建一个，或者在 Herdr 里启动。'));n.append(t);if(S.device&&S.session)n.append(createButton());list.append(n);}
    else empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&(S.session||tmuxCan())?createButton():undefined);
    return;}
   // 子 Agent 运行中 (kids.js) sits with 执行中: the agent is not done while its sub-agents work.
@@ -413,7 +424,7 @@ function renderComposer(){
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
  if(offline){live.replaceChildren(el('div','compose-note','正在连接 · 显示的是上次的缓存，连上后才能发送'));}else renderLiveState(live,a);
  const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status,later=!offline&&(st==='working'||st==='blocked');
- input.placeholder=offline?'可以先写，连上再发':st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':S.chat.noTranscript?'发给 '+providerName(a.agent)+'…'+(slashKnown(a)?'（/ 看命令）':''):'说点什么，继续这段对话…（/ 看命令）';
+ input.placeholder=offline?'可以先写，连上再发':st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':S.chat.noTranscript?'发给 '+providerName(a.agent)+'…'+(slashKnown(a)?'（/ 看命令）':''):'接着说点什么…（/ 看命令）';
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
  // Busy agent: the button says it will queue, so sending never looks like it failed.
  send.classList.toggle('later',later);send.querySelector('.send-label').textContent=later?'排队':'';send.title=offline?'连上后才能发送':later?'先排队，它停下就发':'发送';
@@ -589,7 +600,10 @@ function historyPage(main){
 function historyFilters(){
  const box=document.getElementById('history-filters');if(!box)return;box.replaceChildren();
  const hidden=new Set(closeHiddenIds()),shown=S.records.filter(r=>!hidden.has(r.id)),more=S.next!==null&&S.next!==undefined?'+':'';
- for(const [id,label,test] of HISTORY_FILTERS){const n=shown.filter(test).length;box.append(chip(label,id==='all'?(S.catalogQuery?S.total:Math.max(n,(S.total||0)-hidden.size)):n+more,S.filter===id,()=>{S.filter=id;renderHistoryList();document.getElementById('history-list')?.scrollIntoView?.({block:'start'});}));}
+ // Nothing read yet (loading, failed or truly empty): a row of zero counts only adds noise.
+ box.classList.toggle('hidden',!S.records.length&&!S.catalogQuery&&!closeHiddenIds().length);
+ // A filter with nothing behind it (and no more pages to read) is left out, unless it is the one on.
+ for(const [id,label,test] of HISTORY_FILTERS){const n=shown.filter(test).length;if(id!=='all'&&!n&&!more&&S.filter!==id&&!S.catalogQuery)continue;box.append(chip(label,id==='all'?(S.catalogQuery?S.total:Math.max(n,(S.total||0)-hidden.size)):n+more,S.filter===id,()=>{S.filter=id;renderHistoryList();document.getElementById('history-list')?.scrollIntoView?.({block:'start'});}));}
  for(const [id,label] of closeHiddenFilter()){const b=btn(label,'pill chip'+(S.filter===id?' active':''),()=>{S.filter=id;renderHistoryList();});b.setAttribute('aria-pressed',String(S.filter===id));box.append(b);}}
 // "找到 12 条" while searching; "正在搜索…" until the debounced read is back.
 function historySummary(){
@@ -613,6 +627,8 @@ function renderHistoryList(){
   else if(S.catalogQuery)empty(list,'没有匹配的记录','换个关键词试试：项目名、标题里的词，或者会话 ID 的开头。',btn('清除搜索','secondary',()=>{S.catalogPending=undefined;S.catalogQuery='';render();loadCatalog('');}));
   else if(S.filter!=='all'&&S.filter!=='hidden'&&more){list.append(el('p','fine center','已读到的记录里没有，继续往下加载…'));}
   else if(S.filter!=='all'&&S.filter!=='hidden')empty(list,'这一类还没有记录','切回「全部」看看。',btn('看全部','secondary',()=>{S.filter='all';renderHistoryList();}));
+  // A failed first read is not an empty history: say so, with the one way forward.
+  else if(S.catalogError&&S.filter!=='hidden'){empty(list,'历史读取失败',S.catalogError,btn('重新读取','primary',()=>loadCatalog('')),'history');return;}
   else if(S.filter!=='hidden')empty(list,'还没有历史记录','只显示当前 SSH 用户的 Codex / Claude 本地历史。开一个会话，聊过的内容会出现在这里。',btn('新建会话','primary',()=>{setTab('live');openCreate();},'plus'));
   if(!more||S.filter==='all'){closeHiddenNote(list);return;}}
  const hidden=new Set(closeHiddenIds());
@@ -627,8 +643,8 @@ function renderHistoryList(){
 async function loadCatalog(query='',more=false){
  if(!S.device)return;if(more&&S.catalogLoading)return;const epoch=++S.epoch;S.catalogLoading=true;
  if(!more&&!S.records.length){renderHistoryList();if(!query)cacheShowCatalog();}else if(more)renderHistoryList();else historySummary();
- try{const r=await remote('catalog',{offset:more?S.next||0:0,query});if(epoch!==S.epoch)return;S.records=more?S.records.concat(r.records):r.records;S.total=r.total;S.next=r.next;S.catalogQuery=query;if(S.catalogPending!==undefined&&S.catalogPending.trim()===query)S.catalogPending=undefined;if(!more&&!query)cacheCatalog();if(!more&&S.tab==='history'){const m=document.querySelector('.main');if(m)m.scrollTop=0;}}
- catch(e){if(epoch===S.epoch)error(e);}
+ try{const r=await remote('catalog',{offset:more?S.next||0:0,query});if(epoch!==S.epoch)return;S.records=more?S.records.concat(r.records):r.records;S.total=r.total;S.catalogError='';S.next=r.next;S.catalogQuery=query;if(S.catalogPending!==undefined&&S.catalogPending.trim()===query)S.catalogPending=undefined;if(!more&&!query)cacheCatalog();if(!more&&S.tab==='history'){const m=document.querySelector('.main');if(m)m.scrollTop=0;}}
+ catch(e){if(epoch===S.epoch){if(!more&&!query&&!S.records.length)S.catalogError=e.message||String(e);else error(e);}}
  finally{if(epoch===S.epoch){S.catalogLoading=false;if(S.tab==='history'&&!S.chat){if(more||query||document.querySelector('.search input:focus'))renderHistoryList();else render();}}}}
 
 // ─── Back & lifecycle ───────────────────────────────────────────────────────

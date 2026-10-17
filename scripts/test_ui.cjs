@@ -22,6 +22,9 @@ await page.getByRole('button',{name:'保存设备',exact:true}).click();
 await page.getByText('密码已加密保存',{exact:true}).waitFor();
 await page.evaluate(()=>connectionPassword(S.devices[0]));
 assert(await page.getByRole('checkbox',{name:'记住本次登录密码',exact:true}).isChecked());
+// A toast never sits on an open sheet's fields and buttons: it goes above the sheet.
+await page.evaluate(()=>toast('提示位置检查'));await page.waitForTimeout(350);
+{const r=await page.evaluate(()=>{const t=document.getElementById('toast').getBoundingClientRect(),s=document.querySelector('#overlay .sheet').getBoundingClientRect();return {t:t.bottom,s:s.top};});assert(r.t<=r.s+1,'toast over the sheet: '+JSON.stringify(r));}
 await page.getByLabel('本次登录密码',{exact:true}).fill('updated-fixture-password');
 await page.getByRole('button',{name:'连接',exact:true}).click();
 await page.getByRole('dialog',{name:'安装配套桥接程序',exact:true}).waitFor();
@@ -59,6 +62,8 @@ assert.equal(await page.getByText('暂时没有会话',{exact:true}).count(),0);
 await page.getByRole('button',{name:'重新读取',exact:true}).click();
 await page.evaluate(()=>nativeResult(pendingRemote.id,{ok:true,data:{sessions:[]}}));
 await page.getByText('暂时没有会话',{exact:true}).waitFor();
+// Failed and empty pages carry their own action: no orphaned refresh icon above them.
+assert.equal(await page.getByRole('button',{name:'刷新会话',exact:true}).count(),0);
 await page.evaluate(async()=>{await disconnect();void doConnect(S.devices[0]);});
 await page.evaluate(()=>nativeResult(pendingConnect,{ok:false,error:'fixture authentication error'}));
 await page.getByText('连接未完成',{exact:true}).waitFor();
@@ -163,6 +168,9 @@ console.log('PASS: missing Herdr ID resolves explicit remote history and preserv
 await page.getByRole('button',{name:'返回列表',exact:true}).click();
 await page.getByRole('button',{name:'设备',exact:true}).click();
 await page.getByText('workstation.local',{exact:true}).waitFor();
+// The demo's device card offers the way out, not bridge updates, a disconnect warning or another demo.
+assert(await page.getByRole('button',{name:'退出演示',exact:true}).isVisible());
+for(const name of ['断开连接','更新桥接程序','体验聊天演示'])assert.equal(await page.getByRole('button',{name,exact:true}).count(),0,name);
 await page.screenshot({path:path.join(folder,'account-browser.png')});
 await page.getByRole('button',{name:'终端',exact:true}).click();
 await page.getByRole('button',{name:/开发终端/}).click();

@@ -63,6 +63,11 @@ await page.getByRole('button',{name:'重试',exact:true}).click();
 await page.getByRole('heading',{name:'会话',exact:true}).waitFor();
 await page.getByRole('button',{name:'历史',exact:true}).click();
 await page.waitForFunction(()=>fx.calls.some(c=>c.a?.op==='catalog'));
+// A failed read is a failure with a retry, not 「还没有历史记录」 under a row of zero counts.
+await page.getByText('历史读取失败',{exact:true}).waitFor();
+assert.equal(await page.getByText('还没有历史记录',{exact:true}).count(),0);
+assert(await page.getByRole('button',{name:'重新读取',exact:true}).isVisible());
+assert(!(await page.locator('#history-filters').isVisible()),'no zero-count filter chips');
 await page.getByRole('button',{name:'设置',exact:true}).click();
 await page.getByText('帮助与反馈',{exact:true}).waitFor();
 await page.getByRole('button',{name:'使用帮助'}).click();

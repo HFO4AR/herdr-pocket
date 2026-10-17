@@ -83,7 +83,7 @@ function resultInfo(r){
 // Small chips after a summary: "+12 −3", "24 通过", "2 失败".
 function tlStat(add,del){const n=el('span','tl-stat');if(add)n.append(el('span','plus','+'+add));if(del)n.append(el('span','minus','−'+del));return n;}
 function tlTests(t){return el('span','tl-test '+(t.fail?'bad':'good'),t.fail?t.fail+' 失败'+(t.pass?' · '+t.pass+' 通过':''):t.pass+' 通过');}
-function tlDiffView(d){const pre=el('pre','tl-diff');const lines=d.lines.slice(0,400);
+function tlDiffView(d){if(!d.lines.length)return el('p','fine tl-diff-none','这次调用没有带改动内容，可以复制原始调用看看。');const pre=el('pre','tl-diff');const lines=d.lines.slice(0,400);
  lines.forEach(x=>pre.append(el('span','d-'+x[0],(x[0]==='add'?'+ ':x[0]==='del'?'− ':x[0]==='hunk'?'':'  ')+x[1])));
  if(d.lines.length>400)pre.append(el('span','d-hunk','… 还有 '+(d.lines.length-400)+' 行'));return pre;}
 // Flat items, used by the 「命令」 view (commandsOnly) and kept for other callers.
@@ -454,7 +454,11 @@ function tlBuild(list,open){
  if(!commandsOnly){count+=slashCards().length;slashRest(list);}
  outboxRows(list,dayMark);
   queueTimeline(list);
- if(!count&&!S.chat.historyError)list.append(el('div','empty small',S.chat.historyLoading?'正在读取对话记录…':commandsOnly?'这段记录里还没有执行过命令。':S.more?'这一页没有可显示的消息，继续加载更早记录。':'这条记录暂无可显示的消息。'));}
+ if(!count&&!S.chat.historyError){
+  if(S.chat.historyLoading||S.more)list.append(el('div','empty small',S.chat.historyLoading?'正在读取对话记录…':'这一页没有可显示的消息，继续加载更早记录。'));
+  // A real empty state, not a stray line over a blank page.
+  else if(commandsOnly)empty(list,'还没有执行过命令','Agent 跑过的命令和输出会列在这里。',undefined,'terminal');
+  else empty(list,'还没有可显示的消息','隐藏推理和系统消息不在这里显示；有新的消息会自动出现。');}}
 // What the app can and cannot do for an agent kind without a transcript reader (app.js noTranscript).
 function noTranscriptNote(withLink){
  const box=el('div','note no-transcript');box.setAttribute('role','note');

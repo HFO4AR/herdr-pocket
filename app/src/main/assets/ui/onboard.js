@@ -51,12 +51,12 @@ function devicesPage(main){
  const head=el('div','section-head');head.append(el('span','section-label','保存的设备'),ib('plus','添加设备',()=>deviceForm()));main.append(head);
  for(const d of S.devices)main.append(deviceCard(d));
  main.append(keyRow());
- main.append(btn('体验聊天演示','secondary wide',startDemo));
+ if(!S.demo)main.append(btn('体验聊天演示','secondary wide',startDemo));
  main.append(el('p','fine','设备资料、勾选保存的密码和登录密钥都用 Android Keystore 加密，只存在这台手机上。'));}
 
 function firstRunGuide(){
  const card=el('section','card ob-guide');const top=el('div','ob-guide-icon');top.append(icon('device'));
- card.append(top,el('h2','','连上你的电脑'),el('p','muted','Herdr Pocket 通过 SSH 连到运行 Herdr 的电脑，在手机上看 Agent 在做什么、回它的消息。'));
+ card.append(top,el('h2','',S.demo?'连上你自己的电脑':'连上你的电脑'),el('p','muted','Herdr Pocket 通过 SSH 连到运行 Herdr 的电脑，在手机上看 Agent 在做什么、回它的消息。'));
  const steps=el('ol','ob-steps');
  const step=(title,detail)=>{const li=el('li');const t=el('div');t.append(el('strong','',title),el('span','',detail));li.append(t);steps.append(li);return li;};
  step('电脑开着 SSH','能用用户名和密码登录；只允许密钥的话，选「密钥」登录。');
@@ -66,7 +66,7 @@ function firstRunGuide(){
  [['同一个 Wi-Fi','填电脑的局域网 IP，比如 192.168.1.20，端口 22。'],['不在一起：Tailscale','两边都登录 Tailscale，填 100. 开头的地址或 xxx.ts.net。'],['不在一起：frp 等转发','填服务器地址和映射出来的端口（不是 22）。']]
   .forEach(([k,v])=>{const r=el('div','ob-net-row');r.append(el('strong','',k),el('span','',v));more.append(r);});
  net.querySelector('div').append(more);
- card.append(steps,btn('添加第一台设备','primary wide',()=>deviceForm()),btn('体验聊天演示','secondary wide',startDemo));
+ card.append(steps,btn('添加第一台设备','primary wide',()=>deviceForm()));if(!S.demo)card.append(btn('体验聊天演示','secondary wide',startDemo));
  const wrap=el('div');wrap.append(card,el('p','fine center','设备资料和密码用 Android Keystore 加密，只存在这台手机上。'));return wrap;}
 
 // 设备 page: at most one filled 连接设备, on the computer you most likely want (the one that just failed,
@@ -101,6 +101,8 @@ function connectionCard(){
  const key=S.device.auth==='key';
  [['SSH 用户',S.account?.ssh_user||S.device.user],['主机地址',S.device.host],['端口',String(S.device.port)],...(S.device.jumps?.length?[['跳板机',hopRoute(S.device)]]:[]),['电脑主机名',S.account?.hostname||'读取中…'],key?['登录方式','这台手机的密钥']:['密码保存',S.device.remember?'已加密保存':'未保存']].forEach(([k,v])=>{const n=el('div','setting-row');n.append(el('span','',k),el('span','',v));card.append(n);});
  if(!key&&!S.demo)card.append(keyCallout());
+ // The demo has nothing to update or disconnect: one plain way out, and what it is.
+ if(S.demo){card.append(btn('退出演示','secondary wide demo-exit',()=>{disconnect().catch(error);toast('已退出演示');}));card.append(el('p','fine','演示里的电脑、会话和对话都是示例，不连接任何电脑，也不会发出消息。'));return card;}
  const actions=el('div','device-actions');actions.append(btn('更新桥接程序','secondary',()=>setupBridge({manual:true})),btn('断开连接','secondary danger',()=>confirmAction('断开当前设备？',(LINKS.ids.length>1?'只断开 '+S.device.name+'，其他连着的电脑不受影响。':'')+'电脑上的 Agent 会继续运行。','断开',()=>(LINKS.ids.length>1?disconnectDevice(S.device.id,false).then(render):disconnect()).catch(error),true)));card.append(actions);
  card.append(el('p','fine','只显示 SSH 连接信息，不读取 Codex / Claude 的登录资料。'));return card;}
 
@@ -124,7 +126,7 @@ function deviceForm(d={}){
  // Optional jump hosts (hops.js), between the login choice and the buttons.
  const hopAnchor=el('div');box.append(hopAnchor);const hops=hopEditor(box,d,hopAnchor,()=>name.value.trim()||host.value.trim(),()=>auth.get());
  // Pasted "user@host:port" is split into the three fields.
- const split=()=>{const s=obSplitAddress(host.value);if(!s)return;host.value=s.host;if(s.port)port.value=s.port;if(s.user&&!user.value.trim())user.value=s.user;if(s.user&&user.value.trim()!==s.user)return;toast('已拆成地址'+(s.user?'、用户名':'')+(s.port?'和端口':''));};
+ const split=()=>{const s=obSplitAddress(host.value);if(!s)return;host.value=s.host;obError(host,'');if(s.port){port.value=s.port;obError(port,'');}if(s.user&&!user.value.trim())user.value=s.user;if(user.value.trim())obError(user,'');if(s.user&&user.value.trim()!==s.user)return;toast('已拆成地址'+(s.user?'、用户名':'')+(s.port?'和端口':''));};
  host.addEventListener('change',split);host.addEventListener('paste',()=>setTimeout(split,0));
  const values=()=>({id:d.id||'',name:name.value.trim(),host:host.value.trim(),port:port.value.trim(),user:user.value.trim()});
  // A tap on the dimmed page must not throw away what was typed (a long form with jump hosts); × still closes.
