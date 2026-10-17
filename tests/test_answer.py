@@ -5,6 +5,7 @@ its permission dialog, and Codex 0.162 approval / request_user_input pickers (st
 reconstructed from their render code and Herdr's detection rules; wording anonymized).
 """
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -134,7 +135,55 @@ CLAUDE_PREVIEW = "\n".join([
 ])
 
 
+# Claude Code 2.1.268's folder-trust dialog as Herdr reads it (live capture; path anonymized):
+# its rows carry no numbers.
+CLAUDE_TRUST = "\n".join([
+    "~/proj",
+    "❯ claude",
+    "",
+    "─" * 100,
+    " Accessing workspace:",
+    "",
+    " /home/me/proj",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If",
+    " not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel",
+])
+
+
 class ParseMenuTests(unittest.TestCase):
+    def test_esc_hint_wrapped_by_a_narrow_pane(self):
+        narrow = CLAUDE_SINGLE.replace("Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+                                       "Enter to select · ↑/↓ to navigate · Esc to\ncancel")
+        self.assertEqual(bridge.parse_menu(narrow, "claude")["esc"], {"action": "cancel", "option": None})
+
+    def test_claude_trust_dialog_is_an_approval(self):
+        menu = bridge.parse_menu(CLAUDE_TRUST, "claude")
+        self.assertEqual((menu["kind"], menu["cursor"], menu["multi"]), ("approval", 1, False))
+        self.assertEqual([(o["n"], o["label"], o["input"], o["chat"]) for o in menu["options"]],
+                         [(1, "No, exit", False, False), (2, "Yes, I trust this folder", False, False)])
+        self.assertIn("/home/me/proj", menu["context"])
+        self.assertEqual(menu["question"], "Is this a project you created or one you trust?")
+        # Esc there is "No, exit": the phone says so instead of "Claude waits for you".
+        self.assertEqual(menu["esc"], {"action": "cancel", "option": 1})
+        moved = CLAUDE_TRUST.replace(" ❯ No, exit", "   No, exit").replace("   Yes, I", " ❯ Yes, I")
+        self.assertEqual(bridge.parse_menu(moved, "claude")["cursor"], 2)
+        self.assertEqual(bridge.parse_menu(moved, "claude")["fingerprint"], menu["fingerprint"])
+        # Anything else drawn the same way is not taken for it.
+        for other in (CLAUDE_TRUST.replace("Yes, I trust this folder", "Yes, continue"),
+                      CLAUDE_TRUST.replace("one you trust?", "one you know"),
+                      CLAUDE_TRUST.replace("   Yes, I trust this folder", "   Yes, I trust this folder\n   Always trust")):
+            self.assertIsNone(bridge.parse_menu(other, "claude"))
+
     def test_claude_question_with_tabs_input_and_chat_rows(self):
         menu = bridge.parse_menu(CLAUDE_SINGLE, "claude")
         self.assertEqual(menu["kind"], "question")
@@ -497,6 +546,78 @@ class AnswerTests(unittest.TestCase):
         with self.assertRaisesRegex(bridge.BridgeError, "changed or disappeared"):
             bridge.handle(request, self.state)
         self.assertEqual(self.writes, [])
+
+    def status(self):
+        return bridge.handle(dict(v=1, op="status", session="default"), self.state)["agents"][0]
+
+    def looks(self):
+        return sum(1 for kind, value in self.writes if kind == "look")
+
+    def test_dialog_herdr_calls_done_is_waiting_and_answered_from_the_screen(self):
+        # Herdr 0.8.2 misses Claude's question when a narrow pane wraps its footer and says "done".
+        self.agent["agent_status"] = "done"
+        row = self.status()
+        self.assertEqual((row["agent_status"], row["screen"], row["herdr_status"]), ("blocked", "menu", "done"))
+        self.assertEqual(row["identity"], bridge.identity(self.agent), "the identity stays Herdr's")
+        read = bridge.handle(dict(v=1, op="read", session="default", target="w1:p1", identity=bridge.identity(self.agent)), self.state)
+        self.assertEqual((read["agent_status"], read["menu"]["kind"]), ("blocked", "question"))
+        # A prompt would pick an option: refused before anything is written.
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它正停在一个提问或选择框上"):
+            bridge.handle(dict(v=1, op="prompt", session="default", target="w1:p1", identity=bridge.identity(self.agent),
+                               id="22345678-1234-4234-8234-123456789012", text="继续"), self.state)
+        self.assertEqual(self.writes, [])
+        # The answer goes through the usual checks: fingerprint, one key at a time, Enter on a verified row.
+        result = self.answer(action="select", option=2, label="写到系统临时目录")
+        self.assertEqual((result["sent"], self.keys(), self.fake.submitted), (True, ["down", "enter"], 2))
+        # Answered: the input box is back, the agent reads as Herdr says again.
+        self.fake.screen = lambda: "● 好。\n\n" + RULE + "\n❯ \n" + RULE + "\n  ? for shortcuts"
+        self.assertEqual(self.status()["agent_status"], "done")
+        self.assertNotIn("screen", self.status())
+
+    def test_screen_is_not_read_again_once_the_box_settled(self):
+        self.agent.update(agent_status="idle", state_change_seq=4)
+        self.fake.screen = lambda: (self.writes.append(("look", None)), "● 好。\n\n" + RULE + "\n❯ \n" + RULE)[1]
+        clock = [1000.0]
+        with patch.object(bridge.time, "time", side_effect=lambda: clock[0]):
+            self.status(); self.status()
+            self.assertEqual(self.looks(), 2, "read while Herdr's state change is fresh")
+            clock[0] += bridge.SCREEN_SETTLE
+            self.status(); self.status(); self.status()
+            self.assertEqual(self.looks(), 3, "box seen after it settled: not read again")
+            # Herdr's state changes (it worked and stopped again): read again.
+            self.agent["state_change_seq"] = 6
+            self.status()
+            self.assertEqual(self.looks(), 4)
+        memo = json.loads((self.state / bridge.SCREEN_MEMO).read_text())
+        self.assertEqual(list(memo), ["term_test"])
+        # Working, blocked and other agents are never read.
+        for status, kind in (("working", "claude"), ("blocked", "claude"), ("idle", "pi")):
+            self.agent.update(agent_status=status, agent=kind, state_change_seq=9)
+            self.status()
+        self.assertEqual(self.looks(), 4)
+
+    def test_slash_picker_is_not_taken_for_a_question(self):
+        # /model opened by the person: no tabs, text row, chat row or checkboxes. Herdr's state stays.
+        self.agent["agent_status"] = "idle"
+        self.fake = FakeMenu(["Default (recommended)", "Opus", "Haiku"])
+        self.assertEqual(self.status()["agent_status"], "idle")
+        # A prompt is still never typed into it.
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它正停在一个提问或选择框上"):
+            bridge.handle(dict(v=1, op="prompt", session="default", target="w1:p1", identity=bridge.identity(self.agent),
+                               id="22345678-1234-4234-8234-123456789012", text="继续"), self.state)
+
+    def test_trust_dialog_is_answered_only_on_request(self):
+        self.agent["agent_status"] = "blocked"
+        self.fake.screen = lambda: CLAUDE_TRUST.replace(" ❯ No, exit\n   Yes", ("   No, exit\n ❯ Yes" if self.fake.cursor == 2 else " ❯ No, exit\n   Yes"))
+        self.fake.labels = ["No, exit", "Yes, I trust this folder"]; self.fake.input_row = self.fake.chat_row = None
+        read = bridge.handle(dict(v=1, op="read", session="default", target="w1:p1", identity=bridge.identity(self.agent)), self.state)
+        self.assertEqual(read["menu"]["kind"], "approval")
+        self.assertEqual(self.writes, [], "reading never answers it")
+        fingerprint = read["menu"]["fingerprint"]
+        result = bridge.handle(dict(v=1, op="answer", session="default", target="w1:p1", identity=bridge.identity(self.agent),
+                                    id="32345678-1234-4234-8234-123456789012", fingerprint=fingerprint, action="select", option=2,
+                                    label="Yes, I trust this folder"), self.state)
+        self.assertEqual((result["sent"], self.keys(), self.fake.submitted), (True, ["down", "enter"], 2))
 
     def test_read_attaches_menu_only_while_blocked(self):
         read = dict(v=1, op="read", session="default", target="w1:p1", identity=bridge.identity(self.agent))

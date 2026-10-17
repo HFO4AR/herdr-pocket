@@ -207,6 +207,8 @@ function qaEscText(menu,a){
  if(esc?.action==='interrupt')return '会中断 '+who+' 这一轮：问题连同它正在做的事一起停下，然后等你发新消息。';
  const row=esc?.option?menu.options.find(o=>o.n===esc.option):null;
  const as=row?'等于选「'+row.label.replace(/\s*\((esc|escape)\)\s*$/i,'')+'」：':'';
+ // Claude's folder-trust dialog: Esc is its "No, exit", and Claude quits.
+ if(row&&/^no\b.*\bexit\b/i.test(row.label))return as+who+' 会直接退出，不会在这个文件夹里干活。';
  if(approval)return (as||'等于拒绝：')+'这一步不会执行，'+who+' 停下来等你说怎么做。';
  return as+who+' 会收到「没有回答」，这一轮停下，等你发新消息。';}
 // Esc goes out only if the same dialog is still on screen; never Enter, never a default option.

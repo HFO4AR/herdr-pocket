@@ -179,7 +179,18 @@ class ShiftTabKeyTests(unittest.TestCase):
 
     def test_shift_tab_goes_to_the_agent(self):
         self.assertTrue(self.send(key="shift+tab")["sent"])
-        self.assertEqual(self.commands, [["agent", "send-keys", "w1:p1", "shift+tab"]])
+        self.assertEqual(self.writes(), [["agent", "send-keys", "w1:p1", "shift+tab"]])
+
+    def writes(self): return [c for c in self.commands if c[1] != "read"]
+
+    def test_never_on_a_dialog_herdr_calls_idle(self):
+        # A narrow pane wraps the permission dialog's footer and Herdr reports the agent idle; the
+        # screen look marks it waiting, so Shift+Tab (= "yes, and don't ask again") is refused.
+        self.screen = "\n".join(["─" * 46, " Bash command", "", "   rm -rf build", "", " Do you want to proceed?",
+                                  " ❯ 1. Yes", "   2. Yes, and don't ask again for rm", "   3. No", "",
+                                  " Esc to cancel · Tab to amend · ctrl+e to", " explain"])
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：Agent 正等你确认"): self.send(key="shift+tab")
+        self.assertEqual(self.writes(), [])
 
     def test_shift_tab_while_working_is_allowed(self):
         self.agent["agent_status"] = "working"; self.agent["agent"] = "codex"
@@ -188,7 +199,7 @@ class ShiftTabKeyTests(unittest.TestCase):
     def test_ch_pane_gets_it_at_the_pane_level(self):
         self.relay = True
         self.send(key="shift+tab")
-        self.assertEqual(self.commands, [["agent", "send-keys", "w1:p1", "shift+tab"], ["pane", "send-keys", "w1:p1", "shift+tab"]])
+        self.assertEqual(self.writes(), [["agent", "send-keys", "w1:p1", "shift+tab"], ["pane", "send-keys", "w1:p1", "shift+tab"]])
 
     def test_never_while_a_question_or_approval_waits(self):
         # On a Claude permission dialog Shift+Tab means "yes, and don't ask again".

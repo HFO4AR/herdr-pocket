@@ -26,7 +26,8 @@ function queueTidy(key){const q=Q.get(key);if(q&&!q.items.length&&!q.inflight)Q.
 // status re-check, which runs before the request is recorded).
 function queueNotSent(msg){return /^没发出去/.test(msg)||/^Agent is busy or waiting for confirmation/.test(msg);}
 // Refusals that clear up on their own once the agent stops; anything else needs a look first.
-function queueTransient(msg){return /停在一个提问或授权框|还没准备好|^Agent is busy/.test(msg);}
+// The bridge's own screen check ("停在一个提问或选择框上": a dialog Herdr still calls idle) clears up once answered.
+function queueTransient(msg){return /停在一个提问或(授权|选择)框|还没准备好|^Agent is busy/.test(msg);}
 // New messages queue up while the agent is busy, and behind anything already waiting (order is kept).
 function queueWants(a,key){return !!a&&(['working','blocked'].includes(a.agent_status)||queueItems(key).length>0);}
 function queueAdd(key,a,text,pics,opts={}){

@@ -11,6 +11,11 @@ const SCREENS={
  q1:claudeScreen('运行日志放在哪里？',['❯ 1. 写到项目目录（推荐）','     放在 logs/ 下，和代码一起忽略提交。','  2. 写到系统临时目录','     重启后会清空，不占项目空间。','  3. Type something.',RULE,'  4. Chat about this'],'←  ☐ 日志位置  ☐ 清理范围  ✔ Submit  →'),
  q2:claudeScreen('这次要清理哪些目录？',['❯ 1. [ ] 构建产物','     dist/ 和 build/。','  2. [ ] 缓存','     .cache/ 下的所有内容。','  3. [ ] Type something','     Next'],'←  ☒ 日志位置  ☐ 清理范围  ✔ Submit  →'),
  scroll:claudeScreen('先修哪个？',['❯ 1. 修登录','     先保证能连上。','  2. 修历史','     翻页会丢消息。','  ↓'],'←  ☐ 先修  ✔ Submit  →'),
+ // Live in a 46-column Herdr pane: the footer wraps and Herdr calls the agent done (the bridge then
+ // reports it blocked with screen:"menu"); Esc's hint is read across the wrap.
+ narrow:['─'.repeat(46),'←  ☐ 工具  ✔ Submit  →','','这个小演示用哪个构建工具？','','❯ 1. [ ] Make','  Classic, widely available build tool','  2. [ ] Just','  Modern command runner','  3. [ ] Type something','     Submit','─'.repeat(46),'  4. Chat about this','','Enter to select · ↑/↓ to navigate · Esc to','cancel'].join('\n'),
+ // Claude's folder-trust dialog (live capture, path anonymized): unnumbered rows.
+ trust:['~/site','❯ claude','','─'.repeat(100),' Accessing workspace:','',' /home/demo/site',''," Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If"," not, take a moment to review what's in this folder first.",''," Claude Code'll be able to read, edit, and execute files here.",'',' Security guide','',' ❯ No, exit','   Yes, I trust this folder','',' Enter to confirm · Esc to cancel'].join('\n'),
  bash:['● 我先清掉旧的构建结果。','',RULE,' Bash command','','   rm -rf dist .cache','   Remove build outputs','',' Do you want to proceed?',' ❯ 1. Yes',"   2. Yes, and don't ask again for rm commands in /home/demo/site",'   3. No, and tell Claude what to do differently (esc)','',' Esc to cancel · Tab to amend · ctrl+e to explain'].join('\n'),
 };
 const menus=JSON.parse(execFileSync('python3',['-c',`
@@ -164,6 +169,45 @@ for(const [width,height] of [[320,640],[844,390],[1024,768]]){
  await page.screenshot({path:path.join(folder,`answer-approval-${width}.png`)});}
 await page.setViewportSize({width:390,height:844});
 console.log('PASS: approval card with command context, responsive at 320/landscape/tablet');
+
+// A question Herdr calls "done" (narrow pane): the bridge's status says blocked with screen:"menu"; the
+// card shows, Esc's wrapped hint is understood, and the answer goes through the normal request.
+assert.deepEqual(menus.narrow.esc,{action:'cancel',option:null});
+await page.evaluate(async()=>{fx.screen='narrow';fx.messages=fx.messages.slice(0,6);
+ fx.agent={...fx.agent,identity:'id-claude-n',agent_status:'blocked',screen:'menu',herdr_status:'done'};S.agents=[fx.agent];S.qaMenu=null;
+ await openAgent(fx.agent);await fetchTerminal(true);});
+const narrow=page.getByRole('group',{name:'Agent 的提问',exact:true});await narrow.waitFor();
+await narrow.getByText('这个小演示用哪个构建工具？',{exact:true}).waitFor();
+assert.match(await page.evaluate(()=>qaEscText(S.qaMenu.menu,S.chat.agent)),/会收到「没有回答」/);
+await narrow.getByRole('checkbox',{name:/Just/}).click();
+await narrow.getByRole('button',{name:'发送回答',exact:true}).click();
+await narrow.getByText('已回答，等它继续…',{exact:true}).waitFor();
+const nq=await page.evaluate(()=>fx.calls.filter(c=>c.op==='answer').at(-1).args);
+assert.deepEqual([nq.action,nq.options,nq.labels,nq.fingerprint,nq.identity],['multi',[2],{'2':'Just'},menus.narrow.fingerprint,'id-claude-n']);
+await page.screenshot({path:path.join(folder,'answer-narrow-done.png')});
+console.log('PASS: a question Herdr calls done is shown as a card and answered with the usual checks');
+
+// Claude's folder-trust dialog: an approval card; nothing is chosen for the person, Esc says it exits.
+assert.equal(menus.trust.kind,'approval');
+const beforeTrust=await page.evaluate(()=>fx.calls.filter(c=>c.op==='answer'||c.op==='key').length);
+await page.evaluate(async()=>{fx.screen='trust';fx.messages=[];
+ fx.agent={...fx.agent,identity:'id-claude-t',agent_status:'blocked'};delete fx.agent.screen;S.agents=[fx.agent];S.qaMenu=null;
+ await openAgent(fx.agent);await fetchTerminal(true);});
+const trust=page.getByRole('group',{name:'等你确认',exact:true});await trust.waitFor();
+await trust.getByText(/one you trust\?/).waitFor();
+assert.deepEqual(await trust.getByRole('radio').allTextContents().then(x=>x.map(t=>t.trim())),['No, exit','Yes, I trust this folder']);
+assert.equal(await trust.getByRole('radio',{checked:true}).count(),0,'no option is preselected');
+assert(await trust.getByRole('button',{name:'确认这个选择',exact:true}).isDisabled(),'nothing to confirm until one is picked');
+assert.equal(await page.evaluate(()=>qaEscText(S.qaMenu.menu,S.chat.agent)),'等于选「No, exit」：Claude 会直接退出，不会在这个文件夹里干活。');
+await page.waitForTimeout(800);
+assert.equal(await page.evaluate(()=>fx.calls.filter(c=>c.op==='answer'||c.op==='key').length),beforeTrust,'never answered on its own');
+await page.screenshot({path:path.join(folder,'answer-trust.png')});
+await trust.getByRole('radio',{name:/Yes, I trust this folder/}).click();
+await trust.getByRole('button',{name:'确认这个选择',exact:true}).click();
+await trust.getByText('已确认，等它继续…',{exact:true}).waitFor();
+const tq=await page.evaluate(()=>fx.calls.filter(c=>c.op==='answer').at(-1).args);
+assert.deepEqual([tq.action,tq.option,tq.label,tq.fingerprint],['select',2,'Yes, I trust this folder',menus.trust.fingerprint]);
+console.log('PASS: folder-trust dialog is an approval card, answered only when the person confirms');
 
 // Codex async question: the agent is idle, the card sits in the timeline and replies as a prompt.
 await page.evaluate(()=>{
