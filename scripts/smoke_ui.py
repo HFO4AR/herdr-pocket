@@ -208,7 +208,9 @@ def main():
     tap('终端');tap('开发终端');screenshot('herdr-terminal')
     fill('终端输入','demo-command');run('shell','input','keyevent','4');tap('执行');expect('终端演示：未发送')
     tap('返回终端列表');tap('打开 SSH 终端');time.sleep(1);screenshot('ssh-terminal')
-    tap('Ctrl+C');expect('终端演示：未发送')
+    # The first notice must be gone first, or a stale toast passes the check; Esc is on screen
+    # without scrolling the key row (Ctrl+C is past the right edge on a phone).
+    expect_gone('终端演示：未发送');tap('Esc');expect('终端演示：未发送')
     tap('返回终端列表');tap('返回 SSH 终端');expect('直接键盘')
     print('PASS: chat, pagination, commands, child isolation, drafts, keyboard, rotation, history and SSH info; no real host calls',flush=True)
 

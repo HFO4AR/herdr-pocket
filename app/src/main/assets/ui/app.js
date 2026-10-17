@@ -52,7 +52,9 @@ const app=document.getElementById('app'),overlay=document.getElementById('overla
 
 // ─── Feedback ───────────────────────────────────────────────────────────────
 let toastTimer;
-function toast(text){const n=document.getElementById('toast');const c=document.getElementById('composer');n.style.bottom=c?Math.min(c.offsetHeight+14,Math.round(innerHeight*.42))+'px':'';n.textContent=text;n.removeAttribute('aria-hidden');n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>{n.classList.remove('show');n.setAttribute('aria-hidden','true');},4200);}
+function toast(text){const n=document.getElementById('toast');const c=document.getElementById('composer');n.style.bottom=c?Math.min(c.offsetHeight+14,Math.round(innerHeight*.42))+'px':'';n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>{n.classList.remove('show');
+ // Empty once faded so screen readers never find an old message (aria-hidden toggling made Android WebView drop the next one).
+ toastTimer=setTimeout(()=>{n.textContent='';},400);},4200);}
 function error(e){toast(e.message||String(e));}
 async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const t=el('textarea');t.value=text;document.body.append(t);t.select();document.execCommand('copy');t.remove();}toast('已复制');}
 function sheet(title){dropGhost();overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);back.onclick=e=>{if(e.target!==back)return;if(body.keepOpen&&body.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();};overlay.append(back);return body;}
