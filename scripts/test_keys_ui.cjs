@@ -64,8 +64,9 @@ await page.getByText('已复制',{exact:true}).waitFor();
 await page.getByRole('button',{name:'保存并连接',exact:true}).click();
 await page.waitForFunction(()=>S.device&&!S.loading);
 await page.evaluate(()=>setTab('devices'));
-await page.getByText('用这台手机的密钥登录',{exact:true}).waitFor();
 await page.getByText('这台手机的密钥',{exact:true}).waitFor();
+// Connected, it shows once: the card on top says how it logs in; no saved-list copy below.
+assert.equal(await page.getByText('用这台手机的密钥登录',{exact:true}).count(),0,'the connected computer is not listed again');
 assert.equal(await page.getByText('以后免密码登录',{exact:true}).count(),0,'no install callout for a key device');
 await shot('devices-key');
 const saved=(await calls('saveDevice'))[0];

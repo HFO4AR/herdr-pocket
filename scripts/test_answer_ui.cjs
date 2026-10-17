@@ -95,6 +95,7 @@ await card.getByRole('radio',{name:/写到系统临时目录/}).click();
 assert.equal(await card.getByRole('radio',{name:/写到系统临时目录/}).getAttribute('aria-checked'),'true');
 await card.getByRole('button',{name:'发送回答',exact:true}).click();
 await card.locator('.qa-error').getByText(/没完成：光标没停在目标选项上/).waitFor();
+assert.equal(await page.locator('#toast.show').filter({hasText:'没完成'}).count(),0,'the inline error on screen is not toasted as well');
 assert.equal(await page.evaluate(()=>fx.calls.filter(c=>c.op==='answer').length),1);
 assert.equal(await card.getByRole('button',{name:'发送回答',exact:true}).isDisabled(),false,'can retry by hand');
 // Polling with an unchanged menu keeps the selection.

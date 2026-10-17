@@ -190,8 +190,10 @@ async function queueRun(c,key,q,force){
    if(queueTransient(msg)&&q.tries<3)q.retryAt=Date.now()+6000;
    else queuePause(q,queueTransient(msg)?'连着几次没发出去，先停一下。看一眼再点继续':'上一条没发出去，队列先停下。处理好再点继续',true);
    setTimeout(()=>refreshStatus(),300);}
-  else{it.state='unknown';it.reason=msg;queuePause(q,'上一条发送结果未知，没有自动重发',true);toast('发送未确认：'+msg+'。不会自动重发，队列先停下。');}}
- finally{q.inflight=false;queueTidy(key);paintTimeline();renderComposer();}}
+  else{it.state='unknown';it.reason=msg;queuePause(q,'上一条发送结果未知，没有自动重发',true);}}
+ finally{q.inflight=false;queueTidy(key);paintTimeline();renderComposer();
+  // Its bubble (with the reason) and the paused queue bar say it in this chat; elsewhere a toast does.
+  if(it.state==='unknown'&&(S.chat!==c||!document.querySelector('.queue-bar')))toast('发送未确认：'+it.reason+'。不会自动重发，队列先停下。');}}
 
 // ─── Views ──────────────────────────────────────────────────────────────────
 function queueLabel(c,q,it,i){

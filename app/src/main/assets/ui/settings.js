@@ -36,7 +36,7 @@ async function updateCheck(){
 async function updateDownload(){
  const u=updateInfo();if(!u?.latest||SET.download)return;const tag=u.latest.tag;SET.needPermission=false;SET.error='';
  SET.download={tag,pct:0};paintSettings();
- try{await rpc('downloadUpdate',{tag},pct=>{SET.download={tag,pct:Number(pct)||0};const bar=document.getElementById('update-bar');if(bar){bar.style.width=SET.download.pct+'%';bar.parentElement.setAttribute('aria-valuenow',String(SET.download.pct));}const t=document.getElementById('update-pct');if(t)t.textContent='正在下载 '+SET.download.pct+'%';});
+ try{await rpc('downloadUpdate',{tag},pct=>{SET.download={tag,pct:Number(pct)||0};const bar=document.getElementById('update-bar');if(bar){bar.style.width=SET.download.pct+'%';bar.parentElement.setAttribute('aria-valuenow',String(SET.download.pct));}const t=document.getElementById('update-pct');if(t)t.textContent=SET.download.pct+'%';});
   SET.download=null;SET.ready=tag;await updateInstall();}
  catch(e){SET.download=null;SET.error=e.message||String(e);}
  finally{paintSettings();}}
@@ -107,7 +107,7 @@ function updateBanner(){
  b.append(ic,t);if(!SET.download)b.append(btn(SET.ready===u.tag?'安装':'更新','primary small',SET.ready===u.tag?updateInstall:updateDownload));return b;}
 function updateStatus(){
  const box=el('div','update-status');box.id='update-status';const u=updateInfo();
- if(SET.download){const t=el('div','set-row');t.append(el('span','set-label','正在下载 '+SET.download.tag));const pct=el('span','set-value','正在下载 '+SET.download.pct+'%');pct.id='update-pct';t.append(pct);box.append(t);
+ if(SET.download){const t=el('div','set-row');t.append(el('span','set-label','正在下载 '+SET.download.tag));const pct=el('span','set-value mono',SET.download.pct+'%');pct.id='update-pct';t.append(pct);box.append(t);
   const track=el('div','progress');track.setAttribute('role','progressbar');track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax','100');track.setAttribute('aria-valuenow',String(SET.download.pct));const bar=el('div','progress-bar');bar.id='update-bar';bar.style.width=SET.download.pct+'%';track.append(bar);box.append(track);return box;}
  const line=el('div','set-row');let text='还没检查过';
  if(updateAvailable())text='可以更新到 '+u.latest.tag;else if(u?.checkedAt)text='已是最新 · '+relative(u.checkedAt);

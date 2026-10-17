@@ -39,6 +39,7 @@ await page.addInitScript(()=>{
     else if(a.op==='read')data={text:'$ '};
     else if(a.op==='catalog')data={records:[s.rec],total:1,next:null};
     else if(a.op==='account')data={ssh_user:'u',hostname:a.device};
+    else if(a.op==='hello')data={version:'0.6.0',protocol:1,python:'3.12'};
     else if(a.op==='doctor')data={herdr:true,running:1};
     else if(a.op==='glance')data={previews:{}};
     else if(a.op==='prompt'){fx.prompts.push({device:a.device,text:a.text});data={sent:true,receipt:a.id};}
@@ -153,6 +154,17 @@ await page.getByRole('button',{name:'设备',exact:true}).click();
 await card('公司工作站').getByText('已连接',{exact:true}).waitFor();
 await card('家里的电脑').getByText('正在看',{exact:true}).waitFor();
 assert.equal(await card('公司工作站').getByRole('button',{name:'切换到这台',exact:true}).count(),1);
+// Each computer once: the one on screen is the detailed card on top (with its bridge and actions),
+// the other connected one a compact card under it; no saved-list copy of either.
+for(const n of ['家里的电脑','公司工作站'])assert.equal(await card(n).count(),1,n+' appears once');
+const top=page.locator('.account-card');
+assert.equal(await top.count(),1);
+assert.match(await top.locator('.card-title').textContent(),/家里的电脑/);
+await top.locator('.setting-row').filter({hasText:'桥接程序'}).getByText('0.6.0',{exact:true}).waitFor();
+assert.equal(await top.getByRole('button',{name:'更新桥接程序',exact:true}).count(),1);
+assert.equal(await top.getByRole('button',{name:'回到会话',exact:true}).count(),1);
+assert(await page.locator('.device-card').first().evaluate(n=>n.classList.contains('account-card')),'the computer on screen leads');
+assert.equal(await page.locator('.device-actions .primary').count(),1,'one filled button: 回到会话');
 await shot('devices-light');await theme('dark');await shot('devices-dark');await theme('light');
 // The chip opens a quick switch sheet.
 await page.getByRole('button',{name:'当前设备，共连着 2 台',exact:true}).click();
@@ -170,8 +182,8 @@ assert.equal(await page.getByRole('group',{name:'切换设备'}).count(),0);
 await card('公司工作站').getByRole('button',{name:'连接设备',exact:true}).click();
 await agentRow('Beta 任务').first().waitFor();
 await page.getByRole('button',{name:'设备',exact:true}).click();
-await page.locator('.account-card').getByRole('button',{name:'断开连接',exact:true}).click();
-await page.getByRole('dialog',{name:'断开当前设备？'}).getByRole('button',{name:'断开',exact:true}).click();
+await page.locator('.account-card').getByRole('button',{name:'断开',exact:true}).click();
+await page.getByRole('dialog',{name:'断开 公司工作站？'}).getByRole('button',{name:'断开',exact:true}).click();
 await page.waitForFunction(()=>LINKS.ids.length===1&&S.device?.id==='A');
 assert.deepEqual(await page.evaluate(()=>fx.links),['A']);
 // The panel now shows A, and its 电脑主机名 is read (it used to stay at 读取中…).

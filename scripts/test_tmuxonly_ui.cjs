@@ -91,6 +91,15 @@ for(const op of ['agents','status','createInfo','panes','catalog'])assert.equal(
 assert.equal(await page.locator('#toast.show').count(),0,'no error toast');
 assert.equal(await overflow(),false);
 await shot('list');await dark('list');
+// The row hint follows the main list: once a long press (or a swipe action) has been used it retires.
+const hint=page.getByText('左滑或长按一行：关闭、更多操作',{exact:true});
+await hint.waitFor();
+await page.locator('.tmux-row').first().dispatchEvent('contextmenu');
+await page.getByRole('dialog').waitFor();
+await page.evaluate(()=>{closeSheet();render();});
+await page.locator('.tmux-row').first().waitFor();
+assert.equal(await hint.count(),0,'the row hint retires after use');
+assert.equal(await page.evaluate(()=>CLOSE_HINT.done),true,'same flag as the main list');
 console.log('PASS: a computer without Herdr shows its tmux sessions, quietly, without Herdr requests');
 
 // ── 2. The Claude in a tmux pane opens as a chat with its transcript ──

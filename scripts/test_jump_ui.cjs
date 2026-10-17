@@ -167,6 +167,7 @@ await page.evaluate(()=>fx.connect.push({ok:false,code:'hostkey_changed',error:'
 await page.evaluate(()=>{const d=S.devices.find(x=>x.host==='10.20.0.5');return disconnect(false).then(()=>doConnect(d));});
 await page.getByRole('dialog',{name:'跳板机指纹变了'}).waitFor();
 assert.equal(await page.locator('.connection-status.failed').count(),1,'a changed jump host key stays red');
+await page.locator('.connection-status.failed strong').getByText('跳板机指纹变了，已拒绝连接',{exact:true}).waitFor();
 await page.getByText('跳板机 jump-a.example.test:2201（第 1 跳） 这次给出的指纹',{exact:false}).waitFor();
 await tap('重新核对');await tap('忘掉并重新核对');
 await page.waitForFunction(()=>fx.calls.some(c=>c.op==='forgetHost'));
@@ -176,8 +177,9 @@ console.log('PASS: each hop gets its own fingerprint sheet, trusted one at a tim
 // ── Connected panel shows the route; removing every hop gives a plain device again ──
 await page.waitForFunction(()=>typeof S!=='undefined'&&S.device&&S.device.jumps);
 await page.evaluate(()=>setTab('devices'));
-await page.getByText('经 jump-a.example.test → jump-b.example.test',{exact:false}).first().waitFor();
 await page.locator('.account-card').getByText('jump-a.example.test → jump-b.example.test',{exact:true}).waitFor();
+assert.equal(await page.locator('.device-card',{hasText:'10.20.0.5'}).count(),1,'the connected computer appears once (its card on top)');
+await page.setViewportSize({width:320,height:640});assert.equal(await overflow(),false,'connected card with a route fits 320 px');await page.setViewportSize({width:390,height:844});
 await page.evaluate(()=>disconnect(false));
 await page.evaluate(()=>setTab('devices'));
 await page.locator('.device-card',{hasText:'10.20.0.5'}).getByRole('button',{name:/^编辑 /}).click();
