@@ -44,7 +44,8 @@ async function live(page,agents){
  await page.locator('.agent-row').first().waitFor();}
 const calls=(page,op)=>page.evaluate(op=>fx.calls.filter(c=>c.op===op).map(c=>c.args),op);
 const agent=(pane,status,extra={})=>({pane_id:pane,identity:H(pane.slice(-1)),agent:'codex',agent_status:status,cwd:'/home/me/IterxAI/stm32_host',terminal_title:'排查串口 '+pane+' | stm32_host',agent_session:{value:'s'+pane},history_ref:{status:'unavailable'},...extra});
-async function hold(page,locator){const box=await locator.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.waitForTimeout(700);await page.mouse.up();}
+// The row may be repainting (a sheet just closed): wait until it has a box before pressing it.
+async function hold(page,locator){let box=null;for(let i=0;i<50&&!box;i++){await locator.waitFor();box=await locator.boundingBox();if(!box)await page.waitForTimeout(100);}if(!box)throw Error('row never got a box');await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.waitForTimeout(700);await page.mouse.up();}
 async function openClose(page,name){
  await hold(page,page.getByRole('button',{name}));
  const acts=page.getByRole('dialog');await acts.getByRole('button',{name:/关闭会话/}).click();
