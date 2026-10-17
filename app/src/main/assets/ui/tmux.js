@@ -254,16 +254,26 @@ async function tmuxNewSheet(){
  const home=()=>info?.home||'~';
  const short=p=>{const h=info?.home;return h&&(p===h||p.startsWith(h+'/'))?'~'+p.slice(h.length):p;};
  const base=p=>info?.home&&p.replace(/\/+$/,'')===info.home?'家目录':p.split('/').filter(Boolean).pop()||'/';
- function dirs(){const list=[{path:home(),source:'home'}];for(const d of info?.dirs||[])if(d.path!==info.home)list.push(d);return list;}
+ let picked=null;
+ function dirs(){const list=[{path:home(),source:'home'}];for(const d of info?.dirs||[])if(d.path!==info.home)list.push(d);
+  if(picked&&!list.some(d=>d.path.replace(/\/+$/,'')===picked.path))list.splice(1,0,picked);return list;}
+ // 浏览目录…: the folder tree (dirpick.js) over this form; the folder picked becomes the choice.
+ function browse(){const start=f.custom?pathInput.value.trim():f.dir;
+  dirPickIn(body,{value:start&&start!=='~'?start:info?.home||'~',home:info?.home||'',title:'选起始目录',
+   quick:dirs().slice(0,8).map(d=>({path:d.path,label:d.source==='home'?'家目录':base(d.path)})),
+   onPick:path=>{const hit=dirs().find(d=>d.path.replace(/\/+$/,'')===path);if(!hit)picked={path,source:'picked'};
+    f.custom=false;f.dir=hit?hit.path:path;if(dirs().findIndex(d=>d.path===f.dir)>=5)showAll=true;draw();
+    requestAnimationFrame(()=>rows.querySelector('.new-dir.on')?.focus({preventScroll:false}));}});}
  function row(d){const on=!f.custom&&f.dir===d.path;const b=btn('','menu-item new-dir'+(on?' on':''),()=>{f.custom=false;f.dir=d.path;draw();},d.source==='home'?'account':'folder');
   b.setAttribute('role','radio');b.setAttribute('aria-checked',String(on));const t=el('span','grow');
-  t.append(el('span','menu-label',d.source==='home'?'家目录':base(d.path)),el('small','truncate',d.source==='home'?short(d.path):short(d.path)+' · '+(d.source==='tmux'?'有 tmux 窗格在这':d.modified?newAgo(d.modified):'最近用过')));
+  t.append(el('span','menu-label',d.source==='home'?'家目录':base(d.path)),el('small','truncate',d.source==='home'?short(d.path):short(d.path)+' · '+(d.source==='picked'?'刚在目录树里选的':d.source==='tmux'?'有 tmux 窗格在这':d.modified?newAgo(d.modified):'最近用过')));
   b.append(t);if(on)b.append(icon('check'));return b;}
  function draw(){rows.replaceChildren();const all=dirs();if(!f.dir&&!f.custom)f.dir=all[0].path;
   (showAll?all:all.slice(0,5)).forEach(d=>rows.append(row(d)));
   if(!showAll&&all.length>5)rows.append(btn('更多目录 · '+(all.length-5),'link-btn new-more',()=>{showAll=true;draw();}));
+  rows.append(newBrowseRow(browse));
   const other=btn('','menu-item new-dir'+(f.custom?' on':''),()=>{f.custom=true;f.dir=pathInput.value.trim();draw();setTimeout(()=>pathInput.focus(),30);},'edit');
-  other.setAttribute('role','radio');other.setAttribute('aria-checked',String(f.custom));const t=el('span','grow');t.append(el('span','menu-label','其他目录'),el('small','','家目录下的路径，要已经存在'));other.append(t);rows.append(other);
+  other.setAttribute('role','radio');other.setAttribute('aria-checked',String(f.custom));const t=el('span','grow');t.append(el('span','menu-label','其他目录'),el('small','','手填路径，目录要已经存在'));other.append(t);rows.append(other);
   pathInput.classList.toggle('hidden',!f.custom);
   // The suggestions failed: say so, but 家目录 and a typed path still work (the bridge expands ~).
   dirNote.textContent=!info?'正在读取最近用过的目录…':info.error?'读不到最近用过的目录（'+info.error+'），家目录和手填的路径照样能用':'';

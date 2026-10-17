@@ -660,7 +660,8 @@ async function loadCatalog(query='',more=false){
 // ─── Back & lifecycle ───────────────────────────────────────────────────────
 function pocketBack(){
  // Back on a sheet with typed content (a device form, a new session) asks for × like a tap outside.
- if(overlay.childElementCount){const panel=overlay.querySelector('.sheet');if(panel?.keepOpen&&panel.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();return;}
+ // A view inside the sheet (the directory picker, dirpick.js) goes back to the sheet first.
+ if(overlay.childElementCount){const panel=overlay.querySelector('.sheet');if(panel?.onBack&&panel.onBack())return;if(panel?.keepOpen&&panel.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();return;}
  if(T.view){leaveTerminal();render();return;}
  if(S.chatStack.length){const prev=S.chatStack.pop();S.chat=prev;S.chatMode=prev.mode||'conversation';S.messages=prev.savedMessages||[];S.children=prev.savedChildren||[];S.before=prev.savedBefore||0;S.more=!!prev.savedMore;S.stick=prev.savedStick!==false;S.unseen=0;S.epoch++;renderChat();if(!S.stick)document.getElementById('chat-scroll').scrollTop=prev.savedScroll||0;if(prev.record&&!S.messages.length)fetchHistory(false,true);return;}
  if(S.chat){S.chat=null;S.epoch++;render();return;}
@@ -671,7 +672,7 @@ window.pocketBack=pocketBack;
 // the footer, so a path input ended up half hidden. Keep it clear of the footer.
 function sheetFieldClear(){
  const t=document.activeElement;if(!t||!/^(INPUT|TEXTAREA)$/.test(t.tagName))return;
- const s=t.closest('.sheet'),foot=s&&s.querySelector('.new-foot,.close-foot');if(!foot||foot.contains(t))return;
+ const s=t.closest('.sheet'),foot=s&&[...s.querySelectorAll('.new-foot,.close-foot,.dp-foot')].find(x=>x.offsetParent);if(!foot||foot.contains(t))return;
  const r=t.getBoundingClientRect(),f=foot.getBoundingClientRect(),top=s.getBoundingClientRect().top;
  const under=r.bottom+10-f.top;if(under>0)s.scrollTop+=Math.min(under,Math.max(0,r.top-top-10));}
 document.addEventListener('focusin',()=>setTimeout(sheetFieldClear,60));

@@ -3782,11 +3782,14 @@ def create_info(prefix):
     return {"kinds": kinds, "more": more, "workspaces": workspaces, "dirs": dirs[:24], "home": str(Path.home())}
 
 
-def create_dir(raw, known):
-    """A real directory: under $HOME, or one a pane or recent history already uses. No `..`, no tricks.
-    `~`, `~/x` and a path relative to $HOME ("projects/app", as the hint says) all mean under $HOME.
-    Known directories are compared by their real path: a pane or transcript may name a directory
-    through a symlink (a linked home, /mnt/... mounted into ~) that resolves somewhere else."""
+def create_dir(raw):
+    """Any existing directory the SSH user can enter (the person picks it in the phone's directory
+    tree or types it): under $HOME or anywhere else, hidden or not, named directly or through a
+    symlink (~/work -> /mnt/E/work). The account can already `cd` there over SSH; the directory only
+    becomes tmux's / Herdr's start directory, given as one argv item, never through a shell.
+    `~`, `~/x` and a path relative to $HOME ("projects/app") mean under $HOME; `~user` and `..`
+    are refused, and so is a path that does not exist, is not a directory or cannot be entered.
+    Returns the real path (symlinks resolved), the directory that was checked."""
     if not isinstance(raw, str) or not raw.strip() or len(raw) > 1024 or any(ord(c) < 32 or ord(c) == 127 for c in raw):
         raise BridgeError("没创建：目录路径不对")
     text = raw.strip()
@@ -3796,23 +3799,227 @@ def create_dir(raw, known):
     path = Path(text)
     if not path.is_absolute(): path = home / path
     if ".." in path.parts: raise BridgeError("没创建：目录里不能有 ..")
+    shown = raw.strip()[:200]
     try: resolved = path.resolve(strict=True)
-    except (OSError, RuntimeError): raise BridgeError("没创建：这个目录不存在") from None
-    if not resolved.is_dir(): raise BridgeError("没创建：这不是一个目录")
-    home = home.resolve()
-    if resolved.is_relative_to(home) and not any(p.startswith(".") for p in resolved.relative_to(home).parts):
-        return str(resolved)
-    for d in known():
+    except (OSError, RuntimeError):
+        if path.is_symlink(): raise BridgeError("没创建：" + shown + " 是个链接，指向的地方不存在") from None
+        raise BridgeError("没创建：目录 " + shown + " 不存在") from None
+    if not resolved.is_dir(): raise BridgeError("没创建：" + shown + " 不是目录")
+    if not os.access(resolved, os.X_OK): raise BridgeError("没创建：没权限进入 " + shown)
+    return str(resolved)
+
+
+# ─── Directory tree for the 新建 sheets (read-only) ─────────────────────────
+# dirList: the folders inside one directory (`path`) or a few (`paths`, the way down to a start
+# directory), for the phone's directory picker. Folder names only: no files, no file contents,
+# no sizes or times. Entries are classified without following symlinks (scandir's d_type, else
+# lstat); a symlink is shown with its target as text and listed only when it leads to a folder
+# (os.stat follows it). Each directory is read in a forked child with a deadline and its stdout/
+# stderr on /dev/null, so a hung network mount (/mnt/...) answers "too slow" instead of hanging
+# the bridge; what arrived before the deadline is still returned (`partial`).
+DIRLIST_KEYS = {"v", "op", "path", "paths", "hidden", "query"}
+DIRLIST_MAX = 500        # folders returned per directory (sorted; `truncated` when more)
+DIRLIST_SCAN = 20000     # entries looked at per directory before giving up on the rest
+DIRLIST_PATHS = 16       # directories per request
+DIRLIST_TIMEOUT = 4.0    # seconds per directory
+DIRLIST_BUDGET = 9.0     # seconds per request
+DIRLIST_ERRORS = {"missing": "这个目录不存在", "notdir": "这不是目录", "denied": "没权限打开这个目录",
+                  "timeout": "读这个目录超时了（可能是很慢或没挂上的网络盘）", "budget": "没来得及读，再点一下试试"}
+
+
+def dir_path(raw):
+    """An absolute path from the phone: `/…`, `~` or `~/…`. Only text work, no filesystem access
+    (a hung mount must not hang this part): `.` and repeated slashes are dropped, `..` is refused."""
+    if not isinstance(raw, str) or not raw or len(raw) > 4096 or any(ord(c) < 32 or ord(c) == 127 for c in raw):
+        raise BridgeError("目录路径不对")
+    text = raw
+    if text == "~" or text.startswith("~/"): text = str(Path.home()) + text[1:]
+    elif text.startswith("~"): raise BridgeError("只能用自己的家目录（~ 或 ~/…）")
+    if not text.startswith("/"): raise BridgeError("要用 / 或 ~ 开头的路径")
+    parts = [p for p in text.split("/") if p not in ("", ".")]
+    if ".." in parts: raise BridgeError("路径里不能有 ..")
+    return "/" + "/".join(parts)
+
+
+def dir_name_ok(name, limit=255):
+    """A name the phone can show and send back as it is: valid UTF-8 (no surrogate-escaped bytes),
+    no control, line-separator or bidi-control characters, at most `limit` bytes."""
+    try: raw = name.encode("utf-8")
+    except UnicodeEncodeError: return False
+    if len(raw) > limit: return False
+    return not any(ord(c) < 32 or 127 <= ord(c) < 160 or c in "  ‎‏‪‫‬‭‮⁦⁧⁨⁩" for c in name)
+
+
+def dir_flags(full):
+    """Access flags of one folder, only the ones that are false (keeps the answer small)."""
+    e = {}
+    if not os.access(full, os.X_OK): e["enter"] = False
+    if not os.access(full, os.R_OK): e["list"] = False
+    if not os.access(full, os.W_OK): e["write"] = False
+    return e
+
+
+def dir_scan(path, hidden, query, emit):
+    """Runs in the child. Emits the directory's own flags, then folder entries in batches, then
+    each symlink's verdict (stat follows it, which is where a dead mount hangs)."""
+    st = os.stat(path)
+    if not stat_module.S_ISDIR(st.st_mode): emit({"error": "notdir"}); return
+    real = os.path.realpath(path)
+    emit({"head": True, "real": real, "enter": os.access(path, os.X_OK), "list": os.access(path, os.R_OK),
+          "write": os.access(path, os.W_OK)})
+    batch, links, hidden_n, skipped, scanned, more = [], [], 0, 0, 0, False
+    with os.scandir(path) as it:
+        for entry in it:
+            scanned += 1
+            if scanned > DIRLIST_SCAN: more = True; break
+            try:
+                link = entry.is_symlink()
+                folder = not link and entry.is_dir(follow_symlinks=False)
+            except OSError: continue
+            if not link and not folder: continue
+            name = entry.name
+            if not dir_name_ok(name): skipped += 1; continue
+            if name.startswith(".") and not hidden: hidden_n += 1; continue
+            if query and query not in name.casefold(): continue
+            full = os.path.join(path, name)
+            if link:
+                try: target = os.readlink(full)
+                except OSError: target = ""
+                links.append([name, target if dir_name_ok(target, 1024) else ""])
+                continue
+            batch.append(dict({"name": name}, **dir_flags(full)))
+            if len(batch) >= 200: emit({"dirs": batch}); batch = []
+    emit({"dirs": batch, "scanned": scanned, "more": more, "hidden": hidden_n, "skipped": skipped, "links": links})
+    for name, target in links:
+        full = os.path.join(path, name)
+        try: folder = stat_module.S_ISDIR(os.stat(full).st_mode)
+        except OSError: folder = False
+        entry = None
+        if folder:
+            entry = dict({"name": name, "link": target, "real": os.path.realpath(full)}, **dir_flags(full))
+        emit({"resolved": name, "entry": entry})
+    emit({"done": True})
+
+
+def dir_child(path, hidden, query, timeout):
+    """dir_scan in a forked child; its messages as they arrived and whether it finished in time."""
+    import select
+    import signal
+    got = []
+    if not hasattr(os, "fork"):
+        dir_scan_safe(path, hidden, query, got.append)
+        return got, True
+    r, w = os.pipe()
+    sys.stdout.flush(); sys.stderr.flush()
+    pid = os.fork()
+    if pid == 0:
         try:
-            if os.path.realpath(d) == str(resolved): return str(resolved)
-        except (OSError, ValueError, TypeError): continue
-    # A symlink in $HOME pointing out of it (~/work -> /mnt/data/work): say where it really goes,
-    # else "only folders under home" reads like a mistake for a path that starts with ~/.
-    if resolved.is_relative_to(home): raise BridgeError("没创建：隐藏目录（名字以 . 开头）不能用")
-    if path.is_relative_to(Path.home()) or path.is_relative_to(home):
-        raise BridgeError("没创建：" + raw.strip()[:200] + " 实际指向家目录外面的 " + str(resolved)[:300]
-                          + "；只能用家目录下的目录，或已经有窗格在用的目录")
-    raise BridgeError("没创建：只能用家目录下的目录，或已经有窗格在用的目录")
+            os.close(r)
+            null = os.open(os.devnull, os.O_RDWR)
+            for fd in (0, 1, 2): os.dup2(null, fd)
+            def emit(obj):
+                data = (json.dumps(obj) + "\n").encode()
+                while data: data = data[os.write(w, data):]
+            dir_scan_safe(path, hidden, query, emit)
+        except BaseException:
+            pass
+        finally:
+            os._exit(0)
+    os.close(w)
+    deadline, buf, finished = time.monotonic() + timeout, b"", False
+    try:
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0: break
+            ready, _, _ = select.select([r], [], [], left)
+            if not ready: break
+            chunk = os.read(r, 65536)
+            if not chunk: finished = True; break
+            buf += chunk
+            *lines, buf = buf.split(b"\n")
+            for line in lines:
+                try: got.append(json.loads(line))
+                except ValueError: pass
+    finally:
+        os.close(r)
+        if not finished:
+            # Stuck in the filesystem: kill it and do not wait (a process in uninterruptible I/O
+            # cannot be reaped until the mount answers; the bridge answers now either way).
+            try: os.kill(pid, signal.SIGKILL)
+            except OSError: pass
+        for _ in range(20 if finished else 5):
+            try:
+                if os.waitpid(pid, os.WNOHANG)[0]: break
+            except ChildProcessError: break
+            time.sleep(0.01)
+    return got, finished and any(m.get("done") or m.get("error") for m in got)
+
+
+def dir_scan_safe(path, hidden, query, emit):
+    try: dir_scan(path, hidden, query, emit)
+    except FileNotFoundError: emit({"error": "missing"})
+    except NotADirectoryError: emit({"error": "notdir"})
+    except PermissionError: emit({"error": "denied"})
+    except OSError as exc: emit({"error": "os", "detail": (exc.strerror or type(exc).__name__)[:200]})
+
+
+def dir_listing(path, hidden, query, timeout):
+    home = str(Path.home())
+    out = {"path": path, "home": home}
+    if path != "/": out["parent"] = os.path.dirname(path)
+    got, done = dir_child(path, hidden, query, timeout)
+    head = next((m for m in got if m.get("head")), None)
+    error = next((m for m in got if m.get("error")), None)
+    if error or not head:
+        code = error["error"] if error else "timeout"
+        msg = DIRLIST_ERRORS.get(code) or "读不到这个目录（" + str(error.get("detail", ""))[:200] + "）"
+        # A folder that can be entered but not listed is still a fine start directory.
+        if head and code == "denied": out.update(enter=head["enter"], list=False, write=head["write"])
+        return dict(out, error=msg, code=code, dirs=[])
+    dirs, links, summary, resolved = [], [], {}, {}
+    for m in got:
+        dirs.extend(m.get("dirs") or [])
+        if "links" in m: links, summary = m["links"], m
+        if "resolved" in m: resolved[m["resolved"]] = m["entry"]
+    for name, target in links:
+        if name in resolved:
+            if resolved[name]: dirs.append(resolved[name])
+        else:
+            # Its target did not answer in time: shown, marked, the person can still try to open it.
+            dirs.append({"name": name, "link": target, "slow": True})
+    dirs.sort(key=lambda d: (d["name"].casefold(), d["name"]))
+    partial = not done
+    if head["real"] != path: out["real"] = head["real"]
+    out.update(enter=head["enter"], list=head["list"], write=head["write"], dirs=dirs[:DIRLIST_MAX], total=len(dirs),
+               truncated=len(dirs) > DIRLIST_MAX or bool(summary.get("more")) or (partial and not summary),
+               hidden=summary.get("hidden", 0), skipped=summary.get("skipped", 0), partial=partial)
+    if partial: out["note"] = "这个目录读得很慢，只列出了一部分" if not summary else "有的链接指向的地方没响应"
+    return out
+
+
+def dir_list(request):
+    """dirList {path | paths, hidden?, query?}: read-only, see the block comment above."""
+    if set(request) - DIRLIST_KEYS: raise BridgeError("请求里有不认识的字段")
+    hidden = request.get("hidden", False)
+    if not isinstance(hidden, bool): raise BridgeError("hidden 要是 true / false")
+    query = request.get("query", "")
+    if not isinstance(query, str) or len(query) > 100 or any(ord(c) < 32 for c in query): raise BridgeError("筛选的字不对")
+    query = query.strip().casefold()
+    if "paths" in request:
+        paths = request["paths"]
+        if "path" in request or not isinstance(paths, list) or not 1 <= len(paths) <= DIRLIST_PATHS:
+            raise BridgeError("目录列表不对（1 到 %d 个）" % DIRLIST_PATHS)
+        lists, end = [], time.monotonic() + DIRLIST_BUDGET
+        for raw in paths:
+            try: path = dir_path(raw)
+            except BridgeError as exc:
+                lists.append({"path": raw if isinstance(raw, str) else "", "error": str(exc), "code": "bad", "dirs": []}); continue
+            left = min(DIRLIST_TIMEOUT, end - time.monotonic())
+            if left < 0.2:
+                lists.append({"path": path, "error": DIRLIST_ERRORS["budget"], "code": "budget", "dirs": []}); continue
+            lists.append(dir_listing(path, hidden, "", left))
+        return {"lists": lists}
+    return dir_listing(dir_path(request.get("path")), hidden, query, DIRLIST_TIMEOUT)
 
 
 def receipt_open(state_dir, req_id, digest, unknown="上次新建的结果未知：先刷新列表看看，别直接重试"):
@@ -3925,9 +4132,7 @@ def create_agent(request, prefix, state_dir):
         workspaces = create_workspaces(prefix)
         if place != "new" and not any(w["workspace_id"] == place for w in workspaces):
             raise BridgeError("没创建：那个工作区已经不在了，刷新一下")
-        pane_dirs = {d["path"] for w in workspaces for d in w["dirs"]}
-        known = lambda: pane_dirs | {d["path"] for d in history_dirs(40)}
-        cwd = create_dir(request.get("cwd"), known)
+        cwd = create_dir(request.get("cwd"))
     except (BridgeError, OSError) as exc:
         if str(exc).startswith("没创建"): raise
         raise BridgeError("没创建：读不到 Herdr 的工作区（" + str(exc)[:160] + "）") from exc
@@ -4714,8 +4919,7 @@ def tmux_new(request, state_dir):
     try:
         panes = tmux_panes(only="") or []
         if name and any(p["session"] == name for p in panes): raise BridgeError("没创建：已经有叫 " + name + " 的 tmux 会话了")
-        known = {p["cwd"] for p in panes if p["cwd"].startswith("/")}
-        cwd = create_dir(request.get("cwd"), lambda: known | {d["path"] for d in history_dirs(40)})
+        cwd = create_dir(request.get("cwd"))
     except (BridgeError, OSError) as exc:
         if str(exc).startswith("没创建"): raise
         raise BridgeError("没创建：读不到 tmux（" + str(exc)[:160] + "）") from exc
@@ -5028,6 +5232,7 @@ def handle(request, state_dir=None):
     if op == "glance": return glance(request)
     if op == "fileInfo": return file_info(request)
     if op == "fileView": return view_request(request)
+    if op == "dirList": return dir_list(request)
     if op in ("tmux", "tmuxRead", "tmuxSend", "tmuxInfo", "tmuxNew", "tmuxKill"):
         return tmux_request(request, state_dir or Path.home() / ".local/state/herdr-pocket")
     if op in TMUX_AGENT_OPS and isinstance(request.get("target"), str) and TMUX_PANE_ID.fullmatch(request["target"]):
