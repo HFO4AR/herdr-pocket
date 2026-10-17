@@ -7,7 +7,10 @@ import org.json.JSONObject
 
 class SecureProfilesTest : Instrumentation() {
     private var fixturePin = ""
-    override fun onCreate(arguments: Bundle?) { fixturePin = arguments?.getString("fixturePin") ?: ""; super.onCreate(arguments); start() }
+    // Optional manual run of the 文件 (SFTP) checks against a throwaway local sshd that only allows key login:
+    // -e sftpPort <port> -e sftpUser <user> -e sftpPin <host key base64> -e sftpKey <private key, base64> -e sftpPub <public key, base64>.
+    private var sftpArgs: Bundle? = null
+    override fun onCreate(arguments: Bundle?) { fixturePin = arguments?.getString("fixturePin") ?: ""; sftpArgs = arguments?.takeIf { it.getString("sftpKey") != null }; super.onCreate(arguments); start() }
     override fun onStart() {
         try {
             testPasswordSurvivesReloadWithoutPlaintextOrCrossHostReuse()
@@ -21,11 +24,24 @@ class SecureProfilesTest : Instrumentation() {
             testWatchRules()
             testJumpVault()
             testResumeSet()
-            if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeepAlive(); testKeyLogin(); testSeveralLinks(); testJumpChain() }
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\nwatch-rules: PASS\njump-vault: PASS\nresume-set: PASS\n" + if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS\nssh-jump: PASS" else "ssh-pty: SKIPPED") })
+            SftpTests.pure()
+            if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeepAlive(); testKeyLogin(); testSeveralLinks(); testJumpChain(); testSftp() }
+            val sftpLocal = sftpArgs?.let { testSftpLocal(it); "\nsftp-local: PASS" } ?: ""
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\nwatch-rules: PASS\njump-vault: PASS\nresume-set: PASS\nsftp-paths: PASS\n" + (if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS\nssh-jump: PASS\nsftp: PASS" else "ssh-pty: SKIPPED") + sftpLocal) })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
+    }
+    /** 文件 over the CI fixture (password login), after testKeyLogin. */
+    private fun testSftp() {
+        val endpoint = Endpoint("10.0.2.2", 22222, "pocket-fixture")
+        SftpTests.fixture(targetContext, endpoint, fixturePin, "pocket-fixture-password") { it.connect(endpoint, "pocket-fixture-password", fixturePin) }
+    }
+    private fun testSftpLocal(args: Bundle) {
+        val endpoint = Endpoint("10.0.2.2", args.getString("sftpPort")!!.toInt(), args.getString("sftpUser")!!)
+        val pin = args.getString("sftpPin")!!
+        val decode = { k: String -> java.util.Base64.getDecoder().decode(args.getString(k)!!) }
+        SftpTests.fixture(targetContext, endpoint, pin, "") { ssh -> val key = KeyMaterial(decode("sftpKey"), decode("sftpPub")); try { ssh.connect(endpoint, "", pin, identity = key) } finally { key.wipe() } }
     }
     private fun assertEquals(expected: String, actual: String) { check(expected == actual) { "Value mismatch" } }
     private fun assertFalse(value: Boolean) { check(!value) { "Unexpected plaintext value" } }

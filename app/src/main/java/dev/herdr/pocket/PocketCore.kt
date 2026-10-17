@@ -455,6 +455,22 @@ object PocketCore {
         error("「${file.name}」上传后校验不一致")
     }
 
+    /**
+     * An SFTP channel on [deviceId]'s session (文件 screen). A session that turns out dead before the
+     * channel opened is replaced once, exactly like a bridge request; [block] runs at most once.
+     */
+    fun <T> sftp(deviceId: String?, block: (com.jcraft.jsch.ChannelSftp, String) -> T): T {
+        val link = linkFor(deviceId)
+        ensureConnected(link)
+        val transport = link.transport
+        return try { transport.sftp(block) } catch (e: NotSent) {
+            synchronized(link.lock) { if (transport.generation == e.generation) reconnect(link) }
+            transport.sftp(block)
+        }
+    }
+    /** (id, name) of the computer a request names, or of the active one. */
+    fun linkInfo(deviceId: String?): Pair<String, String> = linkFor(deviceId).let { it.id to it.name }
+
     fun terminal(deviceId: String?, op: String, req: JSONObject): JSONObject {
         val link = linkFor(deviceId)
         ensureConnected(link)

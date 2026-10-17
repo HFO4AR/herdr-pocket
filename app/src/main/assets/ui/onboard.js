@@ -140,6 +140,8 @@ function currentCard(d){
  fact('SSH 用户',a?.ssh_user||d.user);
  fact('电脑主机名',a?.hostname||'读取中…');
  fact('登录方式',key?'这台手机的密钥':d.remember?'密码 · 已加密保存':'密码 · 连接时输入');
+ // 文件 (sftp.js): upload / download over this same SSH connection.
+ if(typeof filesOpen==='function'){const go=btn('打开','link-btn dev-action',()=>filesOpen({device:d}));go.setAttribute('aria-label','打开文件：上传、下载');fact('文件','上传、下载',go);}
  // The bridge the app runs is the file named after the SHA-256 of the copy bundled with it, and a
  // connect only finishes once that file answers `hello` (MainActivity.connect: else the install /
  // 更新桥接程序 sheet comes first). So a version here is the matching one and there is nothing to

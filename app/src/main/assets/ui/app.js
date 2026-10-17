@@ -151,7 +151,7 @@ setInterval(()=>{if(!S.active)return;document.querySelectorAll('[data-since]').f
 
 // ─── App shell & navigation ─────────────────────────────────────────────────
 const TABS=[['live','chat','会话'],['history','history','历史'],['terminals','terminal','终端'],['devices','device','设备'],['settings','settings','设置']];
-function setTab(tab){if(tab==='history'&&noHerdr())tab='live';leaveTerminal();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();if(tab==='settings')settingsLoad().then(()=>{if(S.tab==='settings'&&!S.chat&&!overlay.childElementCount)paintSettings();});}
+function setTab(tab){if(tab==='history'&&noHerdr())tab='live';leaveTerminal();if(typeof filesLeave==='function')filesLeave();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();if(tab==='settings')settingsLoad().then(()=>{if(S.tab==='settings'&&!S.chat&&!overlay.childElementCount)paintSettings();});}
 function shell(){app.replaceChildren();const root=el('div','shell');app.append(root);if(S.demo)root.append(el('div','demo-banner','离线演示 · 示例数据，不连接电脑'));return root;}
 function header(root){
  const bar=el('header','topbar');const title=(TABS.find(t=>t[0]===S.tab)||[])[2]||'Herdr Pocket';bar.append(el('h1','',title));
@@ -164,7 +164,7 @@ function loadingCard(main,title,detail){const box=el('div','loading-card');box.s
 function skeleton(main,rows=4){for(let i=0;i<rows;i++){const r=el('div','skeleton-row');r.append(el('div','sk-avatar'),el('div','sk-lines'));main.append(r);}}
 function empty(main,title,desc,action,name='chat'){const n=el('div','empty');const a=el('div','empty-icon');a.append(icon(name));n.append(a,el('h2','',title),el('p','',desc));if(action)n.append(action);main.append(n);}
 function render(){
- if(S.chat){renderChat();return;}if(typeof T!=='undefined'&&T.view){renderTerminal();return;}
+ if(S.chat){renderChat();return;}if(typeof T!=='undefined'&&T.view){renderTerminal();return;}if(typeof FX!=='undefined'&&FX.view){renderFiles();return;}
  const root=shell();header(root);const main=el('main','main pane-enter');root.append(main);
  if(S.tab==='live')livePage(main);else if(S.tab==='history')historyPage(main);else if(S.tab==='terminals')terminalsPage(main);else if(S.tab==='settings')settingsPage(main);else devicesPage(main);
  const nav=el('nav','bottom-nav');nav.setAttribute('aria-label','主导航');
@@ -577,7 +577,7 @@ function chatMenu(){
  if(!S.chat.noTranscript){menuItem(box,'刷新对话',()=>{S.paused=false;fetchHistory(false,true);},'refresh');
   menuItem(box,S.paused?'恢复自动更新':'暂停自动更新',()=>{S.paused=!S.paused;toast(S.paused?'自动更新已暂停':'自动更新已恢复');},S.paused?'refresh':'pause');
   menuItem(box,'选择其他历史记录',pickHistory,'history');}
- if(S.chat.agent){menuItem(box,'终端按键',keyMenu,'terminal','↑ ↓ Enter Esc Ctrl+C'+(modeAgent(S.chat.agent)||modeShiftTab(S.chat.agent)?' Shift+Tab':''));menuItem(box,'查看终端',()=>{S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal();},'terminal');}
+ if(S.chat.agent){menuItem(box,'终端按键',keyMenu,'terminal','↑ ↓ Enter Esc Ctrl+C'+(modeAgent(S.chat.agent)||modeShiftTab(S.chat.agent)?' Shift+Tab':''));menuItem(box,'查看终端',()=>{S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal();},'terminal');if(typeof filesAgentItem==='function')filesAgentItem(box,S.chat.agent);}
  closeChatMenu(box);}
 function keyMenu(){const box=sheet('终端按键');box.append(el('p','fine','先看一眼终端：Enter 可能会批准当前操作。'));[['↑ 上','up'],['↓ 下','down'],['Enter 确认','enter'],['Esc 返回','esc'],['Ctrl+C 中断','ctrl+c']].forEach(([t,key])=>{const b=btn(t,'menu-item',()=>{closeSheet();sendKey(key,t);});box.append(b);});
  if(modeAgent(S.chat?.agent)){const b=btn('Shift+Tab 切换模式','menu-item',()=>{closeSheet();modeCycle();});const why=modeBlockedWhy(S.chat.agent);b.disabled=!!why;if(why)b.title=why;box.append(b);}
@@ -668,6 +668,7 @@ function pocketBack(){
  // A view inside the sheet (the directory picker, dirpick.js) goes back to the sheet first.
  if(overlay.childElementCount){const panel=overlay.querySelector('.sheet');if(panel?.onBack&&panel.onBack())return;if(panel?.keepOpen&&panel.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();return;}
  if(T.view){leaveTerminal();render();return;}
+ if(typeof FX!=='undefined'&&FX.view&&!S.chat){filesBack();return;}
  if(S.chatStack.length){const prev=S.chatStack.pop();S.chat=prev;S.chatMode=prev.mode||'conversation';S.messages=prev.savedMessages||[];S.children=prev.savedChildren||[];S.before=prev.savedBefore||0;S.more=!!prev.savedMore;S.stick=prev.savedStick!==false;S.unseen=0;S.epoch++;renderChat();if(!S.stick)document.getElementById('chat-scroll').scrollTop=prev.savedScroll||0;if(prev.record&&!S.messages.length)fetchHistory(false,true);return;}
  if(S.chat){S.chat=null;S.epoch++;render();return;}
  if(S.tab!=='live'&&S.device)setTab('live');else if(S.tab!=='devices')setTab('devices');else toast('设备和保存的密码都在，可以直接关闭应用');}

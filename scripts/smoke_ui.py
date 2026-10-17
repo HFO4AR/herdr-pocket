@@ -148,6 +148,8 @@ def main():
     assert 'ssh-identity: PASS' in vault,vault
     assert 'jump-vault: PASS' in vault,vault
     if fixture: assert 'ssh-jump: PASS' in vault,vault
+    assert 'sftp-paths: PASS' in vault,vault
+    if fixture: assert 'sftp: PASS' in vault,vault
     assert 'terminal-buffer: PASS' in vault,vault
     assert 'vault-tests: PASS (2 tests)' in vault,vault
     assert 'image-prep: PASS' in vault,vault
@@ -158,6 +160,7 @@ def main():
     if fixture: print('PASS: silent reconnect after a dropped session; refused after a host-key change',flush=True)
     if fixture: print('PASS: two- and three-hop jump chains, per-hop pins, hop errors, chain rebuilt after a drop',flush=True)
     if fixture: print('PASS: public key installed once over the password session; key login, key reconnect, unknown key refused',flush=True)
+    if fixture: print('PASS: 文件 over SFTP: glob characters stay names, no silent overwrite (new/keep/replace), links never followed on delete, MediaStore download byte-exact, cancel leaves no temp file',flush=True)
     print('PASS: SSH key generated, Keystore-sealed, reloaded, wiped; passphrase import; authorized_keys dedupe',flush=True)
     print('PASS: Keystore save/reload/no plaintext/destination change/forget/delete',flush=True)
     run('shell','am','broadcast','-a','android.intent.action.CLOSE_SYSTEM_DIALOGS')
