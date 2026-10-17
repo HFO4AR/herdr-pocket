@@ -196,14 +196,16 @@ class CreateTests(unittest.TestCase):
         self.assertFalse(any(m[:2] == ["agent", "start"] for m in self.mutations()))
 
     def test_directory_rules(self):
-        bad = ["relative/dir", str(self.project) + "/../site", str(self.home / "nope"), str(self.home / ".ssh"),
-               str(Path(self.tmp.name)), "~/work/site\n", "", 5, str(self.project / "f")]
+        bad = ["relative/dir", str(self.project) + "/../site", str(self.home / "nope"), "~other/x",
+               "~/work/site\n", "", 5, str(self.project / "f")]
         (self.project / "f").write_text("x")
         for cwd in bad:
             with self.assertRaisesRegex(bridge.BridgeError, "没创建", msg=repr(cwd)):
                 bridge.handle(self.req(cwd=cwd), self.state)
+        with self.assertRaisesRegex(bridge.BridgeError, "^没创建：目录 ~/nope 不存在$"):
+            bridge.handle(self.req(cwd="~/nope"), self.state)
         self.assertEqual(self.mutations(), [])
-        # ~ expands to $HOME; a directory outside $HOME is fine when a pane already uses it.
+        # ~ expands to $HOME; a directory outside $HOME is fine too (any existing one the user can enter).
         self.assertEqual(bridge.handle(self.req(cwd="~/work/site"), self.state)["cwd"], str(self.project.resolve()))
         r = bridge.handle(self.req(cwd=str(self.outside), id=UUID.replace("1234-4", "1234-7")), self.state)
         self.assertEqual(r["cwd"], str(self.outside.resolve()))
@@ -222,14 +224,28 @@ class CreateTests(unittest.TestCase):
             r = bridge.handle(self.req(cwd=str(real), id=UUID.replace("1234-4", "1234-9")), self.state)
         self.assertEqual(r["cwd"], str(real.resolve()))
 
-    def test_symlink_escape_rejected(self):
-        os.symlink(Path(self.tmp.name), self.home / "link")
-        # Refused, and the reason names where the link really goes (a path typed as ~/… is not
-        # obviously "outside home" to the person).
-        with self.assertRaisesRegex(bridge.BridgeError, "^没创建：~/link 实际指向家目录外面的 " + re.escape(str(Path(self.tmp.name).resolve()))):
-            bridge.handle(self.req(cwd="~/link"), self.state)
-        with self.assertRaisesRegex(bridge.BridgeError, "^没创建：隐藏目录"):
-            bridge.handle(self.req(cwd="~/.ssh"), self.state)
+    def test_any_accessible_directory_is_a_start_directory(self):
+        # The person picks it in the directory tree: outside $HOME, hidden, or through a symlink
+        # that leads out of $HOME (~/link -> /tmp/...), without any pane or history using it.
+        elsewhere = Path(self.tmp.name) / "srv/data"; elsewhere.mkdir(parents=True)
+        os.symlink(Path(self.tmp.name) / "srv", self.home / "link")
+        ids = iter("1234-%d" % i for i in range(5, 9))
+        for cwd, want in ((str(elsewhere), elsewhere), ("~/link/data", elsewhere), ("~/.ssh", self.home / ".ssh"),
+                          (str(Path(self.tmp.name)), Path(self.tmp.name))):
+            with self.subTest(cwd=cwd):
+                r = bridge.handle(self.req(cwd=cwd, id=UUID.replace("1234-4", next(ids))), self.state)
+                self.assertEqual(r["cwd"], str(want.resolve()))
+        self.assertEqual(self.mutations()[0][-3:], ["--cwd", str(elsewhere.resolve()), "--no-focus"])
+
+    def test_missing_dangling_and_locked_directories_are_refused(self):
+        os.symlink(Path(self.tmp.name) / "gone", self.home / "dead")
+        with self.assertRaisesRegex(bridge.BridgeError, "^没创建：~/dead 是个链接，指向的地方不存在"):
+            bridge.handle(self.req(cwd="~/dead"), self.state)
+        locked = self.home / "locked"; locked.mkdir(); os.chmod(locked, 0o600)
+        self.addCleanup(os.chmod, locked, 0o700)
+        if os.geteuid() != 0:
+            with self.assertRaisesRegex(bridge.BridgeError, "^没创建：没权限进入 ~/locked"):
+                bridge.handle(self.req(cwd="~/locked"), self.state)
         self.assertEqual(self.mutations(), [])
 
     def test_strict_arguments(self):

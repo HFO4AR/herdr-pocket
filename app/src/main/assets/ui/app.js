@@ -309,7 +309,7 @@ async function refreshStatus(){
  finally{S.statusBusy=false;}}
 
 // ─── Chat ───────────────────────────────────────────────────────────────────
-function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.terminalAnsi='';S.activity='';S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;}
+function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.terminalAnsi='';S.activity='';actForget();S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;}
 async function openAgent(a){
  S.unread.delete(agentKey(a));S.chatStack=[];resetChat({agent:a,record:null,title:titleOf(a),provider:a.agent});
  // No transcript reader for this kind: the terminal is the conversation. Say so once, calmly.
@@ -400,8 +400,9 @@ function updateChatMeta(){
  const n=document.getElementById('chat-meta'),c=S.chat;
  if(n&&c){n.replaceChildren();const a=c.agent&&!c.stale?c.agent:null;
   if(!a)n.append(chatSubtitle());
-  else if(awaitingReply())n.append(el('span','meta-state work','正在读取回复…'),' · '+(projectOf(a)?projectOf(a)+' · ':'')+providerName(a.agent));
-  else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=['working','blocked'].includes(agentState(a))?statusSince(a)||(a.agent_status==='working'&&c.sentAt)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}}
+  // Just sent and not started yet (activity.js): say that, not 执行中 or 正在读取回复.
+  else if(actHeadText()||awaitingReply())n.append(el('span','meta-state work',actHeadText()||'正在读取回复…'),' · '+(projectOf(a)?projectOf(a)+' · ':'')+providerName(a.agent));
+  else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=agentState(a)==='working'?actSince(a):agentState(a)==='blocked'?statusSince(a)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}}
  const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(c?.agent&&!c.stale?stateTone(c.agent):'muted');
  const b=document.getElementById('child-count');if(b){b.textContent=String(S.children.length);b.classList.toggle('hidden',!S.children.length);}kidsPaintHead();}
 function renderChat(){
@@ -486,7 +487,7 @@ async function sendMessage(input){
   // Pictures go up first; only then is the one prompt sent (never resent automatically).
   const images=pics.length?await imgUpload(pics,stage=>{item.stage=stage;paintTimeline();}):null;
   const files=docs.length?await fileUpload(docs,a,stage=>{item.stage=stage;paintTimeline();}):null;item.stage='';
-  await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:card?text.trim():text,id:uuid(),...(dev&&!S.demo?{device:dev}:{}),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
+  const sent=await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:card?text.trim():text,id:uuid(),...(dev&&!S.demo?{device:dev}:{}),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
   if(S.demo){toast('演示模式：未发送，草稿已保留');return;}
   item.state='sent';if(card)card.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
   if(pics.length){imgSet(key,imgAttached(key).filter(p=>!pics.includes(p)));rpc('dropImages',{ids:pics.map(p=>p.id)}).catch(()=>{});}
@@ -494,9 +495,13 @@ async function sendMessage(input){
   // A slash command may not start a turn at all (/status), so no optimistic "working": Herdr's own state decides.
   if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;if(!card)S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
   S.stick=true;paintTimeline();if(card)slashCapture(card);if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);
-  if(S.chat?.noTranscript&&!card){toast('发给 '+providerName(a.agent)+' 了，回复看终端');setTimeout(()=>{if(epoch===S.epoch)fetchTerminal(true);},900);}}
+  if(S.chat?.noTranscript&&!card){toast('发给 '+providerName(a.agent)+' 了，回复看终端'+sentNote(sent,'；'));setTimeout(()=>{if(epoch===S.epoch)fetchTerminal(true);},900);}
+  else if(sentNote(sent))toast(sentNote(sent));}
  catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
  finally{S.sendBusy=Math.max(0,(S.sendBusy||1)-1);button.disabled=!input.value.trim()&&!attCount(key);}}
+// What the bridge says about the agent's own input box after a send: text that sat there was
+// replaced (never joined to this message), or the screen could not confirm the box emptied.
+function sentNote(r,sep=''){const n=[r?.replaced?'覆盖了它输入框里原来的字':'',r?.verified===false?'屏幕上没确认到它收下了，留意一下':''].filter(Boolean).join('，');return n?sep+n:'';}
 // The send button answers the press at once (the haptic comes from native.js); the bubble follows.
 let sendSeq=0;
 function sendPulse(b){if(!b)return;b.classList.remove('fired');void b.offsetWidth;b.classList.add('fired');setTimeout(()=>b.classList.remove('fired'),400);}
@@ -544,13 +549,13 @@ async function fetchTerminal(quiet=false){
  if(quiet&&S.reading===epoch){S.readAgain=epoch;return;}S.reading=epoch;S.readAgain=null;
  // Colors cost a second screen read on the computer: ask only while the 终端 tab or the confirm screen shows.
   const color=S.chatMode==='terminal'||S.chat.agent.agent_status==='blocked';
-  try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity,...(color?{ansi:true}:{})});if(epoch!==S.epoch)return;S.terminalText=r.text;S.terminalAnsi=r.ansi||'';applyReadStatus(r.agent_status);qaScreen(r);modeScreen(r);
+  try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity,...(color?{ansi:true}:{})});if(epoch!==S.epoch)return;S.terminalText=r.text;S.terminalAnsi=r.ansi||'';applyReadStatus(r.agent_status);qaScreen(r);modeScreen(r);actScreen(r);
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
-  screenPaint(document.getElementById('terminal-output'),r.text,S.terminalAnsi);const c=document.getElementById('confirm-screen');if(c){screenPaint(c,r.text,S.terminalAnsi,12);c.scrollTop=c.scrollHeight;}const l=document.getElementById('activity-line');if(l)l.textContent=S.activity;
+  screenPaint(document.getElementById('terminal-output'),r.text,S.terminalAnsi);const c=document.getElementById('confirm-screen');if(c){screenPaint(c,r.text,S.terminalAnsi,12);c.scrollTop=c.scrollHeight;}
   if(!S.chat.record&&S.chatMode==='conversation')paintTimeline();}
  catch(e){if(epoch!==S.epoch)return;if(!quiet)error(e);
   // Never leave 「正在读取…」 up after a failed read: say what happened and how to retry.
-  if(!S.terminalText){const msg='读取终端画面失败：'+(e.message||e)+'。点「刷新」再试';screenPaint(document.getElementById('terminal-output'),msg,'');screenPaint(document.getElementById('confirm-screen'),msg,'');const l=document.getElementById('activity-line');if(l)l.textContent='读取终端失败，稍后会自动再试';}}
+  if(!S.terminalText){const msg='读取终端画面失败：'+(e.message||e)+'。点「刷新」再试';screenPaint(document.getElementById('terminal-output'),msg,'');screenPaint(document.getElementById('confirm-screen'),msg,'');ACT.readErr='读取终端失败，稍后会自动再试';const l=document.getElementById('activity-line');if(l)l.textContent=ACT.readErr;}}
  finally{if(S.reading===epoch)S.reading=null;if(S.readAgain===epoch&&S.epoch===epoch){S.readAgain=null;setTimeout(()=>fetchTerminal(true),0);}}}
 
 // ─── Sheets ─────────────────────────────────────────────────────────────────
@@ -660,7 +665,8 @@ async function loadCatalog(query='',more=false){
 // ─── Back & lifecycle ───────────────────────────────────────────────────────
 function pocketBack(){
  // Back on a sheet with typed content (a device form, a new session) asks for × like a tap outside.
- if(overlay.childElementCount){const panel=overlay.querySelector('.sheet');if(panel?.keepOpen&&panel.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();return;}
+ // A view inside the sheet (the directory picker, dirpick.js) goes back to the sheet first.
+ if(overlay.childElementCount){const panel=overlay.querySelector('.sheet');if(panel?.onBack&&panel.onBack())return;if(panel?.keepOpen&&panel.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();return;}
  if(T.view){leaveTerminal();render();return;}
  if(typeof FX!=='undefined'&&FX.view&&!S.chat){filesBack();return;}
  if(S.chatStack.length){const prev=S.chatStack.pop();S.chat=prev;S.chatMode=prev.mode||'conversation';S.messages=prev.savedMessages||[];S.children=prev.savedChildren||[];S.before=prev.savedBefore||0;S.more=!!prev.savedMore;S.stick=prev.savedStick!==false;S.unseen=0;S.epoch++;renderChat();if(!S.stick)document.getElementById('chat-scroll').scrollTop=prev.savedScroll||0;if(prev.record&&!S.messages.length)fetchHistory(false,true);return;}
@@ -672,7 +678,7 @@ window.pocketBack=pocketBack;
 // the footer, so a path input ended up half hidden. Keep it clear of the footer.
 function sheetFieldClear(){
  const t=document.activeElement;if(!t||!/^(INPUT|TEXTAREA)$/.test(t.tagName))return;
- const s=t.closest('.sheet'),foot=s&&s.querySelector('.new-foot,.close-foot');if(!foot||foot.contains(t))return;
+ const s=t.closest('.sheet'),foot=s&&[...s.querySelectorAll('.new-foot,.close-foot,.dp-foot')].find(x=>x.offsetParent);if(!foot||foot.contains(t))return;
  const r=t.getBoundingClientRect(),f=foot.getBoundingClientRect(),top=s.getBoundingClientRect().top;
  const under=r.bottom+10-f.top;if(under>0)s.scrollTop+=Math.min(under,Math.max(0,r.top-top-10));}
 document.addEventListener('focusin',()=>setTimeout(sheetFieldClear,60));

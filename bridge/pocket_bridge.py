@@ -68,14 +68,19 @@ NOT_SENT = {
     "agent_not_ready": "没发出去：Agent 还没准备好，等它空闲了再发",
     "pane_not_found": "没发出去：这个窗格已经不在了，回到列表刷新一下",
 }
-# Text already in the agent's own input box would be sent together with the prompt (seen live with
-# Claude Code after Esc, and with Codex): refused before anything is typed.
+# A question or approval dialog Herdr still calls idle: typed text plus Enter would pick an option.
 MENU_ON_SCREEN = "没发出去：它正停在一个提问或选择框上（电脑那边还显示它空闲），这时打字回车会直接选中选项。先回答它，或点“用按键操作”看屏幕"
-
-
-DRAFT_NOT_SENT = {
-    "claude": "没发出去：它的输入框里已经有字了（可能是刚被中断、退回来的那条），发出去会连在一起。先在「终端」里看一眼",
-    "codex": "没发出去：它的输入框里已经有字了，发出去会连在一起。先在「终端」里看一眼",
+# Text already in a Claude / Codex input box is replaced by the new message (box_send); these are the
+# cases where that cannot be done safely. Nothing of the new message was submitted in any of them.
+BOX_NOT_SENT = {
+    "draft": "没发出去：它输入框里原来的字没能清干净（可能开着 vim 模式），这条就没发。在「终端」里清一下再发",
+    "unclear": "没发出去：它的输入框里有字，可这台电脑上看不清它的屏幕颜色，没法确认清干净了。在「终端」里清一下再发",
+    "pasting": "没发出去：它还在处理上一次粘贴（屏幕上是「Pasting…」），等它好了再发",
+    "late": "没发出去：粘贴以后它一直显示「Pasting…」，字还没进输入框，所以没按回车（Claude 读剪贴板卡住时会这样）。之后再发会先清掉输入框",
+    "missing": "没发出去：粘贴以后输入框里一直没出现这条，所以没按回车。之后再发会先清掉输入框",
+    "other": "没发出去：粘贴以后输入框里的字和这条对不上，所以没按回车。之后再发会先清掉输入框",
+    "gone": "没发出去：粘贴以后它的输入框不见了（可能弹出了提问或选择框），所以没按回车。在「终端」里看一眼",
+    "enter": "没发出去：字进了它的输入框，可按了两次回车都没发出去。之后再发会先清掉输入框",
 }
 
 
@@ -285,23 +290,241 @@ def colored_screen(prefix, agent, text):
     return merged if len(merged) <= ANSI_LIMIT else screen
 
 
-def herdr_draft(prefix, agent):
-    """Text in a Herdr Claude / Codex input box, from its coloured visible screen ("" when empty).
-    None when that cannot be told (no colours from this Herdr, an unreadable screen, no input box
-    on screen): the prompt then goes as before, Herdr's own state is what lets it through.
+def herdr_box(prefix, agent):
+    """The input box of a Herdr Claude / Codex before a prompt (box_view, read-only), or None when it
+    cannot be told (another kind of agent, an unreadable screen, no colours from this Herdr): the
+    prompt then goes as before and Herdr's own state is what lets it through.
 
-    MENU_ON_SCREEN instead when the box is not on screen but a question / approval dialog is.
+    `menu` instead of a box when the box is not on screen but a question / approval dialog is.
     Herdr can call such an agent idle or done: in a narrow pane the dialog's footer wraps ("Esc to"
     / "cancel", seen with Herdr 0.8.2 at 46 columns) and Herdr no longer recognises it. Typed text
     and Enter would then tick or pick an option instead of sending a message."""
     kind = agent.get("agent")
     if kind not in ("claude", "codex"): return None
-    try: raw = read_screen(prefix, agent, 0, ansi=True).get("text", "")
-    except (BridgeError, OSError, ValueError): return None
+    view = box_before(lambda: read_screen(prefix, agent, 0, ansi=True).get("text", ""), kind)
+    if view and view.get("blind") and not view["menu"]: return None
+    return view
+
+
+# ─── The agent's input box: replaced, then a checked submit ─────────────────
+# Claude Code / Codex keep text in their own input box (an interrupted prompt comes back there, the
+# person may have typed something on the computer). A message from the phone replaces it: the box
+# is emptied and checked empty on screen first, never joined to the new text. The message then goes
+# in as one bracketed paste, Enter waits until the box shows it, and the box is read again after
+# Enter: it only counts as sent once the box has emptied.
+#
+# Why (seen live, Claude Code 2.1.268): a paste naming a picture that is not a local file (the ch
+# route's "[图片 · ch-local fetch] ch-file://….png" line) makes Claude read the clipboard first
+# (`xclip … || wl-paste`); meanwhile it shows "Pasting…" under an empty box and drops any Enter.
+# The text lands in the box afterwards, unsent, and stayed there. Herdr's `agent prompt` and the
+# relay path both pressed Enter about 0.15 s after the paste.
+#
+# Clearing: one round of BOX_CLEAR (end of line, delete to the line start, on the now empty line
+# delete the line break after it, then the one before it) removes one line wherever the cursor is;
+# chips such as "[Pasted text #1 +30 lines]" or "[Image #1]" go with their line. Checked live on
+# Claude Code 2.1.268 and Codex 0.163 (Herdr pane send-keys and tmux send-keys), and that an empty
+# box ignores all four. Never Esc (Claude: twice on an empty box opens rewind; Codex: arms "edit
+# previous message"; both: interrupt a turn), Ctrl+C (interrupt, or exit on an empty box), Ctrl+D
+# (exit), Up / Down (history) or Delete (Herdr has no such key).
+BOX_CLEAR = ("ctrl+e", "ctrl+u", "ctrl+k", "backspace")
+BOX_CLEAR_LINES = 40           # rounds of BOX_CLEAR sent at most before the box is read again
+BOX_CLEAR_TRIES = 3
+BOX_STEP = 0.25                # between screen reads
+BOX_PASTING_WAIT = 3.0         # before a prompt: an earlier "Pasting…" still running
+BOX_LAND_WAIT = 8.0            # after the paste: until the box shows it
+BOX_SUBMIT_WAIT = 5.0          # after Enter: until the box is empty
+BOX_SAME_READS = 3             # unchanged reads after Enter before it counts as not taken
+CLAUDE_PASTING = re.compile(r"^\s*Pasting(?:…|\.\.\.)\s*$")
+# What the agents draw in place of pasted content: Claude "[Pasted text #1 +30 lines]", "[Image #1]",
+# Codex "[Pasted Content 1501 chars]", "[image …]".
+BOX_CHIP = re.compile(r"\[(?:Pasted text #\d+(?: \+\d+ lines?)?|Image #\d+|Pasted Content \d+ chars|image[^\]\n]{0,120})\]")
+
+
+def box_reads(seconds):
+    return max(1, int(seconds / BOX_STEP + 0.5))
+
+
+def box_view(raw, kind):
+    """{box, menu, pasting} of a Claude / Codex screen: the text in its input box ("" when empty,
+    None when the box is not on screen), the dialog parsed while there is no box, and whether Claude
+    shows "Pasting…" (a paste it has not put into the box yet). Without colours an empty box's
+    placeholder cannot be told from typed text: `blind` is then set. None for a non-text read."""
     if not isinstance(raw, str): return None
-    seen = screen_input(raw, kind)
-    if seen["menu"]: return MENU_ON_SCREEN
-    return seen["box"] if "\x1b[" in raw else None
+    plain, colored = screen_pair(raw)
+    box = claude_draft(plain, colored) if kind == "claude" else codex_draft(plain, colored)
+    tail = [x for x in plain.split("\n") if x.strip()][-4:]
+    view = {"box": box, "menu": parse_menu(plain, kind) if box is None else None,
+            "pasting": kind == "claude" and any(CLAUDE_PASTING.match(x) for x in tail)}
+    if "\x1b[" not in raw: view["blind"] = True
+    return view
+
+
+def box_before(read, kind):
+    """The box before a prompt (read-only). While Claude still shows "Pasting…" from an earlier paste,
+    wait up to BOX_PASTING_WAIT for it to land. None when the screen cannot be read."""
+    view = None
+    for i in range(box_reads(BOX_PASTING_WAIT)):
+        if i: time.sleep(BOX_STEP)
+        try: view = box_view(read(), kind)
+        except (BridgeError, OSError, ValueError): return None
+        if not view or not view["pasting"]: return view
+    return view
+
+
+def box_squash(text):
+    return "".join(str(text or "").split())
+
+
+def box_holds(box, text):
+    """The box shows `text`: the same characters once whitespace (wrapping, indents) is ignored; or,
+    where the agent drew chips for pasted content or pictures (it may also move a picture's chip and
+    drop its path), every other character it shows appears in `text`, in order."""
+    shown, want = box_squash(box), box_squash(text)
+    if not shown: return False
+    if shown == want: return True
+    if not BOX_CHIP.search(box): return False
+    rest = iter(want)
+    return all(c in rest for c in box_squash(BOX_CHIP.sub(" ", box)))
+
+
+def box_text(text):
+    """The prompt as it is pasted: CRLF as LF, and no ESC (an ESC[201~ inside would end the paste early)."""
+    return text.replace("\r\n", "\n").replace("\x1b", "")
+
+
+class BoxIO:
+    """One agent's input box: `read` returns its raw coloured screen; `keys` presses BOX_CLEAR keys,
+    `paste` writes a bracketed paste (no Enter), `enter` presses Enter."""
+    def __init__(self, kind, read, keys, paste, enter):
+        self.kind, self.read, self.keys, self.paste, self.enter = kind, read, keys, paste, enter
+
+    def look(self):
+        try: view = box_view(self.read(), self.kind)
+        except (BridgeError, OSError, ValueError): return None
+        return None if not view or view.get("blind") else view
+
+
+class BoxNotSent(BridgeError):
+    """Nothing of this message was submitted (Enter was never pressed, or the box still holds it)."""
+    def __init__(self, code):
+        super().__init__(BOX_NOT_SENT[code])
+        self.code = code
+
+
+def box_clear(io, view):
+    """Empty the box (BOX_CLEAR rounds); True only once a fresh read shows it empty."""
+    for _ in range(BOX_CLEAR_TRIES):
+        io.keys(list(BOX_CLEAR) * min(BOX_CLEAR_LINES, view["box"].count("\n") + 2))
+        for _ in range(box_reads(1.5)):
+            time.sleep(BOX_STEP)
+            view = io.look()
+            if not view or view["box"] is None: return False
+            if view["box"] == "": return True
+            if view["pasting"]: continue
+    return False
+
+
+def box_landed(io, text):
+    """After the paste: ("ours", view) once two reads in a row show the box holding it. Otherwise
+    "unreadable" (screen read failed), "gone" (no box any more), "other" (something else, steady),
+    "late" (still "Pasting…" or empty at the end) or "missing" (empty, no "Pasting…")."""
+    last, view, pasting = None, None, False
+    for i in range(box_reads(BOX_LAND_WAIT)):
+        if i: time.sleep(BOX_STEP)
+        view = io.look()
+        if view is None: return "unreadable", None
+        box = view["box"]
+        if box is None: return "gone", view
+        pasting = view["pasting"]
+        if pasting or not box: last = None; continue
+        holds = box_holds(box, text)
+        # Typed text may show up a few characters at a time: a beginning of it is still arriving.
+        if not holds and box_squash(text).startswith(box_squash(box)): last = None; continue
+        if box == last: return ("ours" if holds else "other"), view
+        last = box
+    if last is not None: return "other", view
+    return ("late" if pasting else "missing"), view
+
+
+def box_taken(io, before):
+    """After Enter: "sent" once the box is empty; "unsent" when it still shows exactly what it showed
+    before Enter after one more Enter (the agent never took it: submitting empties the box);
+    "unknown" when the screen cannot tell (unreadable, no box, other text). Returns (state, retried)."""
+    retried, same = False, 0
+    for _ in range(box_reads(BOX_SUBMIT_WAIT)):
+        time.sleep(BOX_STEP)
+        view = io.look()
+        if view is None or view["box"] is None: return "unknown", retried
+        if view["box"] == "" and not view["pasting"]: return "sent", retried
+        if view["pasting"]: same = 0; continue
+        if box_squash(view["box"]) != box_squash(before): return "unknown", retried
+        same += 1
+        if same < BOX_SAME_READS: continue
+        if retried: return "unsent", retried
+        # Exactly our text, unchanged: Enter was dropped. One more, never a second paste.
+        io.enter(); retried, same = True, 0
+    return ("unsent" if retried and same else "unknown"), retried
+
+
+def box_send(io, text, view):
+    """Replace whatever is in the agent's input box with `text` and submit it (after the receipt).
+    `view` is the box as read just before (box_view, with colours). Returns {verified, replaced
+    [, retried]}: verified False when the screen could not confirm it left the box (it may well
+    have gone; never resent). Raises BoxNotSent when nothing of it can have been submitted (Enter
+    not pressed, or the box still holds it); any other failure after the first write leaves the
+    outcome unknown."""
+    replaced = False
+    if view["box"]:
+        if not box_clear(io, view): raise BoxNotSent("draft")
+        replaced = True
+    text = box_text(text)
+    io.paste(text)
+    state, seen = box_landed(io, text)
+    if state == "unreadable":
+        # The screen stopped answering: as before this check existed, Enter after a short pause.
+        time.sleep(0.3); io.enter()
+        return {"verified": False, "replaced": replaced}
+    if state != "ours": raise BoxNotSent(state)
+    io.enter()
+    taken, retried = box_taken(io, seen["box"])
+    if taken == "unsent": raise BoxNotSent("enter")
+    result = {"verified": taken == "sent", "replaced": replaced}
+    if retried: result["retried"] = True
+    return result
+
+
+def herdr_box_io(prefix, agent):
+    """Pane-level Herdr input for the box: the same for a local agent and a ch relay pane (whose
+    foreground is the relay, so Herdr's agent commands refuse it)."""
+    pane = agent["pane_id"]
+    return BoxIO(agent["agent"],
+                 lambda: call(prefix + ["pane", "read", pane, "--source", "visible", "--format", "ansi"]).get("text", ""),
+                 lambda names: call(prefix + ["pane", "send-keys", pane, *names]),
+                 lambda text: call(prefix + ["pane", "send-text", pane, "\x1b[200~" + text + "\x1b[201~"]),
+                 lambda: call(prefix + ["pane", "send-keys", pane, "enter"]))
+
+
+def box_attempt(io, text, view):
+    """box_send with its failures sorted for the receipt: (result, None) when it went (or may have
+    gone), (stored refusal, BridgeError) when nothing was submitted. Raises when the outcome is
+    unknown (a write failed once Enter may have been pressed)."""
+    pressed = []
+    enter = io.enter
+    def press():
+        pressed.append(True)
+        enter()
+    io.enter = press
+    try: return box_send(io, text, view), None
+    except BoxNotSent as exc:
+        return {"sent": False, "rejected": exc.code}, exc
+    except BridgeError as exc:
+        # Before the first Enter nothing can have been submitted: the paste is bracketed, so its
+        # line breaks stay text. A refusal or a broken write there means "not sent".
+        if pressed: raise
+        message = NOT_SENT.get(getattr(exc, "code", None)) or "没发出去：往它的输入框里写字时出错了（%s），没按回车" % str(exc)[:200]
+        return {"sent": False, "rejected": getattr(exc, "code", None) or "write"}, BridgeError(message)
+    finally:
+        io.enter = enter
 
 
 def screen_input(raw, kind):
@@ -387,8 +610,8 @@ def relay_prompt(prefix, pane_id, text):
     """Type a prompt into a relay pane. One line: `pane run` (text, then Enter). Several lines go in
     as one bracketed paste, so the agent's input box keeps the line breaks, then Enter submits."""
     if "\n" not in text and "\r" not in text: return call(prefix + ["pane", "run", pane_id, text])
-    call(prefix + ["pane", "send-text", pane_id, "\x1b[200~" + text.replace("\r\n", "\n") + "\x1b[201~"])
-    time.sleep(0.15)
+    call(prefix + ["pane", "send-text", pane_id, "\x1b[200~" + box_text(text) + "\x1b[201~"])
+    time.sleep(0.3)
     return call(prefix + ["pane", "send-keys", pane_id, "enter"])
 
 
@@ -400,7 +623,10 @@ def mutate(request, prefix, agent, state_dir):
     digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     # The input box is read before the receipts database is locked (a screen read may take a while);
     # it only refuses below, after a request already handled has answered from its receipt.
-    draft = herdr_draft(prefix, agent) if op in ("prompt", "exitAgent") and agent.get("agent_status") in ("idle", "done") else None
+    view = herdr_box(prefix, agent) if op in ("prompt", "exitAgent") and agent.get("agent_status") in ("idle", "done") else None
+    menu_up = bool(view and view["box"] is None and view["menu"])
+    # The box is on screen (with colours): it is replaced and the submit is checked (box_send).
+    boxed = bool(view and isinstance(view["box"], str))
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     db = sqlite3.connect(state_dir / "receipts.sqlite", timeout=5)
     try:
@@ -425,8 +651,8 @@ def mutate(request, prefix, agent, state_dir):
             if not isinstance(text, str) or (not text.strip() and not images and not files) or len(text.encode()) > 15000 or "\x00" in text:
                 raise BridgeError("Prompt must contain 1–15000 UTF-8 bytes without NUL")
             # Before the receipt: a refusal here sent nothing.
-            if draft is MENU_ON_SCREEN: raise BridgeError(MENU_ON_SCREEN)
-            if draft: raise BridgeError(DRAFT_NOT_SENT[agent["agent"]])
+            if menu_up: raise BridgeError(MENU_ON_SCREEN)
+            if boxed and view["pasting"]: raise BridgeError(BOX_NOT_SENT["pasting"])
             if images is not None or files is not None:
                 # Checked and (for ch routes) shared before the receipt: a failure here sent nothing.
                 text = compose_prompt(text, (prompt_images(images, request, prefix, agent) if images is not None else [])
@@ -452,7 +678,7 @@ def mutate(request, prefix, agent, state_dir):
             if set(request) - CLOSE_KEYS: raise BridgeError("没发出去：请求里有不认识的字段")
             command = EXIT_COMMANDS.get(agent.get("agent"))
             if not command: raise BridgeError("没发出去：不认识这个 Agent，没法让它自己退出")
-            if agent.get("agent_status") not in ("idle", "done") or draft is MENU_ON_SCREEN:
+            if agent.get("agent_status") not in ("idle", "done") or menu_up:
                 raise BridgeError("没发出去：Agent 还在干活或在等确认，先中断它再结束")
             args = ["agent", "prompt", agent["pane_id"], command]
         elif op == "answer":
@@ -476,6 +702,28 @@ def mutate(request, prefix, agent, state_dir):
         # 在写入终端之前持久化请求；中断后相同 ID 也不能再次执行。
         db.execute("INSERT INTO receipts VALUES (?, ?, NULL)", (req_id, digest))
         db.commit()
+        if boxed and op == "prompt":
+            # Pane-level input, the same for a local agent and a ch relay pane.
+            value, refusal = box_attempt(herdr_box_io(prefix, agent), args[-1], view)
+            if refusal:
+                db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(value), req_id))
+                db.commit()
+                raise refusal
+            result = dict({"sent": True, "receipt": req_id, "result": {"type": "ok"}}, **value)
+            if request.get("images") is not None or request.get("files") is not None: result["text"] = text
+            db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
+            db.commit()
+            return result
+        if boxed and op == "exitAgent" and view["box"]:
+            # /exit (/quit) joined to a draft would go out as one message: the box is emptied first.
+            try: cleared = box_clear(herdr_box_io(prefix, agent), view)
+            except HerdrRejected as exc:
+                if exc.code not in NOT_SENT: raise
+                cleared = False
+            if not cleared:
+                db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps({"sent": False, "rejected": "draft"}), req_id))
+                db.commit()
+                raise BridgeError(BOX_NOT_SENT["draft"])
         try:
             try: value = answer_question(request, herdr_answer_io(prefix, agent)) if op == "answer" else call(prefix + args)
             except HerdrRejected as exc:
@@ -1674,6 +1922,7 @@ KIDS_QUIET = 1800          # child stopped mid-turn and the parent said nothing:
 KIDS_OPEN = 6 * 3600       # parent still waits for it (e.g. a long command in the child)
 KIDS_STARTING = 600        # launched, no transcript yet
 KIDS_LIST = 12
+KIDS_LIVE = 4              # running sub-agents whose own tail is read for what they are doing
 KIDS_TAIL = 65_536
 KIDS_SCAN = 32_000_000     # parent bytes read per call; a longer backlog continues next call
 KIDS_EVENTS = 400
@@ -1990,15 +2239,37 @@ def kids_report(path, provider, thread, now=None):
                      modified=v["at"], running=True, state="starting")
                 for k, v in events.items() if v.get("s") == "open" and k not in seen and v.get("agent") not in seen and now - v.get("at", 0) < KIDS_STARTING]
     rows.sort(key=lambda r: (not r["running"], -r["at"]))
-    items = list(starting)
+    items, live = list(starting), 0
     for row in rows[:max(0, KIDS_LIST - len(items))]:
         meta = row["meta"] or kid_meta(provider, root, row["path"], row["info"])
-        if meta: items.append(dict(public_record(meta), running=row["running"], state="running" if row["running"] else "done"))
+        if not meta: continue
+        item = dict(public_record(meta), running=row["running"], state="running" if row["running"] else "done")
+        # What the newest running ones are doing right now (their own tail; a few ms each).
+        if row["running"] and live < KIDS_LIVE:
+            live += 1
+            try: item.update(kid_activity(row["path"], provider))
+            except (OSError, ValueError): pass
+        items.append(item)
     running = sum(1 for r in rows if r["running"]) + len(starting)
     # Same stamp = same answer: which sub-agents exist, which run, how the newest ones look.
     stamp = hashlib.sha256(json.dumps([path.stat().st_size, [(r["path"].name, r["running"]) for r in rows], [x.get("title") for x in items]],
                                       ensure_ascii=False).encode()).hexdigest()[:20]
     return {"total": len(rows) + len(starting), "running": running, "items": items, "stamp": stamp}
+
+
+def kid_activity(path, provider):
+    """A running sub-agent's current step from its own tail (≤ KIDS_TAIL bytes, read-only): the glance
+    activity (tool call with its verb, or the note it just wrote), when its current task started, and
+    how many of this task's commands ran / failed."""
+    messages, _ = glance_tail(path, provider, KIDS_TAIL)
+    summary = glance_summary(messages)
+    out = {}
+    if summary.get("activity"): out["activity"] = summary["activity"]
+    if (summary.get("task") or {}).get("at"): out["started"] = summary["task"]["at"]
+    turn = summary.get("turn") or {}
+    if turn.get("tools"): out["tools"] = turn["tools"]
+    if turn.get("failed"): out["failed"] = turn["failed"]
+    return out
 
 
 def kids_for_item(item, path=None):
@@ -2504,6 +2775,57 @@ def screen_bg(text):
         for m in SCREEN_BG_RE.finditer(line):
             total += int(m.group(1)); words.append(m.group(0)[:40])
     return {"count": total, "words": words} if words else None
+
+
+# ─── What the agent says it is doing ─────────────────────────────────────────────────────
+# The agent's own live status line, read from the same screen read the chat already makes, so the
+# phone can say "Ionizing… 42s ↓ 1.2k tokens" the way the agent does. Read-only; nothing here
+# decides the state (Herdr / the screen rules above still do). Formats seen on screen:
+#   Claude Code 2.x  "✽ Ionizing… (42s · ↓ 1.2k tokens · esc to interrupt)", "· Ionizing… (4s · ↓ 28 tokens)",
+#                    "✢ Compacting conversation… (34s)", "✶ Ionizing… (esc to interrupt · ctrl+t to show todos)"
+#   Codex 0.16x      "• Working (12s • esc to interrupt)", "◦ Exploring the code (1m 02s • esc to interrupt)"
+# A finished line ("✻ Crunched for 7s", "• Ran npm test") has neither the ellipsis nor the interrupt
+# hint and is not activity. Only the bottom of the screen counts, the newest match wins.
+SCREEN_ACTIVITY_RE = re.compile(r"^\s*[·•◦✢✳✶✻✽*∗⏺]\s+(?P<verb>[^\s(…][^(…]{0,60}?)\s*(?P<dots>…|\.\.\.)?\s*(?:\((?P<inner>[^()]{0,160})\))?\s*$")
+SCREEN_TIME_RE = re.compile(r"^(?:(\d{1,3})h\s*)?(?:(\d{1,4})m\s*)?(?:(\d{1,5})s)?$")
+SCREEN_UNDER_RE = re.compile(r"^\s+(?:⎿|[◻◼☐☑☒✔✓□■]|Tip:|…)|^\s{4,}\S")
+SCREEN_TOKENS_RE = re.compile(r"([↑↓])\s*([\d.,]{1,9}\s?[kKmM]?)\s*tokens?\b")
+
+
+def screen_activity(text):
+    """{"verb", "seconds"?, "tokens"?, "dir"?, "thinking"?, "line"} from the agent's live status line at
+    the bottom of a screen, or None when there is none (idle, a dialog, a finished line)."""
+    lines = screen_lines(text)
+    # Claude draws it just above its input box (a todo list may sit between): only those lines count,
+    # so a bullet in the conversation above never reads as activity. Elsewhere: the bottom lines.
+    rules = [i for i, x in enumerate(lines) if RULE_RE.match(x)]
+    box = next((rules[k - 1] for k in range(len(rules) - 1, 0, -1)
+                if any(x.lstrip().startswith("❯") for x in lines[rules[k - 1] + 1:rules[k]])), None)
+    if box is not None:
+        # Walking up from the box past its todo list / tip lines, the first other line must be it.
+        above = [x for x in lines[max(0, box - 14):box] if x.strip()]
+        while above and SCREEN_UNDER_RE.match(above[-1]): above.pop()
+        lines = above[-1:]
+    else: lines = [x for x in lines if x.strip()][-8:]
+    for line in reversed(lines):
+        m = SCREEN_ACTIVITY_RE.match(line)
+        if not m: continue
+        inner = m.group("inner") or ""
+        if not m.group("dots") and "interrupt" not in inner.lower(): continue
+        verb = m.group("verb").strip()
+        if not re.match(r"[^\W\d_]", verb): continue
+        out = {"verb": verb[:60]}
+        for part in re.split(r"\s+[·•]\s+", inner):
+            part = part.strip(); low = part.lower()
+            t = SCREEN_TIME_RE.match(part) if part else None
+            if t and any(t.groups()):
+                h, mi, se = (int(x or 0) for x in t.groups()); out["seconds"] = h * 3600 + mi * 60 + se; continue
+            k = SCREEN_TOKENS_RE.search(part)
+            if k: out["dir"], out["tokens"] = k.group(1), k.group(2).replace(" ", ""); continue
+            if low.startswith("thinking") or low.startswith("thought"): out["thinking"] = True
+        out["line"] = line.strip()[:160]
+        return out
+    return None
 
 
 # ─── Agent modes ────────────────────────────────────────────────────────────
@@ -3782,11 +4104,14 @@ def create_info(prefix):
     return {"kinds": kinds, "more": more, "workspaces": workspaces, "dirs": dirs[:24], "home": str(Path.home())}
 
 
-def create_dir(raw, known):
-    """A real directory: under $HOME, or one a pane or recent history already uses. No `..`, no tricks.
-    `~`, `~/x` and a path relative to $HOME ("projects/app", as the hint says) all mean under $HOME.
-    Known directories are compared by their real path: a pane or transcript may name a directory
-    through a symlink (a linked home, /mnt/... mounted into ~) that resolves somewhere else."""
+def create_dir(raw):
+    """Any existing directory the SSH user can enter (the person picks it in the phone's directory
+    tree or types it): under $HOME or anywhere else, hidden or not, named directly or through a
+    symlink (~/work -> /mnt/E/work). The account can already `cd` there over SSH; the directory only
+    becomes tmux's / Herdr's start directory, given as one argv item, never through a shell.
+    `~`, `~/x` and a path relative to $HOME ("projects/app") mean under $HOME; `~user` and `..`
+    are refused, and so is a path that does not exist, is not a directory or cannot be entered.
+    Returns the real path (symlinks resolved), the directory that was checked."""
     if not isinstance(raw, str) or not raw.strip() or len(raw) > 1024 or any(ord(c) < 32 or ord(c) == 127 for c in raw):
         raise BridgeError("没创建：目录路径不对")
     text = raw.strip()
@@ -3796,23 +4121,227 @@ def create_dir(raw, known):
     path = Path(text)
     if not path.is_absolute(): path = home / path
     if ".." in path.parts: raise BridgeError("没创建：目录里不能有 ..")
+    shown = raw.strip()[:200]
     try: resolved = path.resolve(strict=True)
-    except (OSError, RuntimeError): raise BridgeError("没创建：这个目录不存在") from None
-    if not resolved.is_dir(): raise BridgeError("没创建：这不是一个目录")
-    home = home.resolve()
-    if resolved.is_relative_to(home) and not any(p.startswith(".") for p in resolved.relative_to(home).parts):
-        return str(resolved)
-    for d in known():
+    except (OSError, RuntimeError):
+        if path.is_symlink(): raise BridgeError("没创建：" + shown + " 是个链接，指向的地方不存在") from None
+        raise BridgeError("没创建：目录 " + shown + " 不存在") from None
+    if not resolved.is_dir(): raise BridgeError("没创建：" + shown + " 不是目录")
+    if not os.access(resolved, os.X_OK): raise BridgeError("没创建：没权限进入 " + shown)
+    return str(resolved)
+
+
+# ─── Directory tree for the 新建 sheets (read-only) ─────────────────────────
+# dirList: the folders inside one directory (`path`) or a few (`paths`, the way down to a start
+# directory), for the phone's directory picker. Folder names only: no files, no file contents,
+# no sizes or times. Entries are classified without following symlinks (scandir's d_type, else
+# lstat); a symlink is shown with its target as text and listed only when it leads to a folder
+# (os.stat follows it). Each directory is read in a forked child with a deadline and its stdout/
+# stderr on /dev/null, so a hung network mount (/mnt/...) answers "too slow" instead of hanging
+# the bridge; what arrived before the deadline is still returned (`partial`).
+DIRLIST_KEYS = {"v", "op", "path", "paths", "hidden", "query"}
+DIRLIST_MAX = 500        # folders returned per directory (sorted; `truncated` when more)
+DIRLIST_SCAN = 20000     # entries looked at per directory before giving up on the rest
+DIRLIST_PATHS = 16       # directories per request
+DIRLIST_TIMEOUT = 4.0    # seconds per directory
+DIRLIST_BUDGET = 9.0     # seconds per request
+DIRLIST_ERRORS = {"missing": "这个目录不存在", "notdir": "这不是目录", "denied": "没权限打开这个目录",
+                  "timeout": "读这个目录超时了（可能是很慢或没挂上的网络盘）", "budget": "没来得及读，再点一下试试"}
+
+
+def dir_path(raw):
+    """An absolute path from the phone: `/…`, `~` or `~/…`. Only text work, no filesystem access
+    (a hung mount must not hang this part): `.` and repeated slashes are dropped, `..` is refused."""
+    if not isinstance(raw, str) or not raw or len(raw) > 4096 or any(ord(c) < 32 or ord(c) == 127 for c in raw):
+        raise BridgeError("目录路径不对")
+    text = raw
+    if text == "~" or text.startswith("~/"): text = str(Path.home()) + text[1:]
+    elif text.startswith("~"): raise BridgeError("只能用自己的家目录（~ 或 ~/…）")
+    if not text.startswith("/"): raise BridgeError("要用 / 或 ~ 开头的路径")
+    parts = [p for p in text.split("/") if p not in ("", ".")]
+    if ".." in parts: raise BridgeError("路径里不能有 ..")
+    return "/" + "/".join(parts)
+
+
+def dir_name_ok(name, limit=255):
+    """A name the phone can show and send back as it is: valid UTF-8 (no surrogate-escaped bytes),
+    no control, line-separator or bidi-control characters, at most `limit` bytes."""
+    try: raw = name.encode("utf-8")
+    except UnicodeEncodeError: return False
+    if len(raw) > limit: return False
+    return not any(ord(c) < 32 or 127 <= ord(c) < 160 or c in "  ‎‏‪‫‬‭‮⁦⁧⁨⁩" for c in name)
+
+
+def dir_flags(full):
+    """Access flags of one folder, only the ones that are false (keeps the answer small)."""
+    e = {}
+    if not os.access(full, os.X_OK): e["enter"] = False
+    if not os.access(full, os.R_OK): e["list"] = False
+    if not os.access(full, os.W_OK): e["write"] = False
+    return e
+
+
+def dir_scan(path, hidden, query, emit):
+    """Runs in the child. Emits the directory's own flags, then folder entries in batches, then
+    each symlink's verdict (stat follows it, which is where a dead mount hangs)."""
+    st = os.stat(path)
+    if not stat_module.S_ISDIR(st.st_mode): emit({"error": "notdir"}); return
+    real = os.path.realpath(path)
+    emit({"head": True, "real": real, "enter": os.access(path, os.X_OK), "list": os.access(path, os.R_OK),
+          "write": os.access(path, os.W_OK)})
+    batch, links, hidden_n, skipped, scanned, more = [], [], 0, 0, 0, False
+    with os.scandir(path) as it:
+        for entry in it:
+            scanned += 1
+            if scanned > DIRLIST_SCAN: more = True; break
+            try:
+                link = entry.is_symlink()
+                folder = not link and entry.is_dir(follow_symlinks=False)
+            except OSError: continue
+            if not link and not folder: continue
+            name = entry.name
+            if not dir_name_ok(name): skipped += 1; continue
+            if name.startswith(".") and not hidden: hidden_n += 1; continue
+            if query and query not in name.casefold(): continue
+            full = os.path.join(path, name)
+            if link:
+                try: target = os.readlink(full)
+                except OSError: target = ""
+                links.append([name, target if dir_name_ok(target, 1024) else ""])
+                continue
+            batch.append(dict({"name": name}, **dir_flags(full)))
+            if len(batch) >= 200: emit({"dirs": batch}); batch = []
+    emit({"dirs": batch, "scanned": scanned, "more": more, "hidden": hidden_n, "skipped": skipped, "links": links})
+    for name, target in links:
+        full = os.path.join(path, name)
+        try: folder = stat_module.S_ISDIR(os.stat(full).st_mode)
+        except OSError: folder = False
+        entry = None
+        if folder:
+            entry = dict({"name": name, "link": target, "real": os.path.realpath(full)}, **dir_flags(full))
+        emit({"resolved": name, "entry": entry})
+    emit({"done": True})
+
+
+def dir_child(path, hidden, query, timeout):
+    """dir_scan in a forked child; its messages as they arrived and whether it finished in time."""
+    import select
+    import signal
+    got = []
+    if not hasattr(os, "fork"):
+        dir_scan_safe(path, hidden, query, got.append)
+        return got, True
+    r, w = os.pipe()
+    sys.stdout.flush(); sys.stderr.flush()
+    pid = os.fork()
+    if pid == 0:
         try:
-            if os.path.realpath(d) == str(resolved): return str(resolved)
-        except (OSError, ValueError, TypeError): continue
-    # A symlink in $HOME pointing out of it (~/work -> /mnt/data/work): say where it really goes,
-    # else "only folders under home" reads like a mistake for a path that starts with ~/.
-    if resolved.is_relative_to(home): raise BridgeError("没创建：隐藏目录（名字以 . 开头）不能用")
-    if path.is_relative_to(Path.home()) or path.is_relative_to(home):
-        raise BridgeError("没创建：" + raw.strip()[:200] + " 实际指向家目录外面的 " + str(resolved)[:300]
-                          + "；只能用家目录下的目录，或已经有窗格在用的目录")
-    raise BridgeError("没创建：只能用家目录下的目录，或已经有窗格在用的目录")
+            os.close(r)
+            null = os.open(os.devnull, os.O_RDWR)
+            for fd in (0, 1, 2): os.dup2(null, fd)
+            def emit(obj):
+                data = (json.dumps(obj) + "\n").encode()
+                while data: data = data[os.write(w, data):]
+            dir_scan_safe(path, hidden, query, emit)
+        except BaseException:
+            pass
+        finally:
+            os._exit(0)
+    os.close(w)
+    deadline, buf, finished = time.monotonic() + timeout, b"", False
+    try:
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0: break
+            ready, _, _ = select.select([r], [], [], left)
+            if not ready: break
+            chunk = os.read(r, 65536)
+            if not chunk: finished = True; break
+            buf += chunk
+            *lines, buf = buf.split(b"\n")
+            for line in lines:
+                try: got.append(json.loads(line))
+                except ValueError: pass
+    finally:
+        os.close(r)
+        if not finished:
+            # Stuck in the filesystem: kill it and do not wait (a process in uninterruptible I/O
+            # cannot be reaped until the mount answers; the bridge answers now either way).
+            try: os.kill(pid, signal.SIGKILL)
+            except OSError: pass
+        for _ in range(20 if finished else 5):
+            try:
+                if os.waitpid(pid, os.WNOHANG)[0]: break
+            except ChildProcessError: break
+            time.sleep(0.01)
+    return got, finished and any(m.get("done") or m.get("error") for m in got)
+
+
+def dir_scan_safe(path, hidden, query, emit):
+    try: dir_scan(path, hidden, query, emit)
+    except FileNotFoundError: emit({"error": "missing"})
+    except NotADirectoryError: emit({"error": "notdir"})
+    except PermissionError: emit({"error": "denied"})
+    except OSError as exc: emit({"error": "os", "detail": (exc.strerror or type(exc).__name__)[:200]})
+
+
+def dir_listing(path, hidden, query, timeout):
+    home = str(Path.home())
+    out = {"path": path, "home": home}
+    if path != "/": out["parent"] = os.path.dirname(path)
+    got, done = dir_child(path, hidden, query, timeout)
+    head = next((m for m in got if m.get("head")), None)
+    error = next((m for m in got if m.get("error")), None)
+    if error or not head:
+        code = error["error"] if error else "timeout"
+        msg = DIRLIST_ERRORS.get(code) or "读不到这个目录（" + str(error.get("detail", ""))[:200] + "）"
+        # A folder that can be entered but not listed is still a fine start directory.
+        if head and code == "denied": out.update(enter=head["enter"], list=False, write=head["write"])
+        return dict(out, error=msg, code=code, dirs=[])
+    dirs, links, summary, resolved = [], [], {}, {}
+    for m in got:
+        dirs.extend(m.get("dirs") or [])
+        if "links" in m: links, summary = m["links"], m
+        if "resolved" in m: resolved[m["resolved"]] = m["entry"]
+    for name, target in links:
+        if name in resolved:
+            if resolved[name]: dirs.append(resolved[name])
+        else:
+            # Its target did not answer in time: shown, marked, the person can still try to open it.
+            dirs.append({"name": name, "link": target, "slow": True})
+    dirs.sort(key=lambda d: (d["name"].casefold(), d["name"]))
+    partial = not done
+    if head["real"] != path: out["real"] = head["real"]
+    out.update(enter=head["enter"], list=head["list"], write=head["write"], dirs=dirs[:DIRLIST_MAX], total=len(dirs),
+               truncated=len(dirs) > DIRLIST_MAX or bool(summary.get("more")) or (partial and not summary),
+               hidden=summary.get("hidden", 0), skipped=summary.get("skipped", 0), partial=partial)
+    if partial: out["note"] = "这个目录读得很慢，只列出了一部分" if not summary else "有的链接指向的地方没响应"
+    return out
+
+
+def dir_list(request):
+    """dirList {path | paths, hidden?, query?}: read-only, see the block comment above."""
+    if set(request) - DIRLIST_KEYS: raise BridgeError("请求里有不认识的字段")
+    hidden = request.get("hidden", False)
+    if not isinstance(hidden, bool): raise BridgeError("hidden 要是 true / false")
+    query = request.get("query", "")
+    if not isinstance(query, str) or len(query) > 100 or any(ord(c) < 32 for c in query): raise BridgeError("筛选的字不对")
+    query = query.strip().casefold()
+    if "paths" in request:
+        paths = request["paths"]
+        if "path" in request or not isinstance(paths, list) or not 1 <= len(paths) <= DIRLIST_PATHS:
+            raise BridgeError("目录列表不对（1 到 %d 个）" % DIRLIST_PATHS)
+        lists, end = [], time.monotonic() + DIRLIST_BUDGET
+        for raw in paths:
+            try: path = dir_path(raw)
+            except BridgeError as exc:
+                lists.append({"path": raw if isinstance(raw, str) else "", "error": str(exc), "code": "bad", "dirs": []}); continue
+            left = min(DIRLIST_TIMEOUT, end - time.monotonic())
+            if left < 0.2:
+                lists.append({"path": path, "error": DIRLIST_ERRORS["budget"], "code": "budget", "dirs": []}); continue
+            lists.append(dir_listing(path, hidden, "", left))
+        return {"lists": lists}
+    return dir_listing(dir_path(request.get("path")), hidden, query, DIRLIST_TIMEOUT)
 
 
 def receipt_open(state_dir, req_id, digest, unknown="上次新建的结果未知：先刷新列表看看，别直接重试"):
@@ -3925,9 +4454,7 @@ def create_agent(request, prefix, state_dir):
         workspaces = create_workspaces(prefix)
         if place != "new" and not any(w["workspace_id"] == place for w in workspaces):
             raise BridgeError("没创建：那个工作区已经不在了，刷新一下")
-        pane_dirs = {d["path"] for w in workspaces for d in w["dirs"]}
-        known = lambda: pane_dirs | {d["path"] for d in history_dirs(40)}
-        cwd = create_dir(request.get("cwd"), known)
+        cwd = create_dir(request.get("cwd"))
     except (BridgeError, OSError) as exc:
         if str(exc).startswith("没创建"): raise
         raise BridgeError("没创建：读不到 Herdr 的工作区（" + str(exc)[:160] + "）") from exc
@@ -4714,8 +5241,7 @@ def tmux_new(request, state_dir):
     try:
         panes = tmux_panes(only="") or []
         if name and any(p["session"] == name for p in panes): raise BridgeError("没创建：已经有叫 " + name + " 的 tmux 会话了")
-        known = {p["cwd"] for p in panes if p["cwd"].startswith("/")}
-        cwd = create_dir(request.get("cwd"), lambda: known | {d["path"] for d in history_dirs(40)})
+        cwd = create_dir(request.get("cwd"))
     except (BridgeError, OSError) as exc:
         if str(exc).startswith("没创建"): raise
         raise BridgeError("没创建：读不到 tmux（" + str(exc)[:160] + "）") from exc
@@ -4801,14 +5327,35 @@ def tmux_kill(request, state_dir):
 #  · status (target): the cheap poll of one open chat; `status` with `tmux: true` and no target
 #    lists every tmux agent next to Herdr's (the background watcher). Reads only.
 #  · prompt: refused unless the screen says it is idle (same rule as Herdr: the phone queues
-#    instead) and its input box is empty (claude_draft, codex_draft); pictures and files name
-#    the phone's uploads by local path (the pane runs here), re-hashed first. One receipt per request id, through tmux_send.
+#    instead); text in its input box is replaced and the submit checked (box_send); pictures and
+#    files name the phone's uploads by local path (the pane runs here), re-hashed first. One
+#    receipt per request id (the one tmux_send would write).
 #  · answer: answer_question with tmux keys (tmux_answer_io): every key is followed by a screen
 #    read, Enter only on a verified cursor; its receipt is written before the first key.
 #  · key: ↑ ↓ Enter Esc Ctrl+C and Shift+Tab (BTab, only while the agent's own input footer is on
 #    screen and nothing waits: on a permission dialog Claude would take it as "don't ask again").
 TMUX_AGENT_OPS = ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent")
 TMUX_ANSWER_KEYS = {"up": "Up", "down": "Down", "enter": "Enter"}
+
+
+TMUX_BOX_KEYS = {"ctrl+e": "C-e", "ctrl+u": "C-u", "ctrl+k": "C-k", "backspace": "BSpace"}
+
+
+def tmux_box_io(pane, kind, req_id):
+    """box_send's input for a tmux pane: visible rows with colours, keys, a paste (bracketed when the
+    agent asked for it, which Claude and Codex do) and Enter."""
+    target, sock = pane["_tid"], pane["_sock"]
+    def paste(text):
+        name = "herdr-pocket-" + req_id[:8]
+        tmux_run(["load-buffer", "-b", name, "-"], data=text, sock=sock)
+        try: tmux_run(["paste-buffer", "-p", "-d", "-b", name, "-t", target], sock=sock)
+        except TmuxFailed:
+            try: tmux_run(["delete-buffer", "-b", name], sock=sock)
+            except BridgeError: pass
+            raise
+    return BoxIO(kind, lambda: tmux_run(["capture-pane", "-p", "-e", "-J", "-t", target], sock=sock),
+                 lambda names: tmux_run(["send-keys", "-t", target, *[TMUX_BOX_KEYS[n] for n in names]], sock=sock),
+                 paste, lambda: tmux_run(["send-keys", "-t", target, "Enter"], sock=sock))
 
 
 def tmux_answer_io(pane, kind):
@@ -4911,6 +5458,8 @@ def tmux_agent_request(request, state_dir):
         text, screen = tmux_capture(pane)
         state = tmux_state(pane, found, text)
         result = {"text": text, "agent_status": state, "modes": screen_modes(text, found["kind"]), "bg": screen_bg(text)}
+        activity = screen_activity(text)
+        if activity: result["activity"] = activity
         # `menu: true` (after a slash command) parses a picker even when the state is not blocked.
         if state == "blocked" or request.get("menu") is True: result["menu"] = parse_menu(text, found["kind"])
         if request.get("ansi") is True: result["ansi"] = screen
@@ -4938,21 +5487,38 @@ def tmux_agent_request(request, state_dir):
     if state == "blocked": raise BridgeError(NOT_SENT["agent_blocked"])
     # Same rule as a Herdr agent: only an idle agent gets a prompt; the phone queues it meanwhile.
     if state != "idle": raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
-    if found["kind"] == "claude":
-        plain, colored = tmux_capture(pane)
-        if claude_draft(plain, colored):
-            raise BridgeError(DRAFT_NOT_SENT["claude"])
-    elif found["kind"] == "codex":
-        # Text typed into the pane (or left there) would be sent together with this prompt (seen live).
-        plain, colored = tmux_capture(pane)
-        draft = codex_draft(plain, colored)
-        if draft is None: raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
-        if draft: raise BridgeError(DRAFT_NOT_SENT["codex"])
+    # Text already in the box is replaced, never joined (box_send): read with colours, visible rows.
+    io = tmux_box_io(pane, found["kind"], request.get("id") or "")
+    view = box_before(io.read, found["kind"])
+    if view is None: raise BridgeError("读不到这个 tmux 窗格，先没发")
+    if view["box"] is None:
+        # Codex: idle only with its own composer on screen (letters may be shortcuts elsewhere).
+        if found["kind"] == "codex": raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
+        if view["menu"]: raise BridgeError(NOT_SENT["agent_blocked"])
+    elif view.get("blind"):
+        # Without colours an empty box's placeholder looks like typed text: cannot be cleared verifiably.
+        if view["box"]: raise BridgeError(BOX_NOT_SENT["unclear"])
+    elif view["pasting"]: raise BridgeError(BOX_NOT_SENT["pasting"])
     if attached:
         # Checked before the receipt: a refusal here sent nothing.
         text = compose_prompt(text, tmux_attachments(request))
         if len(text.encode()) > TMUX_TEXT: raise BridgeError("没发出去：消息加上附件路径太长了")
-    result = tmux_send(dict(base, action="run", text=text), state_dir)
+    if view["box"] is None or view.get("blind"): result = tmux_send(dict(base, action="run", text=text), state_dir)
+    else:
+        req_id = request.get("id")
+        if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
+        # The same receipt (id and digest) as tmux_send would write for this prompt.
+        digest = hashlib.sha256(json.dumps(dict(base, action="run", text=text), sort_keys=True).encode()).hexdigest()
+        db, previous = receipt_open(state_dir, req_id, digest, "上次的输入结果未知：先看一眼终端，别直接重发")
+        if previous is not None: return previous
+        try:
+            value, refusal = box_attempt(io, text, view)
+            if refusal:
+                receipt_save(db, req_id, value)
+                raise refusal
+            result = dict({"sent": True, "receipt": req_id}, **value)
+            receipt_save(db, req_id, result)
+        finally: db.close()
     if attached and result.get("sent"): result = dict(result, text=text)
     return result
 
@@ -5028,6 +5594,7 @@ def handle(request, state_dir=None):
     if op == "glance": return glance(request)
     if op == "fileInfo": return file_info(request)
     if op == "fileView": return view_request(request)
+    if op == "dirList": return dir_list(request)
     if op in ("tmux", "tmuxRead", "tmuxSend", "tmuxInfo", "tmuxNew", "tmuxKill"):
         return tmux_request(request, state_dir or Path.home() / ".local/state/herdr-pocket")
     if op in TMUX_AGENT_OPS and isinstance(request.get("target"), str) and TMUX_PANE_ID.fullmatch(request["target"]):
@@ -5108,6 +5675,8 @@ def handle(request, state_dir=None):
         screen = with_menu(read_screen(prefix, agent, 160), agent, request.get("menu") is True)
         screen["modes"] = screen_modes(screen.get("text", ""), agent.get("agent"))
         screen["bg"] = screen_bg(screen.get("text", ""))
+        activity = screen_activity(screen.get("text", ""))
+        if activity: screen["activity"] = activity
         # `ansi: true` (the 终端 tab and the confirm screen are open): add the colored screen. Menus
         # and modes keep parsing the plain read above: Herdr's colored read is the visible rows only.
         if request.get("ansi") is True:

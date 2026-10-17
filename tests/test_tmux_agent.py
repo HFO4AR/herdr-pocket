@@ -111,7 +111,13 @@ class TmuxAgentTests(unittest.TestCase):
             if "-l" in args: tui.text(args[-1])
             else: tui.key(args[-1])
             return ""
-        if cmd in ("load-buffer", "paste-buffer", "delete-buffer"): return ""
+        if cmd == "load-buffer": self.buffers = dict(getattr(self, "buffers", {}), **{args[2]: data}); return ""
+        if cmd == "paste-buffer":
+            data = getattr(self, "buffers", {}).pop(args[args.index("-b") + 1], "")
+            tui = self.tuis[target]
+            if hasattr(tui, "paste"): tui.paste(data)
+            return ""
+        if cmd == "delete-buffer": return ""
         raise AssertionError(args)
 
     def h(self, **req): return bridge.handle(dict(v=1, **req), self.state)
@@ -124,6 +130,15 @@ class TmuxAgentTests(unittest.TestCase):
         a = self.agent()
         menu = self.h(op="read", target="%1", identity=a["identity"])["menu"]
         return self.h(op="answer", target="%1", identity=a["identity"], id=request_id, fingerprint=menu["fingerprint"], **extra)
+
+    def test_read_carries_the_agents_status_line(self):
+        # The phone's activity line: the agent's own words and clock, only while it works.
+        self.tuis["%1"] = Static(CLAUDE_BUSY)
+        a = self.agent()
+        read = self.h(op="read", target="%1", identity=a["identity"])
+        self.assertEqual((read["agent_status"], read["activity"]["verb"], read["activity"]["seconds"]), ("working", "Pondering", 12))
+        self.tuis["%1"] = Static(CLAUDE_IDLE)
+        self.assertNotIn("activity", self.h(op="read", target="%1", identity=a["identity"]))
 
     def test_read_carries_the_menu_while_it_waits(self):
         self.tuis["%1"] = MultiChatTui()
@@ -242,7 +257,8 @@ class TmuxAgentTests(unittest.TestCase):
         a = self.agent()
         box = "\n".join(["● 好了。", "", RULE, "❯\u00a0Write a 30-line poem about terminals", RULE, "  ⏵⏵ accept edits on (shift+tab to cycle)"])
         self.tuis["%1"] = Static(box)
-        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它的输入框里已经有字"):
+        # Captured without colours, a dim suggestion cannot be told from typed text: not cleared blind.
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它的输入框里有字，可这台电脑上看不清"):
             self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[0], text="Reply with just: NOW-OK")
         self.assertEqual(self.sent(), [])
         # Captured with colours: an empty box, a draft, and a dim suggestion after the cursor.
@@ -374,13 +390,16 @@ class CodexPicker:
 
 
 class CodexTurn:
-    """Codex working on a turn (real screen); Esc interrupts it (real screen), as seen live."""
-    def __init__(self): self.name = "working"
-    def ansi(self): return CODEX[self.name]
-    def screen(self): return bridge.strip_sgr(CODEX[self.name])
+    """Codex working on a turn (real screen); Esc interrupts it (real screen), as seen live. A paste
+    then shows in its composer (the real draft screen) and Enter starts the next turn."""
+    def __init__(self): self.name, self.typed, self.submitted = "working", "", []
+    def ansi(self): return CODEX["draft"].replace("hello draft text", self.typed) if self.typed else CODEX[self.name]
+    def screen(self): return bridge.strip_sgr(self.ansi())
     def key(self, name):
         if name == "Escape" and self.name == "working": self.name = "interrupted"
+        if name == "Enter" and self.typed: self.submitted.append(self.typed); self.typed, self.name = "", "working"
     def text(self, value): pass
+    def paste(self, value): self.typed += value
 
 
 class CodexTmuxTests(unittest.TestCase):
@@ -420,12 +439,15 @@ class CodexTmuxTests(unittest.TestCase):
 
     def test_text_in_its_composer_is_never_joined(self):
         # Seen live: "leftover draft" in the composer + a prompt went out as "leftover draftReply with just: OK".
+        # Now the composer is emptied first (test_overwrite); one that stays as it is gets nothing typed.
         a = self.agent()
-        for name in ("draft", "draft_multi"):
+        for i, name in enumerate(("draft", "draft_multi")):
             self.tuis["%1"] = CodexScreen(name)
-            with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它的输入框里已经有字"):
-                self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[0], text="Reply with just: OK")
-        self.assertEqual(self.sent(), [])
+            with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它输入框里原来的字没能清干净"):
+                self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[i], text="Reply with just: OK")
+        self.assertFalse(any(x[0] == "paste-buffer" or x[-1] == "Enter" for x in self.sent()))
+        self.assertTrue(set(k for x in self.sent() for k in x[3:]) <= {"C-e", "C-u", "C-k", "BSpace"})
+        self.log.clear()
         draft = lambda name: bridge.codex_draft(bridge.strip_sgr(CODEX[name]), CODEX[name])
         self.assertEqual([draft(n) for n in ("idle", "working", "plan", "esc_again")], ["", "", "", ""])
         self.assertEqual(draft("draft"), "hello draft text")
@@ -433,9 +455,12 @@ class CodexTmuxTests(unittest.TestCase):
         self.assertIsNone(draft("question"))
         # Without colours a placeholder cannot be told from typed text: counted as a draft.
         self.assertEqual(bridge.codex_draft(bridge.strip_sgr(CODEX["idle"]), ""), "Ask Codex to do anything")
+        # An empty composer that never shows the paste (a frozen screen): no Enter either.
         self.tuis["%1"] = CodexScreen("esc_again")
-        self.assertEqual(self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[1], text="next")["sent"], True)
-        self.assertEqual(self.sent(), [["send-keys", "-t", "%1", "-l", "--", "next"], ["send-keys", "-t", "%1", "Enter"]])
+        with patch.object(bridge.time, "sleep", side_effect=lambda s: None), \
+                self.assertRaisesRegex(bridge.BridgeError, "^没发出去：粘贴以后输入框里一直没出现这条"):
+            self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[3], text="next")
+        self.assertEqual([x[0] for x in self.sent()], ["paste-buffer"])
 
     def test_approval_answered_with_keys(self):
         tui = self.tuis["%1"] = CodexPicker("approval", after="interrupted")
@@ -486,9 +511,10 @@ class CodexTmuxTests(unittest.TestCase):
         self.assertEqual(self.h(op="status", target="%1", identity=a["identity"])["agents"][0]["agent_status"], "working")
         self.h(op="key", target="%1", identity=a["identity"], id=UUIDS[2], key="esc")
         self.assertEqual(self.h(op="status", target="%1", identity=a["identity"])["agents"][0]["agent_status"], "idle")
-        self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[3], text="Reply with just: NOW-OK")
+        result = self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[3], text="Reply with just: NOW-OK")
         self.assertEqual(self.keys(), ["Escape", "Enter"])
-        self.assertEqual(self.sent()[-2][-1], "Reply with just: NOW-OK")
+        self.assertEqual(self.sent()[-2][0], "paste-buffer")
+        self.assertEqual((self.tuis["%1"].submitted, result["verified"]), (["Reply with just: NOW-OK"], True))
 
 
 if __name__ == "__main__":

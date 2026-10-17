@@ -1,0 +1,60 @@
+/* Directory picker (dirpick.js): 常用 chips, a 家目录 / 根目录 tree, and a pinned 选这个目录 footer. */
+.dp-on>:not(.dp){display:none!important}
+.dp{display:flex;flex-direction:column;min-width:0}
+.dp-head{position:sticky;top:-6px;z-index:2;background:var(--raised);margin:-6px 0 var(--sp-2);padding:6px 0 var(--sp-2)}
+.dp-bar{display:flex;align-items:center;gap:var(--sp-1);min-height:44px;margin:0 -10px 0 -8px}
+.dp-seek{margin-left:auto;color:var(--muted)}
+.dp-seek.on{color:var(--accent);background:var(--soft)}
+.dp-back{display:inline-flex;align-items:center;gap:2px;padding:0 10px 0 4px;border-radius:var(--radius-control);color:var(--accent);font-size:var(--fs-md);font-weight:500}
+.dp-back svg{width:20px;height:20px}
+.dp-bar h3{margin:0;font-size:var(--fs-md);font-weight:600;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dp-roots{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
+.dp-roots .pill{min-height:44px;padding:0 14px;font-size:var(--fs-md)}
+.dp-roots .pill svg{width:17px;height:17px}
+.dp-roots .pill.active{border-color:var(--accent-raw);background:var(--soft);color:var(--accent);font-weight:600}
+.dp-roots .dp-hidden{margin-left:auto}
+.dp-quick .section-label{margin:var(--sp-4) 2px var(--sp-2)}
+.dp-chips{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
+.dp-chip{min-height:44px;max-width:100%;padding:0 12px;font-size:var(--fs-sm)}
+.dp-chip svg{width:16px;height:16px;color:var(--faint)}
+.dp-filter{margin-top:var(--sp-1);font-size:var(--fs-md)}
+.dp-tree{margin-top:var(--sp-3);border:1px solid var(--line);border-radius:var(--radius-card);padding:4px;min-width:0}
+.dp-group{display:contents}
+.dp-row{width:100%;display:flex;align-items:center;gap:8px;min-height:48px;padding:4px 10px 4px calc(6px + var(--d,0) * 16px);text-align:left;border-radius:var(--radius-control);min-width:0}
+.dp-row:active{background:var(--press);transform:none}
+.dp-row.cur{background:var(--soft)}
+.dp-row.cur .dp-name{color:var(--accent);font-weight:600}
+.dp-row.cur .dp-ic{color:var(--accent)}
+.dp-row>svg:last-child:not(.dp-ic):not(.dp-chev){color:var(--accent);width:20px;height:20px}
+.dp-chev{width:16px;height:16px;color:var(--faint);transition:transform .15s var(--ease)}
+.dp-chev.none{visibility:hidden}
+.dp-row[aria-expanded="true"] .dp-chev{transform:rotate(90deg)}
+.dp-ic{width:20px;height:20px;color:var(--muted)}
+.dp-row.gone .dp-name{color:var(--faint);text-decoration:line-through}
+.dp-text{flex:1;min-width:0;display:flex;flex-direction:column}
+.dp-name{font-size:var(--fs-base);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dp-meta{font-size:var(--fs-xs);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+.dp-note{text-align:left;display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;min-height:40px;padding:6px 10px 6px calc(30px + var(--d,0) * 16px);font-size:var(--fs-sm);color:var(--muted);line-height:1.45;overflow-wrap:anywhere}
+.dp-note.bad{color:var(--danger)}
+.dp-note.warn{color:var(--warn)}
+.dp-note .link-btn{min-height:44px;margin:-6px 0}
+.dp-note .spinner.mini,.dp-note .spinner{width:14px;height:14px}
+.dp-foot{position:sticky;bottom:calc(-22px - env(safe-area-inset-bottom));margin:var(--sp-4) -18px calc(-22px - env(safe-area-inset-bottom));padding:10px 18px calc(14px + env(safe-area-inset-bottom));background:var(--raised);box-shadow:0 -1px 0 var(--line);z-index:1}
+.dp-cur{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 8px;min-width:0;font-size:var(--fs-sm)}
+.dp-cur-label{color:var(--muted);flex-shrink:0}
+.dp-cur-path{font-family:var(--mono);font-size:var(--fs-sm);color:var(--ink);min-width:0;overflow-wrap:anywhere}
+.dp-cur-real{flex-basis:100%;font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);overflow-wrap:anywhere}
+.dp-cur-note{margin:6px 0 0;color:var(--danger)}
+.dp-foot .sheet-actions{margin-top:10px}
+.dp-pick svg{width:18px;height:18px}
+/* 浏览目录… in the 新建 sheets' directory list: an action, not a choice. */
+.new-browse{min-height:54px}
+.new-browse>svg:first-child{color:var(--accent)}
+.new-browse>svg:last-child{width:18px;height:18px;color:var(--faint)}
+.sheet:has(.dp-on)>.new-tmux{display:none}
+.new-browse .menu-label{color:var(--accent);font-weight:500}
+@media (max-width:359px){
+ .dp-row{padding-left:calc(4px + var(--d,0) * 12px);gap:6px}
+ .dp-note{padding-left:calc(24px + var(--d,0) * 12px)}
+ .dp-roots .pill{padding:0 11px}
+}

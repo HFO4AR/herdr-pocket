@@ -17,7 +17,7 @@ await page.addInitScript(()=>{
  const H={r1:[msg('user','把发布脚本整理一下',300),msg('assistant','好，我先看看现在的脚本。',290)],r2:[msg('user','新对话的问题',20),msg('assistant','新对话的回答。',10)]};
  const ref=r=>({status:'matched',source:'native-process',record_id:r.id,thread:r.thread,record:r});
  const A1={pane_id:'w1:p1',terminal_id:'term1',agent:'claude',agent_status:'working',identity:'id-1',cwd:'/work/proj',title:'整理发布脚本',history_ref:ref(R.r1)};
- window.fx={R,H,A1,ref,list:[A1],follow:null,calls:[],attempts:[],prompts:[],promptErrors:[],nx:[],keys:[],stuck:false,keyError:'',
+ window.fx={R,H,A1,ref,list:[A1],follow:null,calls:[],attempts:[],prompts:[],promptErrors:[],promptExtra:[],nx:[],keys:[],stuck:false,keyError:'',
   say(text,rid='r1',pic=false){H[rid].push(msg('user',text+(pic?'\n\n[图片] /home/u/.herdr-pocket/uploads/2026-10-15/'+'e'.repeat(64)+'.jpg':''),1));},
   pic(label){const c=document.createElement('canvas');c.width=240;c.height=180;const g=c.getContext('2d');const gr=g.createLinearGradient(0,0,240,180);gr.addColorStop(0,'hsl(200,55%,62%)');gr.addColorStop(1,'hsl(240,60%,38%)');g.fillStyle=gr;g.fillRect(0,0,240,180);g.fillStyle='#fff';g.font='600 26px sans-serif';g.fillText(label,20,100);return c.toDataURL('image/jpeg',0.8);}};
  const device={id:'fx',name:'测试电脑',user:'u',host:'fixture.invalid',port:22,remember:true};
@@ -33,7 +33,7 @@ await page.addInitScript(()=>{
    else if(a.op==='history')data={record:Object.values(R).find(r=>r.id===a.record_id),messages:H[a.record_id]||[],before:0,has_more:false,children:[]};
    else if(a.op==='read')data={text:'$ '};
    else if(a.op==='catalog')data={records:[],total:0,next:null};
-   else if(a.op==='prompt'){fx.attempts.push(a);const e=fx.promptErrors.shift();if(e)throw Error(e);fx.prompts.push(a);data={sent:true,receipt:a.id};}
+   else if(a.op==='prompt'){fx.attempts.push(a);const e=fx.promptErrors.shift();if(e)throw Error(e);fx.prompts.push(a);data={sent:true,receipt:a.id,...(fx.promptExtra.shift()||{})};}
    else if(a.op==='account')data={ssh_user:'u',hostname:'fx'};
    else if(a.op==='key'){fx.keys.push(a);if(fx.keyError)throw Error(fx.keyError);if(!fx.stuck)setTimeout(()=>{fx.list=fx.list.map(x=>({...x,agent_status:'idle'}));},1500);data={sent:true};}
    else throw Error('unexpected remote op '+a.op);}
@@ -60,12 +60,15 @@ await page.getByRole('button',{name:/整理发布脚本/}).click();
 await page.getByText('好，我先看看现在的脚本。').first().waitFor();
 
 // 1. Busy agent: the message queues and offers 立即发送; one tap interrupts, waits for idle, sends once.
+// Esc puts the interrupted prompt back into Claude's box: the bridge replaces it (and says so).
+await page.evaluate(()=>{fx.promptExtra.push({replaced:true,verified:true});});
 await send('先停下，改成处理这个');
 const row=bubble('先停下，改成处理这个');await row.waitFor();
 await row.getByRole('button',{name:'立即发送',exact:true}).click();
 await page.getByText('正在中断当前工作…').waitFor();
 await shot('interrupting-390');
 await page.waitForFunction(()=>fx.prompts.length===1,null,{timeout:15000});
+await page.locator('#toast').getByText('覆盖了它输入框里原来的字',{exact:true}).waitFor();
 assert.deepEqual(await page.evaluate(()=>fx.keys.map(k=>k.key)),['esc']);
 assert.deepEqual(await prompts(),['先停下，改成处理这个']);
 // The interrupt went out before the prompt, and the agent was seen idle in between.
