@@ -457,7 +457,7 @@ function tlBuild(list,open){
  if(!count&&!S.chat.historyError){
   if(S.chat.historyLoading||S.more)list.append(el('div','empty small',S.chat.historyLoading?'正在读取对话记录…':'这一页没有可显示的消息，继续加载更早记录。'));
   // A real empty state, not a stray line over a blank page.
-  else if(commandsOnly)empty(list,'还没有执行过命令','Agent 在这段对话里跑的命令和输出会列在这里。',undefined,'terminal');
+  else if(commandsOnly)empty(list,'还没有执行过命令','Agent 跑过的命令和输出会列在这里。',undefined,'terminal');
   else empty(list,'还没有可显示的消息','隐藏推理和系统消息不在这里显示；有新的消息会自动出现。');}}
 // What the app can and cannot do for an agent kind without a transcript reader (app.js noTranscript).
 function noTranscriptNote(withLink){
