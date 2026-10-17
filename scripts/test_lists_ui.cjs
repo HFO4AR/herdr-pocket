@@ -67,6 +67,7 @@ const overflow=page=>page.evaluate(()=>document.documentElement.scrollWidth-inne
 // 2. Swipe a row: 关闭 / 更多 appear (hidden from assistive tech until then); the tap does not open the chat.
 {const page=await fresh();
  assert.equal(await page.getByRole('button',{name:'关闭',exact:true}).count(),0,'swipe actions stay out of the a11y tree while closed');
+ await page.getByText('左滑或长按一行：关闭会话、更多操作',{exact:true}).waitFor();
  const row=page.locator('.agent-row').nth(6);
  await swipe(page,row);
  assert.equal(await page.locator('.swipe.open').count(),1);
@@ -82,7 +83,9 @@ const overflow=page=>page.evaluate(()=>document.documentElement.scrollWidth-inne
  await page.locator('.swipe.open .agent-row').click({force:true});
  assert.equal(await page.locator('.swipe.open').count(),0);
  assert.equal(await page.evaluate(()=>!!S.chat),false);
- await page.getByText('左滑或长按一行：关闭会话、更多操作',{exact:true}).waitFor();
+ // The gesture has been found (a swipe action was used): the hint retires.
+ await page.evaluate(()=>render());
+ assert.equal(await page.getByText('左滑或长按一行：关闭会话、更多操作',{exact:true}).count(),0);
  await noInput(page);
  await page.context().close();console.log('PASS: swipe reveals 关闭 / 更多, one open row, never opens or closes anything by itself');}
 

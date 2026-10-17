@@ -65,7 +65,7 @@ function toastSpot(n){
  else{n.style.top='';n.style.bottom=below?below+'px':'';}}
 async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const t=el('textarea');t.value=text;document.body.append(t);t.select();document.execCommand('copy');t.remove();}toast('已复制');}
 function sheet(title){dropGhost();overlay.replaceChildren();const back=el('div','sheet-backdrop');const body=el('section','sheet');body.setAttribute('role','dialog');body.setAttribute('aria-modal','true');body.setAttribute('aria-label',title);body.append(el('div','sheet-grip'));const head=el('div','sheet-head');head.append(el('h2','',title),ib('close','关闭',closeSheet));body.append(head);back.append(body);requestAnimationFrame(()=>{const t=document.getElementById('toast');if(t?.classList.contains('show'))toastSpot(t);});back.onclick=e=>{if(e.target!==back)return;if(body.keepOpen&&body.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();};overlay.append(back);return body;}
-function closeSheet(){ghostSheet();overlay.replaceChildren();}
+function closeSheet(){ghostSheet();overlay.replaceChildren();const t=document.getElementById('toast');if(t?.classList.contains('show'))toastSpot(t);}
 // Exit animation without delaying the real close: an inert copy of the closing sheet lives in a closed
 // shadow root (invisible to queries and assistive tech) and slides away on its own.
 let sheetGhost=null,ghostCss=null;

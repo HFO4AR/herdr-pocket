@@ -19,7 +19,7 @@ const CLOSE_EXIT={claude:'/exit',codex:'/quit',opencode:'/exit'};
 function closeHold(n,open){
  let timer=0,x=0,y=0,fired=0;
  const cancel=()=>{clearTimeout(timer);timer=0;n.classList.remove('holding');};
- const fire=()=>{cancel();fired=Date.now();open();};
+ const fire=()=>{cancel();fired=Date.now();closeHintLearned();open();};
  n.addEventListener('pointerdown',e=>{if(e.button)return;x=e.clientX;y=e.clientY;cancel();n.classList.add('holding');timer=setTimeout(fire,520);});
  n.addEventListener('pointermove',e=>{if(timer&&Math.hypot(e.clientX-x,e.clientY-y)>10)cancel();});
  ['pointerup','pointercancel','pointerleave'].forEach(t=>n.addEventListener(t,cancel));
@@ -34,7 +34,7 @@ function swipeShut(except){const w=SWIPE.open;if(!w||w===except)return;SWIPE.ope
 document.addEventListener('pointerdown',e=>{if(SWIPE.open&&!SWIPE.open.contains(e.target))swipeShut();},true);
 function closeSwipe(row,actions){
  const wrap=el('div','swipe');const acts=el('div','swipe-acts');acts.setAttribute('aria-hidden','true');
- for(const [label,name,tone,fn] of actions){const b=btn(label,'swipe-act'+(tone?' '+tone:''),e=>{e.stopPropagation();swipeShut();fn();},name);b.tabIndex=-1;acts.append(b);}
+ for(const [label,name,tone,fn] of actions){const b=btn(label,'swipe-act'+(tone?' '+tone:''),e=>{e.stopPropagation();swipeShut();closeHintLearned();fn();},name);b.tabIndex=-1;acts.append(b);}
  row.classList.add('swipe-row');wrap.append(acts,row);
  const width=()=>acts.offsetWidth||actions.length*72;
  let x0=0,y0=0,dx=0,mode='',moved=0,base=0;
@@ -49,7 +49,11 @@ function closeSwipe(row,actions){
  // The click that ends a swipe, or a tap on an open row, only closes it.
  row.addEventListener('click',e=>{if(Date.now()-moved<400||wrap.classList.contains('open')){e.preventDefault();e.stopImmediatePropagation();if(Date.now()-moved>=400)swipeShut();}},true);
  return wrap;}
-function closeHint(list){list.append(el('p','fine center close-hint','左滑或长按一行：关闭会话、更多操作'));}
+// The row-gesture hint is for finding the gesture: once a swipe action or a long press has been
+// used it retires (kept in this WebView's storage, so it stays gone).
+const CLOSE_HINT={done:(()=>{try{return localStorage.getItem('hp.hint.rows')==='1';}catch(_){return false;}})()};
+function closeHintLearned(){if(CLOSE_HINT.done)return;CLOSE_HINT.done=true;try{localStorage.setItem('hp.hint.rows','1');}catch(_){}}
+function closeHint(list){if(!CLOSE_HINT.done)list.append(el('p','fine center close-hint','左滑或长按一行：关闭会话、更多操作'));}
 function agentActions(a){
  const box=sheet(titleOf(a));
  box.append(el('p','fine close-sub',[stateLabel(a),providerName(a.agent),projectOf(a),closeIsCh(a)?'通过 ch 连到远端':''].filter(Boolean).join(' · ')));
