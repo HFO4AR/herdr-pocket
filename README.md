@@ -59,14 +59,16 @@ The UI is Chinese. It is MIT-licensed, ships its small Python bridge inside the 
 
 ## 电脑上需要什么
 
-- [Herdr](https://herdr.dev)，用你 SSH 登录的同一个用户运行（`herdr` 在 PATH 或 `~/.local/bin` 里）。
 - SSH 服务（含 SFTP），能用密码或密钥登录。
-- Python 3.9 或更新版本。
+- Python 3.9 或更新版本（桥接程序靠它运行）。
+- [Herdr](https://herdr.dev) 或 tmux，至少一个，用你 SSH 登录的同一个用户运行：
+  - Codex、Claude 和其他 Agent 要 Herdr（`herdr` 在 PATH 或 `~/.local/bin` 里）。
+  - 只用终端，或者 Claude / Codex 跑在 tmux 里，有 tmux 就够了。
 - 手机能访问到它：同一个 Wi-Fi、Tailscale，或 frp 这类 TCP 转发（目标指向电脑的 SSH 端口）。
 
 ## 开始使用
 
-1. 「设备」→「添加第一台设备」：填主机、端口、SSH 用户名（可以直接粘贴 `user@host:port`），选择密码或密钥登录。
+1. 「设备」→「添加第一台设备」：填主机、端口、SSH 用户名（可以直接粘贴 `user@host:port`），选择密码或密钥登录；设备名称可不填，默认用主机地址。
 2. 第一次连接时核对电脑的 SSH 指纹：在电脑上运行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`，一致再点「信任并连接」。之后指纹变了 App 会拒绝连接。
 3. 按提示安装桥接程序：App 自带，经 SFTP 写到 `~/.herdr-pocket/`，按 SHA-256 命名并回读校验；不用 sudo、不重启 Herdr、不开放端口。也可以在电脑上执行 `python3 scripts/install_bridge.py`。
 4. 「会话」里点一个 Agent 开始对话。想先看看效果，点「体验聊天演示」（离线，不连接任何电脑）。

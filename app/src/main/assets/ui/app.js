@@ -272,9 +272,10 @@ function livePage(main){
   // An idle Codex with an unanswered question (glance.js) waits for you too.
   const needs=a=>agentState(a)==='blocked'||!!glanceAsks(a);GL.askSig=glanceAskSig();
   const groups=[[matches.some(a=>glanceAsks(a))?'等你处理':'等你确认',needs,'alert'],['执行中',a=>!needs(a)&&['working','kids'].includes(agentState(a)),'work'],['空闲',a=>!needs(a)&&!['blocked','working','kids'].includes(agentState(a)),'']];
-  for(const [label,test,tone] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;const h=el('div','section-label group-label'+(tone?' g-'+tone:''));h.append(el('span','',label),el('span','group-count',String(items.length)));list.append(h);const g=el('div','card list-card');items.forEach(a=>{g.append(agentRow(a));const kids=kidsStrip(a);if(kids)g.append(kids);});list.append(g);}
-  closeHint(list);}
+  for(const [label,test,tone] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;const h=el('div','section-label group-label'+(tone?' g-'+tone:''));h.append(el('span','',label),el('span','group-count',String(items.length)));list.append(h);const g=el('div','card list-card');items.forEach(a=>{g.append(agentRow(a));const kids=kidsStrip(a);if(kids)g.append(kids);});list.append(g);}}
  draw();
+ // The row-gesture hint goes once, under everything (tmux.js moves it below its section too).
+ if(S.agents.length)closeHint(main);
  pullRefresh(main,loadLive);}
 // Herdr can run several sessions (sets of workspaces). The list, terminals and 新建 all work in one.
 function chooseSession(){

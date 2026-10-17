@@ -161,7 +161,10 @@ const top=page.locator('.account-card');
 assert.equal(await top.count(),1);
 assert.match(await top.locator('.card-title').textContent(),/家里的电脑/);
 await top.locator('.setting-row').filter({hasText:'桥接程序'}).getByText('0.6.0',{exact:true}).waitFor();
-assert.equal(await top.getByRole('button',{name:'更新桥接程序',exact:true}).count(),1);
+// A bridge that answered is the bundled one (hash-named): no update button, reinstall under 「…」.
+assert.equal(await top.getByRole('button',{name:'更新桥接程序',exact:true}).count(),0);
+await top.locator('.setting-row').filter({hasText:'桥接程序'}).getByText('配套',{exact:true}).waitFor();
+assert.equal(await top.getByRole('button',{name:'桥接程序选项',exact:true}).count(),1);
 assert.equal(await top.getByRole('button',{name:'回到会话',exact:true}).count(),1);
 assert(await page.locator('.device-card').first().evaluate(n=>n.classList.contains('account-card')),'the computer on screen leads');
 assert.equal(await page.locator('.device-actions .primary').count(),1,'one filled button: 回到会话');

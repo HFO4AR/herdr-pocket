@@ -135,3 +135,15 @@ body:has(.dev-switch) #net-banner{display:none}
  .dev-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--sp-6)}
  .dev-facts .dev-fact:nth-last-child(2):nth-child(odd){border-bottom:0}
 }
+/* A saved computer being connected: one status block in place of its buttons. */
+.dev-connecting{display:flex;align-items:center;gap:var(--sp-3);min-height:52px;margin-top:var(--sp-3);padding:var(--sp-2) var(--sp-3);border-radius:var(--radius-control);background:var(--sunken);font-size:var(--fs-sm);line-height:1.45;color:var(--muted)}
+.dev-connecting>.grow{min-width:0;overflow-wrap:anywhere}
+.dev-connecting strong{display:block;color:var(--ink);font-weight:600}
+.dev-connecting span:not(.spinner){display:block;font-size:var(--fs-xs)}
+.dev-connecting>.spinner{flex:0 0 auto}
+/* 桥接程序 row: the version, a quiet "配套" mark and 「…」 (reinstall lives in that menu). */
+.dev-bridge{display:inline-flex;align-items:baseline;justify-content:flex-end;gap:6px}
+.dev-match{color:var(--success);font-size:var(--fs-xs);font-weight:500}
+.dev-fact>.icon-btn.dev-action{margin:-8px -10px -8px -2px;padding:0;color:var(--muted)}
+.dev-fact>.icon-btn.dev-action svg{width:19px;height:19px}
+.dev-bridge>span:first-child{color:var(--ink)}

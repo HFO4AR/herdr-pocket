@@ -91,6 +91,17 @@ await page.getByRole('button',{name:/Beta 缓存任务/}).first().waitFor();
 assert.deepEqual(await connects(page),['B'],'the one on screen connects first, alone');
 await noSheet(page);
 await shots2(page,'connecting');
+// On 设备 the reconnect is said once, on B's card: no page banner, no 正在连接… button, no second row.
+await page.getByRole('button',{name:'设备',exact:true}).click();
+{const b=card(page,'公司工作站');await b.locator('.dev-connecting').getByText('正在自动连接…',{exact:true}).waitFor();
+ assert.equal(await page.locator('.dev-connecting').count(),1);
+ assert.equal(await b.locator('.resume-line').count(),0,'no extra resume row while connecting');
+ assert.equal(await b.getByRole('button').filter({hasText:/连接/}).count(),0,'no disabled 正在连接… button');
+ assert.equal(await page.locator('.connection-status').count(),0,'no banner over the card');
+ assert.equal(await page.getByText(/正在自动连接|正在连接…/).count(),1,'connecting is said once');
+ await b.scrollIntoViewIfNeeded();await shots2(page,'devices-connecting');
+ await page.setViewportSize({width:320,height:640});await b.scrollIntoViewIfNeeded();await shots2(page,'devices-connecting-320');await page.setViewportSize({width:390,height:844});}
+await page.getByRole('button',{name:'会话',exact:true}).click();
 await page.evaluate(()=>fx.held.get('B')());
 await page.getByRole('button',{name:/Beta 任务/}).first().waitFor();
 await page.waitForFunction(()=>LINKS.ids.length===2);

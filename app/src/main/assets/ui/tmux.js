@@ -85,7 +85,7 @@ function tmuxOnlyPage(main){
  if(!none)f.append(el('span','fact-count',!st?.loaded?'正在读取 tmux…':list.length+' 个 tmux 窗格'));facts.append(f);
  actions.append(facts,ib('refresh','刷新会话',loadLive));if(tmuxCan()&&list.length)actions.append(tmuxNewButton());main.append(actions);
  if(!none){const note=el('p','tmux-only-note');note.setAttribute('role','note');note.append(icon('terminal'),el('span','','这台电脑没装 Herdr，只显示 tmux'));main.append(note);}
- if(st&&!st.supported){empty(main,'桥接程序太旧','电脑上的桥接程序还不认识 tmux，先到「设备」里更新桥接程序。',btn('去设备页','primary',()=>setTab('devices')),'terminal');return;}
+ if(st&&!st.supported){empty(main,'桥接程序太旧','电脑上的桥接程序还不认识 tmux，到「设备」页重新安装（桥接程序那一行的「…」）。',btn('去设备页','primary',()=>setTab('devices')),'terminal');return;}
  if(none){
   const box=el('div','empty tmux-none');const ic=el('div','empty-icon');ic.append(icon('terminal'));
   box.append(ic,el('h2','','这台电脑上没有 Herdr，也没有 tmux'),el('p','','装其中一个，这里就有东西看了：'));
@@ -174,7 +174,7 @@ async function tmuxKillRun(p,scope,go,status,lock){
   if(status.isConnected)closeSheet();toast(scope==='pane'?'已关闭 '+tmuxTitle(p):'已结束 tmux 会话「'+p.session+'」');tmuxAfterClose(p,scope);}
  catch(e){TX_CLOSE.busy=false;const m=e.message||String(e);
   // Refused before anything happened: say why, choose again.
-  if(/^(没关|这个 tmux 窗格已经关了|Unknown operation|不支持的操作)/.test(m)){const text=/^(Unknown|不支持)/.test(m)?'没关：电脑上的桥接程序太旧，先到「设备」里更新桥接程序':/^没关/.test(m)?m:'没关：'+m;
+  if(/^(没关|这个 tmux 窗格已经关了|Unknown operation|不支持的操作)/.test(m)){const text=/^(Unknown|不支持)/.test(m)?'没关：电脑上的桥接程序太旧，到「设备」页重新安装（桥接程序那一行的「…」）':/^没关/.test(m)?m:'没关：'+m;
    if(status.isConnected){closeStatus(status,'error',text);go.disabled=false;go.replaceChildren(document.createTextNode('再试一次'));}else toast(text);if(!/^没关/.test(m))tmuxLoad();return;}
   // Unknown outcome: it may have happened. Never retry on its own.
   const look=btn('刷新看看','link-btn',()=>{closeSheet();tmuxLoad();});
@@ -251,7 +251,7 @@ async function tmuxNewSheet(){
   if(f.dir==='~'&&r.home)f.dir=r.home;draw();
   if(r.available===false){newStatus(status,'error','这台电脑上没找到 tmux，先装上（sudo apt install tmux 或 brew install tmux）');go.disabled=true;}}
  catch(e){if(!box.isConnected)return;const m=e.message||String(e);
-  if(/Unknown operation|不支持的操作/.test(m)){info={home:'',dirs:[]};draw();newStatus(status,'error','电脑上的桥接程序太旧，先到「设备」里更新桥接程序');go.disabled=true;return;}
+  if(/Unknown operation|不支持的操作/.test(m)){info={home:'',dirs:[]};draw();newStatus(status,'error','电脑上的桥接程序太旧，到「设备」页重新安装（桥接程序那一行的「…」）');go.disabled=true;return;}
   if(!cached){info={home:'',dirs:[],error:m.slice(0,120)};draw();}}}
 async function tmuxNewSubmit(f,go,status,nameOk,nameInput){
  if(TX_NEW.busy)return;
@@ -268,7 +268,7 @@ async function tmuxNewSubmit(f,go,status,nameOk,nameInput){
   setTimeout(()=>tmuxLoad(),600);}
  catch(e){TX_NEW.busy=false;const m=e.message||String(e);
   if(/^没创建/.test(m)){if(status.isConnected){newStatus(status,'error',m);restoreGo(go);}else toast(m);return;}
-  if(/Unknown operation|不支持的操作/.test(m)){newStatus(status,'error','电脑上的桥接程序太旧，先到「设备」里更新桥接程序');return;}
+  if(/Unknown operation|不支持的操作/.test(m)){newStatus(status,'error','电脑上的桥接程序太旧，到「设备」页重新安装（桥接程序那一行的「…」）');return;}
   // Unknown outcome: a session may exist now. Never retry on its own.
   const again=btn('刷新列表看看','link-btn',()=>{closeSheet();tmuxLoad();});
   if(status.isConnected){newStatus(status,'error','结果未知：'+m.replace(/^新建结果未知：/,''),again);go.replaceChildren(document.createTextNode('结果未知'));}
@@ -302,7 +302,9 @@ async function tmuxChatPoll(){
  const baseLive=livePage,baseLoad=loadLive,baseActions=agentActions,baseClose=closeSession,baseOpenPane=followOpenPane,baseCreate=openCreate,baseStatus=refreshStatus;
  livePage=function(main){
   if(noHerdr()){if(requireDevice(main))tmuxOnlyPage(main);return;}
-  baseLive(main);if(S.device&&!(S.liveLoading&&!S.agents.length))tmuxSection(main);};
+  baseLive(main);if(!S.device||S.liveLoading&&!S.agents.length)return;tmuxSection(main);
+  // One row-gesture hint, after all the lists (tmux rows swipe too).
+  if(tmuxPanes().length){const hint=main.querySelector(':scope>.close-hint');if(hint)main.append(hint);else closeHint(main);}};
  loadLive=function(...args){tmuxLoad();return baseLoad(...args);};
  // A tmux agent's row actions and 关闭 are tmux's (a Herdr pane close cannot reach it).
  agentActions=function(a){return a?.tmux?tmuxActions(a.tmux_pane,a):baseActions(a);};

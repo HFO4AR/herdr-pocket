@@ -32,7 +32,11 @@ const overflow=()=>page.evaluate(()=>document.documentElement.scrollWidth>innerW
 
 // ── First run guide ──
 await page.getByRole('heading',{name:'连上你的电脑'}).waitFor();
-await page.getByText('装好 Herdr 和 Python 3.9+',{exact:true}).waitFor();
+// Requirements as they are: Python always; Herdr for agents, or tmux alone for terminals / tmux agents.
+await page.getByText('装好 Python 3.9+',{exact:true}).waitFor();
+await page.getByText('装好 Herdr 或 tmux',{exact:true}).waitFor();
+await page.getByText(/有 tmux 就够了/).waitFor();
+assert.equal(await page.getByText(/装好 Herdr 和 Python/).count(),0,'Herdr is no longer required');
 assert.equal(await page.getByText('不在一起：Tailscale',{exact:true}).isVisible(),false,'address tips start folded');
 await page.getByText('怎么填地址',{exact:true}).click();
 await page.getByText('不在一起：Tailscale',{exact:true}).waitFor();
@@ -45,6 +49,14 @@ console.log('PASS: first-run guide with folded address tips, fits 320 px');
 await page.getByRole('button',{name:'添加第一台设备'}).click();
 await page.getByRole('dialog',{name:'添加设备'}).waitFor();await page.waitForTimeout(300);
 const host=page.getByRole('textbox',{name:'主机地址',exact:true}),port=page.getByRole('textbox',{name:'端口',exact:true}),user=page.getByRole('textbox',{name:'SSH 用户名',exact:true});
+// The address comes first and has the focus; the optional name comes last and defaults to the address.
+assert(await host.evaluate(n=>document.activeElement===n),'主机地址 is focused first');
+assert.deepEqual(await page.evaluate(()=>[...document.querySelectorAll('.ob-form input.field')].map(n=>n.getAttribute('aria-label'))),['主机地址','端口','SSH 用户名','登录密码','设备名称'],'fields in the order they are focused');
+{const name=page.getByRole('textbox',{name:'设备名称',exact:true});
+ await page.getByText('可不填，不填就用主机地址',{exact:true}).waitFor();
+ await host.fill('nas.lan');assert.equal(await name.getAttribute('placeholder'),'nas.lan','the name suggests the address');
+ await host.press('Enter');assert(await port.evaluate(n=>document.activeElement===n),'Enter walks to 端口');
+ await host.fill('');assert.equal(await name.getAttribute('placeholder'),'例如：家里的电脑');}
 assert.equal(await port.inputValue(),'22');
 assert.equal(await port.getAttribute('inputmode'),'numeric');
 assert.equal(await host.getAttribute('inputmode'),'url');
