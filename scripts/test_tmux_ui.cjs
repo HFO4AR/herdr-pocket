@@ -131,6 +131,11 @@ await page.getByRole('button',{name:'返回列表',exact:true}).click();
 await page.locator('.agent-row').first().waitFor();
 await page.evaluate(()=>loadLive());
 await page.waitForFunction(()=>document.querySelectorAll('.tmux-row').length===2);
+// No Herdr agent but tmux sessions listed: a quiet note, never 「暂时没有会话」 above sessions.
+{const keep=await page.evaluate(()=>{const k=fx.agents;fx.agents=[];return k;});await page.evaluate(()=>loadLive());
+ await page.getByText('Herdr 里还没有 Agent',{exact:true}).waitFor();
+ assert.equal(await page.getByText('暂时没有会话',{exact:true}).count(),0);assert.equal(await rows.count(),2);
+ await page.evaluate(k=>{fx.agents=k;},keep);await page.evaluate(()=>loadLive());await page.locator('.agent-row').first().waitFor();}
 await page.evaluate(()=>{fx.tmux=[];});await page.evaluate(()=>loadLive());
 await page.waitForFunction(()=>!document.querySelector('.tmux-label'));
 await page.evaluate(()=>{fx.tmuxKnown=false;fx.tmux=[{pane_id:'%9',identity:'x'}];});

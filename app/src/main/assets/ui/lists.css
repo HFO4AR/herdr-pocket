@@ -1,6 +1,10 @@
 /* List screens (会话 / 历史 / 终端): toolbar, freshness line, filter chips, group headers,
  * swipe actions, pull to refresh, terminal rows and the terminal key bar. Tokens only. */
 .list-actions{min-height:44px;margin-bottom:6px;gap:6px}
+/* Herdr has no agents but tmux sessions are listed: a quiet line, not a full empty page */
+.herdr-none{display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-3) var(--sp-4);margin:0 0 var(--sp-2);background:var(--surface);border:1px dashed var(--line-strong);border-radius:var(--radius-card)}
+.herdr-none strong{display:block;font-size:var(--fs-md);font-weight:600;color:var(--ink)}
+.herdr-none .fine{display:block;margin:2px 0 0}
 .list-actions .grow:empty{min-width:0}
 .list-actions .list-facts{font-size:var(--fs-sm);color:var(--muted)}
 /* 会话 toolbar: counts and freshness sit left of 刷新 / 新建 instead of on a line of their own. */

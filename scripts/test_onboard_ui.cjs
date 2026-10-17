@@ -60,6 +60,9 @@ assert.equal((await calls('saveDevice')).length,0,'invalid form never reaches na
 await host.fill('x');assert.equal(await host.getAttribute('aria-invalid'),null,'typing clears the error');
 await host.fill('ssh://yuki@box.lan:2222');await host.dispatchEvent('change');
 assert.equal(await host.inputValue(),'box.lan');assert.equal(await port.inputValue(),'2222');assert.equal(await user.inputValue(),'yuki');
+// Fields the paste filled in lose their old errors.
+assert.equal(await port.getAttribute('aria-invalid'),null);assert.equal(await user.getAttribute('aria-invalid'),null);
+assert.equal(await page.getByText('填登录电脑用的用户名',{exact:true}).count(),0);
 const pass=page.getByLabel('登录密码',{exact:true});
 await pass.fill('pw-1');assert.equal(await pass.getAttribute('type'),'password');
 await page.getByRole('button',{name:'显示密码'}).click();assert.equal(await pass.getAttribute('type'),'text');
