@@ -260,7 +260,7 @@ function livePage(main){
    if(q||S.liveProject)empty(list,'没有匹配的 Agent','换个关键词，或者看看全部会话。',btn('清除筛选','secondary',()=>{S.search='';S.liveProject='';render();}));
    // tmux sessions listed below (tmux.js) are sessions too: only Herdr has no agent yet.
    else if(typeof tmuxPanes==='function'&&tmuxPanes().length){const n=el('div','herdr-none');n.setAttribute('role','note');const t=el('div','grow');t.append(el('strong','','Herdr 里还没有 Agent'),el('span','fine','新建一个，或者在 Herdr 里启动。'));n.append(t);if(S.device&&S.session)n.append(createButton());list.append(n);}
-   else empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&(S.session||tmuxCan())?createButton():undefined);
+   else if(!starting)empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&(S.session||tmuxCan())?createButton():undefined);
    return;}
   // 子 Agent 运行中 (kids.js) sits with 执行中: the agent is not done while its sub-agents work.
   // An idle Codex with an unanswered question (glance.js) waits for you too.
