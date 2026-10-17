@@ -15,6 +15,7 @@ from test_bridge import bridge
 from test_answer import CLAUDE_MULTI_CHAT, RULE
 from test_tmux import row
 
+CODEX = json.loads((Path(__file__).parent / "fixtures/codex_tmux.json").read_text(encoding="utf-8"))
 UUIDS = ["%d2345678-1234-4234-8234-123456789012" % i for i in range(1, 10)]
 CLAUDE_IDLE = "\n".join(["● 好了。", "", RULE, "❯ ", RULE, "  ⏵⏵ accept edits on (shift+tab to cycle)"])
 CLAUDE_BUSY = "\n".join(["✻ Pondering… (12s · esc to interrupt)", "", RULE, "❯ ", RULE, "  ⏵⏵ accept edits on (shift+tab to cycle)"])
@@ -100,7 +101,10 @@ class TmuxAgentTests(unittest.TestCase):
         cmd = args[0]
         if cmd == "list-panes": return "".join("\x1f".join(r) + "\n" for r in self.rows)
         target = args[args.index("-t") + 1] if "-t" in args else None
-        if cmd == "capture-pane": return self.tuis[target].screen() + "\n"
+        if cmd == "capture-pane":
+            # -e: with colours, for screens captured with them (Codex fixtures); plain otherwise.
+            tui = self.tuis[target]
+            return (tui.ansi() if "-e" in args and hasattr(tui, "ansi") else tui.screen()) + "\n"
         if cmd == "send-keys":
             tui = self.tuis[target]
             if "-l" in args: tui.text(args[-1])
@@ -330,6 +334,160 @@ class TmuxAgentTests(unittest.TestCase):
             self.h(op="stageFile", target="%1", identity=a["identity"], **doc)
         self.assertEqual(self.sent(), [])
         self.assertFalse(any(x[0] == "load-buffer" for x in self.log))
+
+
+class CodexScreen:
+    """One real captured Codex 0.163 screen (fixtures/codex_tmux.json); a plain capture drops its colours."""
+    def __init__(self, name): self.raw, self.got = CODEX[name], []
+    def ansi(self): return self.raw
+    def screen(self): return bridge.strip_sgr(self.raw)
+    def key(self, name): self.got.append(name)
+    def text(self, value): self.got.append(("text", value))
+
+
+class CodexPicker:
+    """A real captured Codex picker (approval, request_user_input question, model switch) redrawn for
+    its cursor: ↓/↑ move the "›", Enter picks the row, Esc cancels; then the screen is `after`."""
+    ROW = re.compile(r"^(\s*)(› |  )(\d\. .*)$")
+
+    def __init__(self, name, after="idle"):
+        self.lines = bridge.strip_sgr(CODEX[name]).split("\n")
+        self.rows = [i for i, x in enumerate(self.lines) if self.ROW.match(x)]
+        self.cursor, self.picked, self.after, self.typed = 1, None, after, []
+
+    def screen(self):
+        if self.picked is not None: return bridge.strip_sgr(CODEX[self.after])
+        out = list(self.lines)
+        for n, i in enumerate(self.rows, 1):
+            m = self.ROW.match(out[i])
+            out[i] = m[1] + ("› " if n == self.cursor else "  ") + m[3]
+        return "\n".join(out)
+
+    def key(self, name):
+        if name == "Down": self.cursor = min(self.cursor + 1, len(self.rows))
+        elif name == "Up": self.cursor = max(self.cursor - 1, 1)
+        elif name == "Enter": self.picked = self.cursor
+        elif name == "Escape": self.picked = "esc"
+
+    def text(self, value): self.typed.append(value)
+
+
+class CodexTurn:
+    """Codex working on a turn (real screen); Esc interrupts it (real screen), as seen live."""
+    def __init__(self): self.name = "working"
+    def ansi(self): return CODEX[self.name]
+    def screen(self): return bridge.strip_sgr(CODEX[self.name])
+    def key(self, name):
+        if name == "Escape" and self.name == "working": self.name = "interrupted"
+    def text(self, value): pass
+
+
+class CodexTmuxTests(unittest.TestCase):
+    """Codex CLI 0.163 in a tmux pane, on screens captured from a real one (fixtures/codex_tmux.json)."""
+    setUp_claude = TmuxAgentTests.setUp
+    tmux, h, agent, sent, keys, answer = (TmuxAgentTests.tmux, TmuxAgentTests.h, TmuxAgentTests.agent,
+                                          TmuxAgentTests.sent, TmuxAgentTests.keys, TmuxAgentTests.answer)
+
+    def setUp(self):
+        self.setUp_claude()
+        self.rows[1] = row("%1", win="1", name="codex", cmd="codex", path=self.proj, ppid="200", title="", sid="$0")
+        self.procs[201]["argv"] = [str(self.home / ".local/bin/codex"), "--no-daemon"]
+        self.tuis["%1"] = CodexScreen("idle")
+
+    def test_state_from_real_screens(self):
+        for name, want in (("idle", "idle"), ("working", "working"), ("interrupted", "idle"), ("plan", "idle"),
+                           ("esc_again", "idle"), ("draft", "idle"), ("draft_multi", "idle"),
+                           ("approval", "blocked"), ("question", "blocked"), ("model_menu", "blocked")):
+            self.tuis["%1"] = CodexScreen(name)
+            self.assertEqual(self.agent()["agent_status"], want, name)
+        # Nothing of Codex's own composer on screen (an overlay, a dialog not understood): never idle,
+        # so nothing is typed where letters may be shortcuts (y / p approve a command).
+        self.tuis["%1"] = Static("  Approve?\n  [y] yes   [n] no\n")
+        self.assertEqual(self.agent()["agent_status"], "working")
+        with self.assertRaisesRegex(bridge.BridgeError, "^Agent is busy"):
+            self.h(op="prompt", target="%1", identity=self.agent()["identity"], id=UUIDS[0], text="yes")
+        self.assertEqual(self.sent(), [])
+
+    def test_modes_only_under_its_composer(self):
+        a = self.agent()
+        read = lambda name: (self.tuis.__setitem__("%1", CodexScreen(name)), self.h(op="read", target="%1", identity=a["identity"]))[1]
+        self.assertEqual(read("idle")["modes"], {"agent": "codex", "collaboration": "default", "goal": None, "cycle": True})
+        self.assertEqual(read("plan")["modes"]["collaboration"], "plan")
+        # The question's own hint reads "esc to interrupt": that is not the composer's footer.
+        self.assertIsNone(read("question")["modes"])
+        self.assertIsNone(read("approval")["modes"])
+
+    def test_text_in_its_composer_is_never_joined(self):
+        # Seen live: "leftover draft" in the composer + a prompt went out as "leftover draftReply with just: OK".
+        a = self.agent()
+        for name in ("draft", "draft_multi"):
+            self.tuis["%1"] = CodexScreen(name)
+            with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它的输入框里已经有字"):
+                self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[0], text="Reply with just: OK")
+        self.assertEqual(self.sent(), [])
+        draft = lambda name: bridge.codex_draft(bridge.strip_sgr(CODEX[name]), CODEX[name])
+        self.assertEqual([draft(n) for n in ("idle", "working", "plan", "esc_again")], ["", "", "", ""])
+        self.assertEqual(draft("draft"), "hello draft text")
+        self.assertEqual(draft("draft_multi").split("\n")[0], "first line")
+        self.assertIsNone(draft("question"))
+        # Without colours a placeholder cannot be told from typed text: counted as a draft.
+        self.assertEqual(bridge.codex_draft(bridge.strip_sgr(CODEX["idle"]), ""), "Ask Codex to do anything")
+        self.tuis["%1"] = CodexScreen("esc_again")
+        self.assertEqual(self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[1], text="next")["sent"], True)
+        self.assertEqual(self.sent(), [["send-keys", "-t", "%1", "-l", "--", "next"], ["send-keys", "-t", "%1", "Enter"]])
+
+    def test_approval_answered_with_keys(self):
+        tui = self.tuis["%1"] = CodexPicker("approval", after="interrupted")
+        a = self.agent()
+        menu = self.h(op="read", target="%1", identity=a["identity"])["menu"]
+        self.assertEqual((menu["kind"], menu["cursor"], menu["esc"]), ("approval", 1, {"action": "cancel", "option": 3}))
+        self.assertEqual(menu["context"][0], "Would you like to run the following command?")
+        self.assertIn("$ touch probe.txt", menu["context"])
+        self.assertEqual([o["label"] for o in menu["options"]][2], "No, and tell Codex what to do differently (esc)")
+        # The row under the cursor must be the one picked on the phone, or Enter is never pressed.
+        with self.assertRaisesRegex(bridge.BridgeError, "不一致"):
+            self.answer(UUIDS[0], action="select", option=2, label="Yes, proceed (y)")
+        self.assertEqual((self.keys(), tui.picked), (["Down"], None))
+        self.log.clear(); tui.cursor = 1
+        r = self.answer(UUIDS[1], action="select", option=3, label="No, and tell Codex what to do differently (esc)")
+        self.assertEqual((r["sent"], self.keys(), tui.picked), (True, ["Down", "Down", "Enter"], 3))
+        self.assertEqual(tui.typed, [], "letters are shortcuts here: none typed")
+        self.assertEqual(self.agent()["agent_status"], "idle")
+
+    def test_question_and_model_pickers(self):
+        tui = self.tuis["%1"] = CodexPicker("question")
+        menu = self.h(op="read", target="%1", identity=self.agent()["identity"])["menu"]
+        self.assertEqual((menu["kind"], menu["question"], menu["context"]), ("question", "Which color?", ["Question 1/1 (1 unanswered)", "Which color?"]))
+        self.assertEqual(menu["esc"], {"action": "interrupt", "option": None})
+        self.assertEqual([(o["label"], o["description"], o["input"]) for o in menu["options"]][:2], [("Red", "Choose red.", False), ("Blue", "Choose blue.", False)])
+        with self.assertRaisesRegex(bridge.BridgeError, "没发出去"):
+            self.h(op="key", target="%1", identity=self.agent()["identity"], id=UUIDS[0], key="shift+tab")
+        self.answer(UUIDS[1], action="select", option=2, label="Blue")
+        self.assertEqual((self.keys(), tui.picked), (["Down", "Enter"], 2))
+        self.log.clear()
+        tui = self.tuis["%1"] = CodexPicker("model_menu")
+        menu = self.h(op="read", target="%1", identity=self.agent()["identity"])["menu"]
+        # Its hint "enter select · esc back" is not part of the last row's description.
+        self.assertEqual(menu["context"], ["Approaching rate limits", "Switch to gpt-6-luna for lower credit usage?"])
+        self.assertEqual(menu["options"][2]["description"], "Hide future rate limit reminders about switching models")
+        self.answer(UUIDS[2], action="select", option=2, label="Keep current model")
+        self.assertEqual((self.keys(), tui.picked), (["Down", "Enter"], 2))
+
+    def test_shift_tab_and_send_now(self):
+        a = self.agent()
+        self.h(op="key", target="%1", identity=a["identity"], id=UUIDS[0], key="shift+tab")
+        self.assertEqual(self.keys(), ["BTab"])
+        # 立即发送: refused while working, Esc, the screen says idle, then the message goes out.
+        self.log.clear()
+        self.tuis["%1"] = CodexTurn()
+        with self.assertRaisesRegex(bridge.BridgeError, "^Agent is busy"):
+            self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[1], text="Reply with just: NOW-OK")
+        self.assertEqual(self.h(op="status", target="%1", identity=a["identity"])["agents"][0]["agent_status"], "working")
+        self.h(op="key", target="%1", identity=a["identity"], id=UUIDS[2], key="esc")
+        self.assertEqual(self.h(op="status", target="%1", identity=a["identity"])["agents"][0]["agent_status"], "idle")
+        self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[3], text="Reply with just: NOW-OK")
+        self.assertEqual(self.keys(), ["Escape", "Enter"])
+        self.assertEqual(self.sent()[-2][-1], "Reply with just: NOW-OK")
 
 
 if __name__ == "__main__":

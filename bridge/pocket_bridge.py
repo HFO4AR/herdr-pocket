@@ -2415,6 +2415,9 @@ CODEX_GOALS = (("Pursuing goal", "active"), ("Goal paused", "paused"), ("Goal st
                ("Goal hit usage limits", "usage_limited"), ("Goal unmet", "unmet"), ("Goal achieved", "complete"))
 CODEX_GOAL_RE = re.compile(r"(Pursuing goal|Goal paused|Goal stalled|Goal hit usage limits|Goal unmet|Goal achieved)(?: \(([^)]{1,30})\))?")
 CODEX_FOOTER_RE = re.compile(r"for shortcuts|esc to interrupt|Context \d+% used|% context left|to cycle\)|tab to queue")
+CODEX_MENU_ROW = re.compile(r"^›[ \t]*\d{1,2}\.[ \t]")
+# The placeholder in an empty composer is drawn dim (SGR 2) right after "› " (captured from 0.163).
+CODEX_PLACEHOLDER = re.compile(r"^(?:\x1b\[[0-9;]*m)*[  ]*(?:\x1b\[[0-9;]*m)*\x1b\[(?:\d+;)*2(?:;\d+)*m")
 RULE_RE = re.compile(r"^\s*[─━]{8,}")
 
 
@@ -2434,13 +2437,42 @@ def claude_footer(lines):
     return None
 
 
+def codex_composer(lines):
+    """Index of Codex's composer line (the last › line, with its footer under it), or None.
+    While a picker is up (approval, request_user_input question, model switch) the composer is
+    hidden and the last › line is the picker's pointer row ("› 1. Red"): no composer then, even
+    though the question's own hint line reads "esc to interrupt" (seen live, Codex 0.163)."""
+    for i in range(len(lines) - 1, max(-1, len(lines) - 25), -1):
+        line = lines[i].lstrip()
+        if line.startswith("›"):
+            if CODEX_MENU_ROW.match(line): return None
+            return i if any(CODEX_FOOTER_RE.search(x) for x in lines[i + 1:i + 13]) else None
+    return None
+
+
 def codex_footer(lines):
     """Lines under Codex's composer (the last › line), when they look like its footer."""
-    for i in range(len(lines) - 1, max(-1, len(lines) - 25), -1):
-        if lines[i].lstrip().startswith("›"):
-            foot = lines[i + 1:i + 13]
-            return foot if any(CODEX_FOOTER_RE.search(x) for x in foot) else None
-    return None
+    i = codex_composer(lines)
+    return None if i is None else lines[i + 1:i + 13]
+
+
+def codex_draft(text, ansi):
+    """Text already in Codex's composer ("" when empty), or None without the composer on screen.
+    An empty composer shows a dim placeholder ("Ask Codex to do anything", other suggestions);
+    typed text is not dim. A draft may span lines; a blank line separates it from the status line."""
+    lines, colored = str(text or "").split("\n"), str(ansi or "").split("\n")
+    if len(colored) != len(lines): colored = [""] * len(lines)
+    while lines and not lines[-1].strip(): lines.pop(); colored.pop()
+    i = codex_composer(lines)
+    if i is None: return None
+    body = [lines[i].lstrip()[1:]]
+    for line in lines[i + 1:]:
+        if not line.strip(): break
+        body.append(line)
+    draft = "\n".join(body).strip("  \n\t")
+    if not draft: return ""
+    after = colored[i].split("›", 1)[1] if "›" in colored[i] else ""
+    return "" if len(body) == 1 and CODEX_PLACEHOLDER.match(after) else draft
 
 
 def shift_tab_offered(text):
@@ -2586,7 +2618,8 @@ ARROW_ROW = re.compile(r"^(?P<pad>[ \t]*)(?P<ptr>[❯›▶➤●◉→])[ \t]+(
 ARROW_HINT = re.compile(r"(?i)↑\s*/?\s*↓|arrow keys|to navigate|navigate|to select|enter to (?:confirm|select|submit)|enter (?:confirm|select|submit)")
 MENU_SUBMIT = re.compile(r"^(?P<ptr>[❯›>▶➤])?[ \t]*(?P<label>Submit answers|Submit|Next)[ \t]*$")
 MENU_CHECK = re.compile(r"^(?:\[(?P<box>[ ✔✓×xX√])\]|(?P<sym>[☐☒◻◼]))[ \t]*")
-MENU_FOOTER = re.compile(r"(?i)(enter to |esc to |to navigate|tab to |to cancel|ctrl\+\w to |press enter|↑/↓|←/→)")
+# Codex's model-switch picker: "enter select · esc back".
+MENU_FOOTER = re.compile(r"(?i)(enter to |esc to |to navigate|tab to |to cancel|ctrl\+\w to |press enter|↑/↓|←/→|\benter select\b|\besc back\b)")
 MENU_MORE = re.compile(r"^[↑↓]\s*(\d+\s*more (above|below).*)?$")
 MENU_INPUT = re.compile(r"(?i)^(type something|type your answer|other)\b")
 BOX_EDGE = "│┃║"
@@ -2725,6 +2758,9 @@ def parse_menu(text, provider=""):
     for raw in reversed(lines[max(0, run[0]["line"] - 16):run[0]["line"]]):
         value = raw.strip()
         if menu_rule(raw) and context: break
+        # Codex draws its pickers without a border; two blank rows part them from the conversation
+        # above (approval, question and model-switch pickers, seen live in 0.163).
+        if provider == "codex" and not value and len(context) >= 2 and not context[0] and any(context): break
         if menu_rule(raw) or MENU_MORE.match(value): continue
         if "←" in value and "→" in value and re.search(r"[☐☒✔√]", value):
             tabs = [{"label": m[2].strip(), "done": m[1] in "☒✔√"}
@@ -4058,6 +4094,9 @@ def tmux_state(pane, found, text):
     When the screen alone cannot tell (an open prompt, no spinner) its transcript decides; without
     one it stays working, so nothing is typed into a turn that may still run."""
     state = tmux_screen_state(text, found["kind"])
+    # Codex: idle only with its composer and footer on screen. Anything else (an overlay, a dialog
+    # this bridge does not parse) could take typed letters as shortcuts (y/p approve a command).
+    if state == "idle" and found["kind"] == "codex" and codex_composer(screen_lines(text)) is None: return "working"
     if state != "idle" or found["kind"] != "claude" or not claude_turn_open(text): return state
     try: done = claude_transcript_turn_done(found)
     except (OSError, ValueError): done = None
@@ -4327,8 +4366,8 @@ def tmux_kill(request, state_dir):
 #  · status (target): the cheap poll of one open chat; `status` with `tmux: true` and no target
 #    lists every tmux agent next to Herdr's (the background watcher). Reads only.
 #  · prompt: refused unless the screen says it is idle (same rule as Herdr: the phone queues
-#    instead); pictures and files name the phone's uploads by local path (the pane runs here),
-#    re-hashed first. One receipt per request id, through tmux_send.
+#    instead) and its input box is empty (claude_draft, codex_draft); pictures and files name
+#    the phone's uploads by local path (the pane runs here), re-hashed first. One receipt per request id, through tmux_send.
 #  · answer: answer_question with tmux keys (tmux_answer_io): every key is followed by a screen
 #    read, Enter only on a verified cursor; its receipt is written before the first key.
 #  · key: ↑ ↓ Enter Esc Ctrl+C and Shift+Tab (BTab, only while the agent's own input footer is on
@@ -4468,6 +4507,12 @@ def tmux_agent_request(request, state_dir):
         plain, colored = tmux_capture(pane["pane_id"])
         if claude_draft(plain, colored):
             raise BridgeError("没发出去：它的输入框里已经有字了（可能是刚被中断、退回来的那条），发出去会连在一起。先在「终端」里看一眼")
+    elif found["kind"] == "codex":
+        # Text typed into the pane (or left there) would be sent together with this prompt (seen live).
+        plain, colored = tmux_capture(pane["pane_id"])
+        draft = codex_draft(plain, colored)
+        if draft is None: raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
+        if draft: raise BridgeError("没发出去：它的输入框里已经有字了，发出去会连在一起。先在「终端」里看一眼")
     if attached:
         # Checked before the receipt: a refusal here sent nothing.
         text = compose_prompt(text, tmux_attachments(request))
