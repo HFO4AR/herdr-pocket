@@ -39,6 +39,11 @@ function queueCompose(input,key,a,text,pics,docs=[]){
  queueAdd(key,a,text,pics,{docs});queueTakeDraft(input,key,text,pics,docs);
  toast(S.demo?'演示：排好队了，不会真的发':a.agent_status==='blocked'?'排好队了，处理完确认就发':a.agent_status==='working'?'排好队了，它停下就发':'排在前面那条后面');
  S.stick=true;paintTimeline();renderComposer();}
+// A message the app wrote itself (rename.js): queued the same way, the composer's draft untouched.
+function queueOwn(key,a,text){
+ const it=queueAdd(key,a,text,[]);
+ toast(a.agent_status==='blocked'?'排好队了，处理完确认就发':a.agent_status==='working'?'排好队了，它停下就发':'排在前面那条后面');
+ S.stick=true;paintTimeline();renderComposer();return it;}
 function queueTakeDraft(input,key,text,pics,docs=[]){
  if(S.drafts.get(key)===text)S.drafts.delete(key);if(input&&input.value===text){input.value='';input.style.height='auto';}
  if(pics.length)imgSet(key,imgAttached(key).filter(p=>!pics.includes(p)));
@@ -49,7 +54,7 @@ function queueRejected(key,a,item,text,pics,input,msg,docs=[]){
  const qi=queueAdd(key,a,text,pics,{front:true,reason:msg,docs,row:item.row});qi.tries=1;queueTakeDraft(input,key,text,pics,docs);
  const q=queueOf(key);if(queueTransient(msg))q.retryAt=Date.now()+5000;else queuePause(q,'上一条没发出去，队列先停下。处理好再点继续',true);
  toast('没发出去，放进队列了'+(queueTransient(msg)?'，它停下就再发':''));
- paintTimeline();renderComposer();setTimeout(()=>refreshStatus(),300);return true;}
+ paintTimeline();renderComposer();setTimeout(()=>refreshStatus(),300);return qi;}
 // An unknown outcome of a direct send stops anything queued behind it.
 function queueHalt(key){const q=Q.get(key);if(q?.items.length)queuePause(q,'上一条发送结果未知，排队的先不发。看一眼再点继续',true);}
 function queuePause(q,reason,resumable){q.paused=reason;q.resumable=resumable;}
@@ -181,7 +186,7 @@ async function queueRun(c,key,q,force){
   if(it.dev&&it.dev!==S.device?.id){it.state='queued';return;}
   // A fresh request id for every attempt; the bridge refuses a reused one.
   const sent=await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,...(it.dev?{device:it.dev}:{}),text:!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?it.text.trim():it.text,id:uuid(),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
-  q.items=q.items.filter(x=>x!==it);q.tries=0;q.retryAt=0;if(sentNote(sent))toast(sentNote(sent));
+  it.state='sent';q.items=q.items.filter(x=>x!==it);q.tries=0;q.retryAt=0;if(sentNote(sent))toast(sentNote(sent));
   const card=!it.pics.length&&!it.docs?.length&&slashIs(it.text,a)?slashCard(key,it.text):null;
   if(card)card.state='sent';else S.outbox.push({key,text:it.text,images:it.pics.map(p=>({url:p.thumb})),files:(it.docs||[]).map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sent',qid:it.qid,row:it.row});
   if(it.pics.length)rpc('dropImages',{ids:it.pics.map(p=>p.id)}).catch(()=>{});if(it.docs?.length)rpc('dropFiles',{ids:it.docs.map(f=>f.id)}).catch(()=>{});

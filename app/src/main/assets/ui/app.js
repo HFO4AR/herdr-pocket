@@ -404,13 +404,14 @@ function updateChatMeta(){
   if(!a)n.append(chatSubtitle());
   // Just sent and not started yet (activity.js): say that, not 执行中 or 正在读取回复.
   else if(actHeadText()||awaitingReply())n.append(el('span','meta-state work',actHeadText()||'正在读取回复…'),' · '+(projectOf(a)?projectOf(a)+' · ':'')+providerName(a.agent));
-  else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=agentState(a)==='working'?actSince(a):agentState(a)==='blocked'?statusSince(a)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}}
+  else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=agentState(a)==='working'?actSince(a):agentState(a)==='blocked'?statusSince(a)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}
+  if(a)renameMeta(n);}
  const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(c?.agent&&!c.stale?stateTone(c.agent):'muted');
  const b=document.getElementById('child-count');if(b){b.textContent=String(S.children.length);b.classList.toggle('hidden',!S.children.length);}kidsPaintHead();}
 function renderChat(){
  const root=shell();root.classList.add('chat-shell');const head=el('header','chat-head');head.id='chat-head';head.append(ib('back','返回列表',pocketBack));
  const av=avatar(S.chat.provider);const dot=el('span','status-dot');dot.id='chat-dot';av.append(dot);head.append(av);
- const name=el('div','grow chat-id');name.append(el('h2','',S.chat.title||'对话'));const sub=el('small','chat-meta');sub.id='chat-meta';name.append(sub);head.append(name);
+ const name=el('div','grow chat-id');name.append(chatTitle());const sub=el('small','chat-meta');sub.id='chat-meta';name.append(sub);head.append(name);
  const sw=ib('branch','切换 Agent',agentSwitcher);sw.classList.add('with-count');const count=el('span','icon-count hidden');count.id='child-count';count.setAttribute('aria-hidden','true');sw.append(count);
  const more=ib('more','更多操作',chatMenu);sw.classList.add('head-act');more.classList.add('head-act');head.append(sw,more);root.append(head);
  const tabs=el('div','chat-tabs');tabs.setAttribute('role','group');tabs.setAttribute('aria-label','视图');[['conversation','对话'],['commands','命令'],['terminal','终端']].filter(([mode])=>!(S.chat.noTranscript&&mode==='commands')).forEach(([mode,title])=>{const b=btn(title,S.chatMode===mode?'active':'',()=>{if(S.chatMode===mode)return;S.chatMode=mode;S.stick=true;S.unseen=0;S.epoch++;renderChat();if(mode==='terminal')fetchTerminal();else if(S.chat.record&&!S.messages.length)fetchHistory(false,true);});b.setAttribute('aria-pressed',String(S.chatMode===mode));tabs.append(b);});head.append(tabs);
@@ -470,16 +471,19 @@ function interruptButton(a){
  const b=btn('中断','secondary small',()=>confirmAction('中断 Agent？',what+'排队的消息会在它停下后接着发。','中断',async()=>{S.chat.interruptAt=Date.now();renderComposer();await sendKey('esc','Esc');setTimeout(()=>{if(S.chat)renderComposer();},4000);},true));
  b.disabled=!!S.chat?.interruptAt&&Date.now()-S.chat.interruptAt<4000;if(b.disabled)b.textContent='正在中断…';return b;}
 async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'已发送 '+label);setTimeout(()=>{refreshStatus();fetchTerminal(true);},700);}catch(e){toast('按键未确认：'+e.message+'。不会自动重发。');}}
-async function sendMessage(input){
- const text=input.value;const a=S.chat?.agent;const key=draftKey();const pics=imgAttached(key).slice(),docs=fileAttached(key).slice();if((!text.trim()&&!pics.length&&!docs.length)||!a)return;
- if(!S.device&&!S.demo){toast('还在连接，连上后才能发送；草稿留着');return;}
- if(followHoldsSend())return;
- slashClose(input.closest('.composer'));
+// own: a message the app writes itself (rename.js: "/rename <name>"), sent exactly like a typed one
+// (queue, refusals, receipts, unknown outcomes never resent) but never touching the composer's draft.
+// Resolves to what happened: 'sent', 'queued' (with own.item), 'failed', 'rejected' or 'held'.
+async function sendMessage(input,own){
+ const text=own?own.text:input.value;const a=S.chat?.agent;const key=draftKey();const pics=own?[]:imgAttached(key).slice(),docs=own?[]:fileAttached(key).slice();if((!text.trim()&&!pics.length&&!docs.length)||!a)return 'held';
+ if(!S.device&&!S.demo){toast(own?'还在连接，连上后再改':'还在连接，连上后才能发送；草稿留着');return 'held';}
+ if(followHoldsSend())return 'held';
+ if(input)slashClose(input.closest('.composer'));
  // A panel left open by the last slash command would swallow this message (or Enter would pick in it).
- if(slashPanelCard(key)){if(S.slashChecking)return;S.slashChecking=true;let held;try{held=await slashHold(a,key);}finally{S.slashChecking=false;}if(held||slashPanelCard(key))return;return sendMessage(input);}
+ if(slashPanelCard(key)){if(S.slashChecking)return 'held';S.slashChecking=true;let held;try{held=await slashHold(a,key);}finally{S.slashChecking=false;}if(held||slashPanelCard(key))return 'held';return sendMessage(input,own);}
  // Busy, or something already waiting: it goes into the send queue (queue.js), in order.
- if(queueWants(a,key)){sendPulse(document.querySelector('#composer .send'));queueCompose(input,key,a,text,pics,docs);return;}
- const epoch=S.epoch,dev=S.device?.id;const button=document.querySelector('.send');sendPulse(button);button.disabled=true;
+ if(queueWants(a,key)){if(own){own.item=queueOwn(key,a,text);return 'queued';}sendPulse(document.querySelector('#composer .send'));queueCompose(input,key,a,text,pics,docs);return 'queued';}
+ const epoch=S.epoch,dev=S.device?.id;const button=own?null:document.querySelector('.send');if(button){sendPulse(button);button.disabled=true;}
  const item={key,text,images:pics.map(p=>({url:p.thumb})),files:docs.map(f=>({file:f.name,size:f.size})),at:Date.now(),state:'sending',row:'s'+(++sendSeq)};
  // Slash commands get a 「命令输出」 card (slash.js) instead of a pending bubble: most never reach the transcript.
  const card=!S.demo&&!pics.length&&!docs.length&&slashIs(text,a)?slashCard(key,text):null;
@@ -490,17 +494,22 @@ async function sendMessage(input){
   const images=pics.length?await imgUpload(pics,stage=>{item.stage=stage;paintTimeline();}):null;
   const files=docs.length?await fileUpload(docs,a,stage=>{item.stage=stage;paintTimeline();}):null;item.stage='';
   const sent=await remote('prompt',{session:S.session,target:a.pane_id,identity:a.identity,text:card?text.trim():text,id:uuid(),...(dev&&!S.demo?{device:dev}:{}),...(images?{images,remote:!!a.history_ref?.remote}:{}),...(files?{files,remote:!!a.history_ref?.remote}:{})});
-  if(S.demo){toast('演示模式：未发送，草稿已保留');return;}
-  item.state='sent';if(card)card.state='sent';if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}
+  if(S.demo){toast('演示模式：未发送，草稿已保留');return 'held';}
+  item.state='sent';if(card)card.state='sent';if(!own){if(S.drafts.get(key)===text)S.drafts.delete(key);if(epoch===S.epoch&&input.value===text){input.value='';input.style.height='auto';}}
   if(pics.length){imgSet(key,imgAttached(key).filter(p=>!pics.includes(p)));rpc('dropImages',{ids:pics.map(p=>p.id)}).catch(()=>{});}
   if(docs.length){fileSet(key,fileAttached(key).filter(f=>!docs.includes(f)));rpc('dropFiles',{ids:docs.map(f=>f.id)}).catch(()=>{});}
   // A slash command may not start a turn at all (/status), so no optimistic "working": Herdr's own state decides.
   if(S.chat?.agent){S.chat.sentAt=Date.now();S.chat.doneAt=0;if(!card)S.chat.agent={...S.chat.agent,agent_status:'working'};renderComposer();updateChatMeta();}
   S.stick=true;paintTimeline();if(card)slashCapture(card);if(epoch===S.epoch)setTimeout(()=>fetchHistory(),900);
   if(S.chat?.noTranscript&&!card){toast('发给 '+providerName(a.agent)+' 了，回复看终端'+sentNote(sent,'；'));setTimeout(()=>{if(epoch===S.epoch)fetchTerminal(true);},900);}
-  else if(sentNote(sent))toast(sentNote(sent));}
- catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);if(!S.demo&&queueNotSent(e.message)){if(card)slashDrop(card);queueRejected(key,a,item,text,pics,input,e.message,docs);return;}queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();toast(notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');}
- finally{S.sendBusy=Math.max(0,(S.sendBusy||1)-1);button.disabled=!input.value.trim()&&!attCount(key);}}
+  else if(sentNote(sent))toast(sentNote(sent));
+  return 'sent';}
+ catch(e){item.stage='';const notSent=/^没发出去/.test(e.message);
+  if(!S.demo&&queueNotSent(e.message)){if(card)slashDrop(card);const qi=queueRejected(key,a,item,text,pics,input,e.message,docs);if(own)own.item=qi;return 'queued';}
+  queueHalt(key);item.state=notSent?'rejected':'failed';item.reason=e.message;if(card){card.state=item.state;card.reason=e.message;}paintTimeline();
+  toast(own?(notSent?e.message+'。可以再改一次':'改名发送未确认：'+e.message+'。不会自动重发，先看一眼终端'):notSent?e.message+'。草稿还在，处理好可以直接再发。':'发送未确认：'+e.message+'。草稿已保留，不会自动重发。');
+  return notSent?'rejected':'failed';}
+ finally{S.sendBusy=Math.max(0,(S.sendBusy||1)-1);if(button)button.disabled=!input.value.trim()&&!attCount(key);}}
 // What the bridge says about the agent's own input box after a send: text that sat there was
 // replaced (never joined to this message), or the screen could not confirm the box emptied.
 function sentNote(r,sep=''){const n=[r?.replaced?'覆盖了它输入框里原来的字':'',r?.verified===false?'屏幕上没确认到它收下了，留意一下':''].filter(Boolean).join('，');return n?sep+n:'';}
@@ -702,7 +711,8 @@ const POLL_BEAT=1250,POLL_HOT=15000,REPLY_WAIT=60000;
 // instead of showing 已完成 over a conversation that seems to have been ignored.
 function awaitingReply(){
  const c=S.chat,a=c?.agent;if(!a||c.stale||!c.record||!['idle','done'].includes(a.agent_status))return false;
- let user=null,reply=-1,last=-1;S.messages.forEach((m,i)=>{if(m.kind==='user'&&!/^\s*\//.test(m.text||'')){user=m;last=i;}else if(m.kind==='assistant')reply=i;});
+ // Claude's own record of a slash command (/rename, /model: "<command-name>…") is not a prompt awaiting a reply.
+ let user=null,reply=-1,last=-1;S.messages.forEach((m,i)=>{if(m.kind==='user'&&!/^\s*\//.test(m.text||'')&&!tlCommand(m.text)){user=m;last=i;}else if(m.kind==='assistant')reply=i;});
  const sent=S.outbox.some(o=>o.key===draftKey()&&o.state==='sent'&&!/^\s*\//.test(o.text));
  if(!sent&&!(user&&last>reply))return false;
  const at=Math.max(c.sentAt||0,sent?Math.max(...S.outbox.filter(o=>o.key===draftKey()).map(o=>o.at)):0,toDate(user?.timestamp)?.getTime()||0);
