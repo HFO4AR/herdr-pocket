@@ -547,11 +547,15 @@ def screen_input(raw, kind):
 
 def screen_dialog(menu, kind):
     """A dialog that waits for the person: an approval (Claude permission or folder trust, Codex
-    approval), the answer review, or a Claude question (AskUserQuestion: tabs, a text row, a "Chat
-    about this" row or checkboxes). A picker opened by a slash command (/model) is not one: the
-    person opened it on purpose and the command card on the phone handles it."""
+    approval), the answer review, a Claude question (AskUserQuestion: tabs, a text row, a "Chat
+    about this" row or checkboxes), or a picker drawn in place of the input box (menu.picker).
+
+    Pickers count whoever opened them. Codex 0.163 puts up "Approaching rate limits / Switch to …?"
+    on its own after a turn and Herdr calls the agent done; a /model the person opened looks the
+    same on screen (no title, footer or row tells them apart). Either way the input box is gone, a
+    message cannot go in, and the phone's queue has to wait: the answer card is the way out."""
     if not menu: return False
-    if menu["kind"] in ("approval", "review"): return True
+    if menu["kind"] in ("approval", "review") or menu.get("picker"): return True
     return kind == "claude" and menu["kind"] == "question" and bool(
         menu["tabs"] or menu["multi"] or any(o["input"] or o["chat"] for o in menu["options"]))
 
@@ -604,6 +608,7 @@ def mark_screen_menus(prefix, found, state_dir):
             entry.pop("box", None)
             if screen_dialog(result["menu"], agent["agent"]):
                 agent.update(herdr_status=agent["agent_status"], agent_status="blocked", screen="menu")
+                if result["menu"].get("picker"): agent["picker"] = True
     # Forget terminals that are gone (the list is the whole session's).
     live = {a.get("terminal_id") for a in found}
     memo = {k: v for k, v in memo.items() if k in live}
@@ -614,6 +619,22 @@ def mark_screen_menus(prefix, found, state_dir):
             tmp.write_text(json.dumps(memo)); os.replace(tmp, path)
         except OSError: pass
     return found
+
+
+def screen_memo_forget(state_dir, terminal_id):
+    """Drop the "box settled" note for a terminal, so the next status reads its screen again: after
+    a prompt or key went in (a "/model" opens a picker and Herdr's state stays idle; seen live with
+    Codex 0.163), and when a prompt found a dialog where the box used to be (a picker the person
+    opened on the computer). One more screen read; it settles again once the box is back."""
+    if not state_dir or not isinstance(terminal_id, str): return
+    path = state_dir / SCREEN_MEMO
+    try:
+        memo = json.loads(path.read_text())
+        if not isinstance(memo, dict) or not isinstance(memo.get(terminal_id), dict) or "box" not in memo[terminal_id]: return
+        memo[terminal_id].pop("box", None)
+        tmp = path.with_name(path.name + ".%d.tmp" % os.getpid())
+        tmp.write_text(json.dumps(memo)); os.replace(tmp, path)
+    except (OSError, ValueError): pass
 
 
 def relay_prompt(prefix, pane_id, text):
@@ -661,7 +682,9 @@ def mutate(request, prefix, agent, state_dir):
             if not isinstance(text, str) or (not text.strip() and not images and not files) or len(text.encode()) > 15000 or "\x00" in text:
                 raise BridgeError("Prompt must contain 1–15000 UTF-8 bytes without NUL")
             # Before the receipt: a refusal here sent nothing.
-            if menu_up: raise BridgeError(MENU_ON_SCREEN)
+            if menu_up:
+                screen_memo_forget(state_dir, agent.get("terminal_id"))
+                raise BridgeError(MENU_ON_SCREEN)
             if boxed and view["pasting"]: raise BridgeError(BOX_NOT_SENT["pasting"])
             if images is not None or files is not None:
                 # Checked and (for ch routes) shared before the receipt: a failure here sent nothing.
@@ -723,6 +746,8 @@ def mutate(request, prefix, agent, state_dir):
             if request.get("images") is not None or request.get("files") is not None: result["text"] = text
             db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
             db.commit()
+            # What was typed may open a picker without a Herdr state change ("/model"): look again.
+            screen_memo_forget(state_dir, agent.get("terminal_id"))
             return result
         if boxed and op == "exitAgent" and view["box"]:
             # /exit (/quit) joined to a draft would go out as one message: the box is emptied first.
@@ -751,6 +776,7 @@ def mutate(request, prefix, agent, state_dir):
             db.commit()
             raise BridgeError(NOT_SENT[exc.code]) from exc
         result = {"sent": True, "receipt": req_id, "result": value}
+        if op in ("prompt", "key"): screen_memo_forget(state_dir, agent.get("terminal_id"))
         if op == "exitAgent": result["command"] = args[-1]
         if op == "prompt" and (request.get("images") is not None or request.get("files") is not None): result["text"] = text
         db.execute("UPDATE receipts SET result=? WHERE id=?", (json.dumps(result), req_id))
@@ -3162,7 +3188,13 @@ def menu_loose_match(a, b):
     return a[:size] == b[:size]
 
 
-MENU_ESC = re.compile(r"(?i)\besc(?:ape)?\s+to\s+(cancel|interrupt|exit|close|go back|dismiss)")
+# Codex pickers say "esc back" (no "to"): Esc closes the picker without choosing.
+MENU_ESC = re.compile(r"(?i)\besc(?:ape)?\s+(?:to\s+)?(cancel|interrupt|exit|close|go back|back|dismiss)\b")
+# The key hint under a dialog the agent draws instead of its input box: "enter select · esc back",
+# "Press enter to confirm or esc to cancel", "Enter to select · ↑/↓ to navigate · Esc to cancel".
+MENU_KEYS = re.compile(r"(?i)\benter\b\W{0,3}(?:to\s+)?(?:select|confirm|choose|submit|continue)\b|\besc(?:ape)?\b\W{0,3}(?:to\s+)?(?:back|go back|cancel|exit|close|dismiss)\b|↑\s*/?\s*↓|\bto navigate\b")
+# A Codex request_user_input question (answered by the agent's own flow, not a plain picker).
+MENU_NOT_PICKER = re.compile(r"(?i)submit answer|\bunanswered\b|add (?:details in )?notes")
 MENU_ESC_ROW = re.compile(r"(?i)\((?:esc|escape)\)\s*$")
 
 
@@ -3322,8 +3354,8 @@ def parse_menu(text, provider=""):
     while context and not context[0]: context.pop(0)
     while context and not context[-1]: context.pop()
     context = context[-14:]
-    question = next((x for x in reversed(context) if x.endswith(("?", "？"))), next((x for x in reversed(context) if x), ""))
-    question = menu_unwrap(lines, max(0, run[0]["line"] - 16), run[0]["line"], question)
+    source = next((x for x in reversed(context) if x.endswith(("?", "？"))), next((x for x in reversed(context) if x), ""))
+    question = menu_unwrap(lines, max(0, run[0]["line"] - 16), run[0]["line"], source)
     if trust:
         asked = re.search(r"[^.:!?]*\btrust\?", " ".join(context))
         if asked: question = asked.group(0).strip()
@@ -3343,9 +3375,22 @@ def parse_menu(text, provider=""):
             bool(MENU_INPUT.match(row["label"])) or row["n"] == (chat or 0) - 1 or bool(multi and submit and row is last_real))
     stable = [kind, multi, context, [(r["n"], r["label"]) for r in run if not r["input"]]]
     esc = menu_esc(lines, run, last_line)
+    # A plain single-choice picker in place of the input box: Codex "Approaching rate limits / Switch
+    # to … for lower credit usage?" (enter select · esc back), Codex / Claude /model, Claude's
+    # rate-limit options. One choice, no text row, and the key hint says so. Its title line goes in
+    # front of the question, so the card says what it is about.
+    hint = " ".join(x.strip() for x in lines[last_line + 1:last_line + 14])
+    picker = (provider in ("claude", "codex") and kind == "question" and not multi and not tabs and chat is None and not any(r["input"] for r in run)
+              and bool(MENU_KEYS.search(hint)) and not MENU_NOT_PICKER.search(hint + " " + " ".join(context)))
+    # The title: the first row of the paragraph the question is in (rows above a blank one, such as
+    # the echoed "/model", belong to something else).
+    at = max((i for i, x in enumerate(context) if x == source), default=-1)
+    while at > 0 and context[at - 1]: at -= 1
+    title = context[at] if at >= 0 else ""
+    if picker and title and menu_norm(title) not in menu_norm(question): question = (title + " — " + question)[:600]
     # Esc on the trust dialog is its "No, exit" (Claude quits), not a refusal it waits after.
     if trust: esc = {"action": (esc or {}).get("action", "cancel"), "option": trust}
-    return {"kind": kind, "multi": multi, "cursor": cursor, "question": question, "context": context, "esc": esc,
+    return {"kind": kind, "multi": multi, "cursor": cursor, "question": question, "context": context, "esc": esc, "picker": picker,
             "tabs": [t for t in tabs if t["label"].lower() != "submit"],
             "options": [{k: r[k] for k in ("n", "label", "description", "checked", "chosen", "input", "chat")} for r in run],
             "submit": submit["label"] if submit else None,
@@ -3358,6 +3403,7 @@ def with_menu(screen, agent, always=False):
     The read also carries Herdr's state from the same request, so the phone sees
     "blocked" as soon as it reads the screen instead of waiting for a status poll."""
     screen["agent_status"] = agent.get("agent_status")
+    if agent.get("picker"): screen["picker"] = True
     if always or agent.get("agent_status") == "blocked":
         screen["menu"] = parse_menu(screen.get("text", ""), agent.get("agent", ""))
     return screen
@@ -5227,8 +5273,9 @@ def tmux_probe(found):
             "route": None, "cwd": snap.get("cwd", ""), "remote": False, "ok": True, "native": True}
 
 
-def tmux_agent_row(pane, found, status=None, history_ref=None):
-    """The pane as the app's agent row (the same fields as a Herdr agent the list and chat use)."""
+def tmux_agent_row(pane, found, status=None, history_ref=None, text=None):
+    """The pane as the app's agent row (the same fields as a Herdr agent the list and chat use).
+    `text`: the screen `status` came from; a blocked row says `picker` when that menu is one."""
     cwd = found["snap"].get("cwd") or pane["cwd"]
     # tmux's default pane title is the host name: only a title the agent set says anything.
     title = pane.get("_title", "")
@@ -5237,6 +5284,7 @@ def tmux_agent_row(pane, found, status=None, history_ref=None):
            "agent_status": status, "terminal_id": "tmux:" + pane["identity"], "terminal_title": title,
            "cwd": pane["cwd"], "foreground_cwd": cwd, "tmux": True, "tmux_session": pane["session"]}
     if history_ref is not None: row["history_ref"] = history_ref
+    if status == "blocked" and text is not None and (parse_menu(text, found["kind"]) or {}).get("picker"): row["picker"] = True
     return row
 
 
@@ -5268,7 +5316,7 @@ def tmux_list(request):
         entry = tmux_public(pane)
         found = tmux_agent_in(pane)
         if found:
-            status = None
+            status = text = None
             if screens < TMUX_AGENT_SCREENS:
                 screens += 1
                 text = tmux_visible(pane)
@@ -5277,7 +5325,7 @@ def tmux_list(request):
             if resolve:
                 try: ref = tmux_history(pane, found, cache)
                 except (OSError, BridgeError) as exc: ref = {"status": "unavailable", "reason": str(exc)[:200]}
-            entry["agent"] = tmux_agent_row(pane, found, status, ref)
+            entry["agent"] = tmux_agent_row(pane, found, status, ref, text)
         out.append(entry)
     # Where it looked, so an empty list can say so (and a refused directory or a silent server shows).
     return {"available": True, "panes": out, "looked": report.get("looked", []), "skipped": report.get("skipped", []),
@@ -5588,12 +5636,12 @@ def tmux_status_rows():
     for pane in tmux_panes() or []:
         found = tmux_agent_in(pane)
         if not found: continue
-        status = None
+        status = text = None
         if screens < TMUX_AGENT_SCREENS:
             screens += 1
             text = tmux_visible(pane)
             if text is not None: status = tmux_state(pane, found, text)
-        rows.append(tmux_agent_row(pane, found, status))
+        rows.append(tmux_agent_row(pane, found, status, text=text))
     return rows
 
 
@@ -5603,7 +5651,7 @@ def tmux_one_status(request):
     found = tmux_agent_in(pane) if pane else None
     if not found: return {"tmux": True, "agents": []}
     text = tmux_visible(pane)
-    return {"tmux": True, "agents": [tmux_agent_row(pane, found, tmux_state(pane, found, text) if text is not None else None)]}
+    return {"tmux": True, "agents": [tmux_agent_row(pane, found, tmux_state(pane, found, text) if text is not None else None, text=text)]}
 
 
 def tmux_attachments(request):
@@ -5658,7 +5706,7 @@ def tmux_agent_request(request, state_dir):
         found = tmux_agent_in(pane)
         if not found: return {"follow": True, "state": "exited", "agents": [], "pane": dict(tmux_public(pane), tmux=True)}
         text = tmux_visible(pane)
-        row = tmux_agent_row(pane, found, tmux_state(pane, found, text) if text is not None else None, tmux_history(pane, found, {}))
+        row = tmux_agent_row(pane, found, tmux_state(pane, found, text) if text is not None else None, tmux_history(pane, found, {}), text)
         row["tmux_pane"] = tmux_public(pane)
         return {"follow": True, "state": "same" if row["identity"] == request.get("identity") else "changed", "agents": [row], "pane": None}
     if op == "status": return tmux_one_status(request)
@@ -5675,7 +5723,9 @@ def tmux_agent_request(request, state_dir):
         activity = screen_activity(text)
         if activity: result["activity"] = activity
         # `menu: true` (after a slash command) parses a picker even when the state is not blocked.
-        if state == "blocked" or request.get("menu") is True: result["menu"] = parse_menu(text, found["kind"])
+        if state == "blocked" or request.get("menu") is True:
+            result["menu"] = parse_menu(text, found["kind"])
+            if state == "blocked" and (result["menu"] or {}).get("picker"): result["picker"] = True
         if request.get("ansi") is True: result["ansi"] = screen
         return result
     if op == "answer": return tmux_answer(request, state_dir, pane, found)
@@ -5779,7 +5829,7 @@ def herdr_status(prefix, screens=False):
     a visible-screen look at idle/done Claude / Codex agents: mark_screen_menus)."""
     fields = ("pane_id", "agent", "agent_status", "agent_session", "terminal_id", "terminal_title",
               "terminal_title_stripped", "title", "cwd", "foreground_cwd", "workspace_id", "tab_id", "identity")
-    extra = ("screen", "herdr_status")
+    extra = ("screen", "herdr_status", "picker")
     return [dict({k: a.get(k) for k in fields}, **{k: a[k] for k in extra if k in a}) for a in agents(prefix, screens=screens)]
 
 

@@ -37,7 +37,7 @@ function queueAdd(key,a,text,pics,opts={}){
 // The composer's text and pictures move into the queue; the draft is cleared.
 function queueCompose(input,key,a,text,pics,docs=[]){
  queueAdd(key,a,text,pics,{docs});queueTakeDraft(input,key,text,pics,docs);
- toast(S.demo?'演示：排好队了，不会真的发':a.agent_status==='blocked'?'排好队了，处理完确认就发':a.agent_status==='working'?'排好队了，它停下就发':'排在前面那条后面');
+ toast(S.demo?'演示：排好队了，不会真的发':a.agent_status==='blocked'?(qaPicker(a)?'排好队了，选完就发':'排好队了，处理完确认就发'):a.agent_status==='working'?'排好队了，它停下就发':'排在前面那条后面');
  S.stick=true;paintTimeline();renderComposer();}
 function queueTakeDraft(input,key,text,pics,docs=[]){
  if(S.drafts.get(key)===text)S.drafts.delete(key);if(input&&input.value===text){input.value='';input.style.height='auto';}
@@ -110,7 +110,7 @@ async function queueNow(key,qid){
 // does there (answer.js qaEscText) and go only after a yes. Working or idle: as before.
 function queueNowAsk(key,qid){
  const a=S.chat?.agent;if(a?.agent_status!=='blocked'||S.demo)return queueNow(key,qid);
- const menu=qaFresh(a);confirmAction('先取消它在等的'+(menu?.kind==='approval'?'确认':'问题')+'？',(menu?qaEscText(menu,a):'会按 Esc 取消它正在等的确认框。')+'然后发这条消息。','按 Esc 再发',()=>queueNow(key,qid),true);}
+ const menu=qaFresh(a);confirmAction(menu?.picker?'先关掉它的选择框？':'先取消它在等的'+(menu?.kind==='approval'?'确认':'问题')+'？',(menu?qaEscText(menu,a):'会按 Esc 取消它正在等的确认框。')+'然后发这条消息。','按 Esc 再发',()=>queueNow(key,qid),true);}
 // Why the head of the queue cannot go now ('' = it can). Pauses that need a person are set here.
 function queueBlock(c,key,q,force){
  const head=q.items[0];if(!head)return 'empty';
@@ -209,7 +209,7 @@ function queueLabel(c,q,it,i){
  if(q.checkFails>=2)return '排队中 · 窗格确认有点慢，可以点「立即发送」';
  if(q.why==='wait')return '排队中 · 等上一条被接收';
  if(q.why==='hold')return '排队中 · 正在确认窗格';
- const st=c?.agent?.agent_status;return st==='blocked'?'排队中 · 处理完确认再发':st==='working'?'排队中 · 等它停下再发':'排队中 · 马上发';}
+ const st=c?.agent?.agent_status;return st==='blocked'?(qaPicker(c.agent)?'排队中 · 选完再发':'排队中 · 处理完确认再发'):st==='working'?'排队中 · 等它停下再发':'排队中 · 马上发';}
 function queueTimeline(list){
  const key=draftKey(),q=Q.get(key);if(!q?.items.length)return;const c=S.chat;
  // The section and its rows are kept across repaints (timeline.js tlSendRow): a waiting message

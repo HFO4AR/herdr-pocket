@@ -116,7 +116,10 @@ class HandleTests(unittest.TestCase):
             bridge.handle(dict(v=1, op="commands", session="default", target="w1:p1", identity="other"))
 
     def test_read_parses_a_picker_on_request_even_when_idle(self):
-        self.assertNotIn("menu", self.request("read"))
+        # A picker in place of the input box reads as a waiting choice (see test_answer), so a plain
+        # read already carries it; `menu: true` parses one even while the agent reads idle.
+        read = self.request("read")
+        self.assertEqual((read["agent_status"], read["picker"], read["menu"]["esc"]), ("blocked", True, {"action": "exit", "option": None}))
         menu = self.request("read", menu=True)["menu"]
         self.assertEqual((menu["cursor"], [o["label"] for o in menu["options"]]), (1, ["Default (recommended)", "Opus", "Haiku"]))
         self.screen = "❯ /status\n Claude Code v2.1.268\n Esc to cancel"

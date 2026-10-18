@@ -26,7 +26,7 @@ function footQueueText(a,key){
  const q=Q.get(key),head=q?.items[0];if(!head)return '';
  if(head.state==='unknown')return '结果未知';if(head.state==='sending'||head.state==='checking')return '发送中…';if(head.state==='interrupting')return '正在中断…';
  if(S.chat?.exited)return '不会再发';if(q.paused)return '已暂停';
- return a.agent_status==='blocked'?'确认完再发':a.agent_status==='working'?'它停下就发':'马上发';}
+ return a.agent_status==='blocked'?(qaPicker(a)?'选完再发':'确认完再发'):a.agent_status==='working'?'它停下就发':'马上发';}
 function footQueueShow(){const box=document.querySelector('#chat-scroll .queue');if(!box)return;S.stick=false;
  box.scrollIntoView({block:'nearest',behavior:tlCalm()?'auto':'smooth'});if(typeof updateJump==='function')updateJump();}
 

@@ -87,7 +87,7 @@ function menuItem(box,label,fn,name,detail){const b=btn('','menu-item',()=>{clos
 // ─── Formatting ─────────────────────────────────────────────────────────────
 // "kids" (kids.js): Herdr says idle/done but the agent's sub-agents still run — a working state.
 const STATUS={working:['执行中','work'],blocked:['等你确认','alert'],kids:['子 Agent 运行中','work'],idle:['空闲','ok'],done:['已完成','ok']};
-function stateLabel(a){const s=agentState(a);return s==='kids'?kidsLabel(a):(STATUS[s]||['状态未知','muted'])[0];}
+function stateLabel(a){const s=agentState(a);return s==='kids'?kidsLabel(a):s==='blocked'&&qaPicker(a)?'等你选择':(STATUS[s]||['状态未知','muted'])[0];}
 function stateTone(a){return (STATUS[agentState(a)]||['','muted'])[1];}
 // Every agent kind Herdr detects is listed and driven the same way; this table only names them.
 // [display name, avatar initials]. Unknown kinds: the kind capitalized, two letters, neutral avatar.
@@ -300,11 +300,13 @@ async function loadLive(){
 async function refreshStatus(){
  if(!S.device||S.demo||S.statusBusy||!S.session||!S.statusSupported||S.liveLoading)return;S.statusBusy=true;
  try{const r=await remote('status',{session:S.session});const known=new Map(S.agents.map(a=>[a.pane_id,a]));let changed=false;
-  const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}if(old.agent_status!==a.agent_status||titleOf(old)!==titleOf(a))changed=true;return {...old,...a,history_ref:old.history_ref};});
+  const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}if(old.agent_status!==a.agent_status||titleOf(old)!==titleOf(a))changed=true;return {...old,...a,history_ref:old.history_ref,picker:a.picker};});
   if(next.length!==S.agents.length)changed=true;
   const fresh=next.filter(a=>!known.has(a.pane_id)||known.get(a.pane_id).identity!==a.identity);
   noteStatus(next);S.agents=next;S.liveAt=Date.now();document.querySelectorAll('[data-fmt="upd"]').forEach(n=>{n.dataset.since=S.liveAt;});if(changed){syncWatch();cacheLive();}
-  if(S.chat?.agent&&!S.chat.agent.tmux){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);followHint(cur);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status};onAgentStatus(was,cur.agent_status);}}
+  if(S.chat?.agent&&!S.chat.agent.tmux){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);followHint(cur);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status,picker:cur.picker};onAgentStatus(was,cur.agent_status);}
+   // Waiting on a picker or on another dialog (等你选择 / 等你确认) under the same state.
+   else if(!!cur.picker!==!!S.chat.agent.picker){S.chat.agent={...S.chat.agent,picker:cur.picker};updateChatMeta();renderComposer();}}
   if(fresh.length&&S.tab==='live'&&!S.chat){loadLive();return;}
   if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}
  catch(e){if(/Unknown operation|不支持的操作/.test(e.message))S.statusSupported=false;}
@@ -437,7 +439,7 @@ function renderComposer(){
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
  if(offline){live.replaceChildren(el('div','compose-note','正在连接 · 显示的是上次的缓存，连上后才能发送'));}else renderLiveState(live,a);
  const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status,later=!offline&&(st==='working'||st==='blocked');
- input.placeholder=offline?'可以先写，连上再发':st==='working'?'写好会排队，停下就发':st==='blocked'?'写好会排队，确认完再发':S.chat.noTranscript?'发给 '+providerName(a.agent)+'…'+(slashKnown(a)?'（/ 看命令）':''):'接着说点什么…（/ 看命令）';
+ input.placeholder=offline?'可以先写，连上再发':st==='working'?'写好会排队，停下就发':st==='blocked'?(qaPicker(a)?'写好会排队，选完再发':'写好会排队，确认完再发'):S.chat.noTranscript?'发给 '+providerName(a.agent)+'…'+(slashKnown(a)?'（/ 看命令）':''):'接着说点什么…（/ 看命令）';
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
  // Busy agent: the button says it will queue, so sending never looks like it failed.
  send.classList.toggle('later',later);send.querySelector('.send-label').textContent=later?'排队':'';send.title=offline?'连上后才能发送':later?'先排队，它停下就发':'发送';
@@ -456,7 +458,7 @@ function buildComposer(key){
  compose.append(attach,input,send);requestAnimationFrame(grow);return compose;}
 function renderLiveState(live,a){
  live.replaceChildren();const st=a.agent_status;S.qaShown='';S.qaBar='';
- if(st==='blocked'){if(qaLive(live,a))return;const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow','等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('写消息','link-btn foot-write',footWrite,'pen'),btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
+ if(st==='blocked'){if(qaLive(live,a))return;const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow',qaPicker(a)?'等你选择':'等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('写消息','link-btn foot-write',footWrite,'pen'),btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
   const pre=el('pre','confirm-screen');pre.id='confirm-screen';screenPaint(pre,S.terminalText||'正在读取终端画面…',S.terminalText&&S.terminalAnsi,12);panel.append(pre);
   const keys=el('div','confirm-keys');[['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);live.append(panel);requestAnimationFrame(()=>{pre.scrollTop=pre.scrollHeight;});}
  // Working and 「做完了」 are one line in the footer rail (foot.js), not a block here.
@@ -533,7 +535,7 @@ function onAgentStatus(was,now){
  // Rows depend on the state too (正在工作 / a Codex question becomes answerable once it stops):
  // repaint now instead of waiting for the transcript to change.
  if(S.chat?.record&&S.chatMode==='conversation'&&S.messages.length)paintTimeline();
- if(now==='blocked'){fetchTerminal(true);if(S.active)toast('Agent 在等你确认');}
+ if(now==='blocked'){fetchTerminal(true);if(S.active)toast(qaPicker(S.chat?.agent)?'Agent 在等你选择':'Agent 在等你确认');}
  // Just stopped: it may have asked something. Read now and once more shortly after, in case the
  // transcript's last lines land a moment after Herdr's state.
  if(was==='working'&&now!=='working'){S.activity='';fetchHistory();const c=S.chat;setTimeout(()=>{if(S.chat===c&&!S.paused)fetchHistory();},1500);}}
