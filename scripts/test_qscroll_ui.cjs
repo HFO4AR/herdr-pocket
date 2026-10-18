@@ -80,11 +80,26 @@ async function codexAsync(w,h,dark){
  await page.waitForTimeout(200);
  const view=await page.locator('#chat-scroll').boundingBox();
  if(dark===false&&w===390)await page.screenshot({path:path.join(folder,'qscroll-codex-top.png')});
- // Drags that start in the middle of the card: on an option's description, then on the next question.
- for(const target of [card.locator('.qa-q').nth(0).locator('.qa-desc').nth(1),card.locator('.qa-q').nth(0).locator('.qa-opt').nth(2)]){
-  const before=await scrollTop(page,'#chat-scroll');const p=center(await target.boundingBox());
-  const y=Math.min(p.y,view.y+view.height*0.62);await page.drag(p.x,y,-260);
-  const after=await scrollTop(page,'#chat-scroll');assert(after-before>150,`drag from the middle of the card scrolls (${w}x${h}): ${before} -> ${after}`);}
+ // A finger drag that starts on the card content, with room to scroll: the target is brought to where a
+ // reader would have it (upper middle of the view), the start point must hit the card body and the
+ // finger stays inside the conversation; the state is logged with every failure.
+ const dragCard=async(target,label)=>{
+  await target.evaluate(n=>{const b=document.getElementById('chat-scroll');b.scrollTop+=n.getBoundingClientRect().top-b.getBoundingClientRect().top-b.clientHeight*0.35;});
+  await page.waitForTimeout(150);
+  const tb=await target.boundingBox();const x=tb.x+tb.width/2,y=tb.y+Math.min(tb.height/2,24),dy=-Math.round(view.height*0.3);
+  const at=await page.evaluate(([x,y])=>{const b=document.getElementById('chat-scroll'),n=document.elementFromPoint(x,y);
+   return {top:Math.round(b.scrollTop),max:b.scrollHeight-b.clientHeight,hit:n?n.tagName+'.'+n.className:'none',onCard:!!n?.closest('.qa-log .qa-body')};},[x,y]);
+  const info=label+' ('+w+'x'+h+') '+JSON.stringify({x:Math.round(x),y:Math.round(y),dy,...at});
+  assert(at.onCard,'the drag starts on the card content: '+info);
+  assert(at.max-at.top>-dy,'the conversation has room to scroll: '+info);
+  assert(y+dy>view.y,'the finger stays inside the conversation: '+info);
+  await page.drag(x,y,dy);
+  const after=Math.round(await scrollTop(page,'#chat-scroll'));
+  assert(after-at.top>-dy*0.6,'drag from the middle of the card scrolls: '+at.top+' -> '+after+'; '+info);};
+ const q1=card.locator('.qa-q').nth(0),q2=card.locator('.qa-q').nth(1);
+ await dragCard(q1.locator('.qa-desc').nth(1),'on an option description');
+ await dragCard(q1.locator('.qa-question'),'on the question text');
+ await dragCard(q2.locator('.qa-opt').nth(2).locator('.qa-label'),'on an option label');
  // A drag is not a tap: nothing got selected on the way.
  assert.equal(await card.locator('.qa-opt[aria-checked="true"]').count(),0,'dragging over options selects nothing');
  // The answer bar stays in view while the card is on screen, above the back-to-latest arrow.
