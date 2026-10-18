@@ -172,9 +172,10 @@ def select_session(request):
     return ["--session", name]
 
 
-def agents(prefix, include_history=False, screens=False):
+def agents(prefix, include_history=False, screens=False, links=None):
     """Herdr's agents with an identity digest. `screens`: also look at idle/done Claude / Codex
-    screens for a dialog Herdr missed (mark_screen_menus); a state folder there keeps its notes."""
+    screens for a dialog Herdr missed (mark_screen_menus); a state folder there keeps its notes.
+    `links` (a LinkStore): remembered history links per pane run (settle_history)."""
     found = call(prefix + ["agent", "list"]).get("agents", [])
     result = [dict(a, identity=identity(a)) for a in found]
     if screens is not False: mark_screen_menus(prefix, result, screens if isinstance(screens, Path) else None)
@@ -189,11 +190,130 @@ def agents(prefix, include_history=False, screens=False):
     codex_index = (codex_thread_names(), codex_loaded_threads()) if any(a["agent"] == "codex" for a in live) else None
     for agent in live:
         probe = probes[agent["pane_id"]]
-        agent["history_ref"] = resolve_agent_history(agent, prefix, catalog, codex_index, probe)
+        ref = with_record(resolve_agent_history(agent, prefix, catalog, codex_index, probe), catalog)
+        agent["history_ref"] = settle_history(agent, prefix, ref, probe, links, catalog)
         # A ch pane: the command that attaches it again (`create` with `resume`, kind ch).
-        ch = probe.get("ch_resume")
-        if ch and probe["route"] and Path(probe["route"]["workspace"]).name == ch["session"]: agent["ch_resume"] = ch
+        ch = probe.get("ch_resume"); route = history_route(probe)
+        if ch and route and Path(route["workspace"]).name == ch["session"]: agent["ch_resume"] = ch
     return result
+
+
+# ─── Remembered history links ────────────────────────────────────────────────
+# Per pane run (Herdr session + pane + terminal + agent kind, checked against the run mark of
+# probe_pane), ~/.local/state/herdr-pocket/links-v1.json keeps
+#   auto:   the last conversation the evidence confirmed, shown again (marked `stale`) while the
+#           evidence cannot be read for a moment (network drop, ch reconnecting, Herdr busy);
+#   manual: the person's own pick (`link`), which stands until the agent process changes or
+#           strong evidence (native-process / title / open-file) names the conversation.
+# Only record metadata (ids, title, cwd) is stored, never conversation content.
+LINKS_MAX = 300
+LINK_DAYS = 60
+LINK_KEY = re.compile(r"[a-f0-9]{32}")
+STRONG_SOURCES = ("native-process", "title", "open-file")
+
+
+def link_key(prefix, agent):
+    fields = [prefix[1] if len(prefix) > 1 else "default", agent.get("pane_id"), agent.get("terminal_id"), agent.get("agent")]
+    return hashlib.sha256(json.dumps(fields).encode()).hexdigest()[:32]
+
+
+class LinkStore:
+    def __init__(self, path=None):
+        self.path, self.items, self.changed = path, None, {}
+
+    def read(self):
+        if not self.path: return {}
+        try:
+            if self.path.is_symlink(): return {}
+            value = json.loads(self.path.read_text()).get("links")
+        except (OSError, ValueError, AttributeError): return {}
+        return {k: v for k, v in value.items() if LINK_KEY.fullmatch(str(k)) and isinstance(v, dict)} if isinstance(value, dict) else {}
+
+    def get(self, key):
+        if self.items is None: self.items = self.read()
+        return self.items.get(key)
+
+    def put(self, key, value):
+        self.get(key)
+        if value is None: self.items.pop(key, None)
+        else: self.items[key] = value
+        self.changed[key] = value
+
+    def save(self):
+        """Merge this request's changes into the file under a lock (several bridge requests run at once)."""
+        if not self.path or not self.changed: return
+        import fcntl
+        try:
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd = os.open(self.path.with_name(".links.lock"), os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            with os.fdopen(fd, "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                items = self.read()
+                for key, value in self.changed.items():
+                    if value is None: items.pop(key, None)
+                    else: items[key] = value
+                now = time.time()
+                fresh = sorted(((k, v) for k, v in items.items() if now - float(v.get("at") or 0) < LINK_DAYS * 86400),
+                               key=lambda kv: float(kv[1].get("at") or 0), reverse=True)[:LINKS_MAX]
+                temp = self.path.with_name("." + os.urandom(6).hex() + ".part")
+                with open(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as out: json.dump({"v": 1, "links": dict(fresh)}, out)
+                os.replace(temp, self.path)
+            self.changed.clear()
+        except (OSError, ValueError, TypeError):
+            try: temp.unlink()
+            except (OSError, UnboundLocalError): pass
+
+
+def links_for(state_dir):
+    return LinkStore(state_dir / "links-v1.json" if isinstance(state_dir, Path) else None)
+
+
+def link_record(record, agent, prefix, probe):
+    """A remembered record as it applies now: a remote one only on the same route, with the
+    pane's current context; None when it no longer fits."""
+    if not isinstance(record, dict) or not isinstance(record.get("id"), str) or record.get("provider") != agent.get("agent"): return None
+    route = history_route(probe)
+    if record["id"].startswith("remote:"):
+        if not route or not record["id"].startswith("remote:" + route["key"] + ":"): return None
+        return dict(record, remote=remote_context(agent, prefix))
+    return None if route else record
+
+
+def linked_ref(record, source, **extra):
+    ref = {"status": "matched", "source": source, "record_id": record["id"], "thread": record.get("thread"), "record": record}
+    if record.get("remote"): ref["remote"] = record["remote"]
+    return dict(ref, **extra)
+
+
+def settle_history(agent, prefix, ref, probe, links, catalog=None):
+    """Apply the remembered links to a fresh resolution (see LinkStore). Never invents a link:
+    `auto` only stands in while the evidence is unreadable, `manual` only where the evidence
+    names nothing better."""
+    if links is None: return ref
+    key = link_key(prefix, agent)
+    entry = links.get(key)
+    run = probe.get("run")
+    if entry and run and entry.get("run") and entry["run"] != run:
+        links.put(key, None); entry = None   # another agent process: what was linked is not this one
+    entry = dict(entry or {})
+    status, source = ref.get("status"), ref.get("source")
+    if status == "matched" and ref.get("record") and source not in ("manual",) and not ref.get("stale"):
+        auto = {"record": ref["record"], "source": source}
+        # Written when the conversation (or the run) changes, not on every new line in it.
+        last = entry.get("auto") or {}
+        changed = (last.get("record") or {}).get("id") != ref["record"]["id"] or last.get("source") != source or bool(run and entry.get("run") != run)
+        if source in STRONG_SOURCES and entry.get("manual"): entry.pop("manual"); changed = True
+        if changed: links.put(key, dict(entry, auto=auto, run=run or entry.get("run"), pane=agent.get("pane_id"), at=time.time()))
+        if source in STRONG_SOURCES or not entry.get("manual"): return ref
+    manual = link_record((entry.get("manual") or {}).get("record"), agent, prefix, probe)
+    if manual and catalog and not manual.get("remote") and all(x["id"] != manual["id"] for x in catalog): manual = None
+    if manual:
+        return linked_ref(manual, "manual", auto_status=status, **({"reason": ref["reason"]} if ref.get("reason") else {}))
+    if ref.get("transient"):
+        last = entry.get("auto") or {}
+        record = link_record(last.get("record"), agent, prefix, probe)
+        if record: return linked_ref(record, last.get("source") or "native-process", stale=True, transient=True, reason=ref.get("reason") or "")
+    return ref
 
 
 def panes(prefix):
@@ -863,9 +983,20 @@ def codex_title_threads(agent, candidates, names, loaded):
     return open_hits or (hits if len(hits) == 1 else set())
 
 
+def run_mark(pid, snapshot):
+    """Which process run this is: pid plus its start time (a reused pid has another start)."""
+    return "%d:%s" % (pid, snapshot["start"]) if snapshot and snapshot.get("start") else None
+
+
 def probe_pane(agent, prefix, provider):
-    """Walk the pane's process tree once; read argv, cwd and FD link names only."""
-    found = {"ids": set(), "paths": set(), "active": set(), "route": None, "cwd": "", "remote": False, "ok": False}
+    """Walk the pane's process tree once; read argv, cwd and FD link names only.
+
+    `route` is a live ch SSH attach (the only route input may go through); `relay_route` is the
+    route ch's relay names in its own argv, which stays while the relay reconnects (no ssh child
+    for a few seconds after a network drop). `run` marks the process the agent runs as (the
+    native agent, or the ch relay / ssh attach): a remembered history link is kept while it stays."""
+    found = {"ids": set(), "paths": set(), "active": set(), "route": None, "relay_route": None, "cwd": "", "remote": False,
+             "ok": False, "run": None}
     try: info = call(prefix + ["pane", "process-info", "--pane", agent["pane_id"]]).get("process_info", {})
     except BridgeError: return found
     found["ok"] = True
@@ -878,11 +1009,18 @@ def probe_pane(agent, prefix, provider):
         snapshot = process_snapshot(pid)
         argv = snapshot["argv"] if snapshot else initial_argv
         found["remote"] = found["remote"] or bool(argv and Path(argv[0]).name in ("ssh", "mosh", "mosh-client"))
-        found["route"] = found["route"] or ch_ssh_route(argv)
+        if not found["route"]:
+            found["route"] = ch_ssh_route(argv)
+            if found["route"] and not found["relay_route"]: found["run"] = run_mark(pid, snapshot)
+        if not found["relay_route"]:
+            found["relay_route"] = ch_relay_route(argv)
+            # The relay outlives every reconnect: it is the run, not the ssh child of the moment.
+            if found["relay_route"]: found["run"] = run_mark(pid, snapshot)
         found["ch_resume"] = found.get("ch_resume") or ch_resume_in_argv(argv)
         native = is_agent_process(argv, provider)
         found["native"] = found.get("native", False) or native
         if native:
+            if not found["run"]: found["run"] = run_mark(pid, snapshot)
             found["ids"].update(explicit_session_ids(argv, provider))
             if snapshot:
                 found["cwd"] = found["cwd"] or snapshot.get("cwd", "")
@@ -892,6 +1030,16 @@ def probe_pane(agent, prefix, provider):
             continue
         if snapshot: queue.extend((child, []) for child in snapshot["children"])
     return found
+
+
+def history_route(probe):
+    """The ch route whose computer holds this pane's history: the live attach, or the one the relay
+    is reconnecting (then nothing can be read there for the moment, but it is still that computer)."""
+    return probe.get("route") or probe.get("relay_route")
+
+
+def reconnecting(route, context):
+    return {"status": "remote_error", "transient": True, "remote": context, "reason": "ch 正在重新连接远端电脑"}
 
 
 def matched(entry, source):
@@ -916,16 +1064,20 @@ def resolve_agent_history(agent, prefix, catalog, codex_index=None, probe=None):
         if len(threads) == 1:
             thread = next(iter(threads))
             if thread in roots: return matched(roots[thread], source)
-            if source == "native-process" and not probe["route"]:
+            if source == "native-process" and not history_route(probe):
                 return {"status": "pending", "thread": thread, "source": source, "reason": "会话刚开始，历史文件还没写出"}
         elif len(threads) > 1:
             conflict = conflict or threads
             if source in ("native-process", "title"): break
-    route = probe["route"]
+    route = history_route(probe)
     if route:
-        context = {"session": prefix[1] if len(prefix) > 1 else "default", "target": agent["pane_id"],
-                   "identity": agent.get("identity", identity(agent)), "provider": provider}
+        context = remote_context(agent, prefix)
+        # The relay is between two SSH connections (network drop): say so, never guess locally.
+        if not probe["route"]: return reconnecting(route, context)
         return remote_resolution(route, context)
+    if not probe["ok"] and not conflict and not value:
+        # Herdr did not answer the process lookup this time: nothing was decided, ask again.
+        return {"status": "retry", "transient": True, "reason": "这次没读到窗格的进程信息"}
     cwd = probe["cwd"] or agent.get("foreground_cwd") or agent.get("cwd") or ""
     if conflict:
         status, pool = "ambiguous", [roots[t] for t in conflict if t in roots]
@@ -937,6 +1089,27 @@ def resolve_agent_history(agent, prefix, catalog, codex_index=None, probe=None):
               "missing": "会话标识已知，但没找到对应的历史文件",
               "unavailable": "没有能唯一确认的会话标识，请从同目录的历史里选择" if pool else "没有能确认的会话标识"}[status]
     return {"status": status, "query": cwd, "candidates": [public_record(x) for x in pool][:12], "reason": reason}
+
+
+def remote_context(agent, prefix):
+    return {"session": prefix[1] if len(prefix) > 1 else "default", "target": agent["pane_id"],
+            "identity": agent.get("identity", identity(agent)), "provider": agent["agent"]}
+
+
+def ch_relay_route(argv):
+    """ch's relay (a script host, the pane's foreground process) carries its SSH attach and
+    reconnect commands as JSON argv items. Read as data only, never run: the route when every
+    such command names the same one, else None."""
+    if not argv or Path(argv[0]).name not in SCRIPT_HOSTS: return None
+    keys, first = set(), None
+    for item in argv[1:8]:
+        if not isinstance(item, str) or not item.startswith("[") or len(item) > 8192: continue
+        try: value = json.loads(item)
+        except ValueError: continue
+        if not isinstance(value, list) or not value or not all(isinstance(x, str) for x in value): continue
+        route = ch_ssh_route(value)
+        if route: keys.add(route["key"]); first = first or route
+    return first if len(keys) == 1 else None
 
 
 def ch_ssh_route(argv):
@@ -1023,8 +1196,19 @@ def route_binding_metadata(workspace):
     return binding
 
 
-def active_threads_in_pane(pid, provider, expected_pid=None, expected_start=None):
-    queue=[pid]; seen=set(); candidates=[]; verified=expected_pid is None
+def resume_path_in_argv(argv):
+    """Claude started on a transcript file (`--resume <path>.jsonl`, what ch runs after moving a
+    conversation over): that path, else None. A session id is not a path."""
+    for i, arg in enumerate(argv):
+        value = argv[i + 1] if arg in ("--resume", "-r") and i + 1 < len(argv) else arg.split("=", 1)[1] if arg.startswith("--resume=") else ""
+        if value.startswith("/") and value.endswith(".jsonl") and len(value) < 4096: return value
+    return None
+
+
+def active_threads_in_pane(pid, provider, expected_pid=None, expected_start=None, extra=None):
+    """The one native agent's live session id in this pane (None when it is not certain). `extra`
+    (a dict) also gets `resume_path`: the transcript file that agent was started on, if any."""
+    queue=[pid]; seen=set(); candidates=[]; verified=expected_pid is None; resumes=[]
     while queue and len(seen)<128:
         current=queue.pop(0)
         if current in seen: continue
@@ -1039,10 +1223,12 @@ def active_threads_in_pane(pid, provider, expected_pid=None, expected_start=None
             ids=set(snapshot.get("active_threads",[])) if provider=="claude" else set()
             if not ids: ids=explicit_session_ids(argv,provider)
             candidates.append(ids)
+            resumes.append(resume_path_in_argv(argv) if provider=="claude" else None)
             # Nested agents belong to this parent, not the selected tmux pane.
             continue
         queue.extend(snapshot["children"])
     if not verified: raise BridgeError("导入的原生进程不再属于这个分屏")
+    if extra is not None and len(resumes)==1 and resumes[0]: extra["resume_path"]=resumes[0]
     if len(candidates)!=1 or len(candidates[0])!=1: return None
     return next(iter(candidates[0]))
 
@@ -1068,8 +1254,9 @@ def remote_active_history(workspace, provider="claude"):
             try: panes.append(int(fields[1]))
             except ValueError: continue
         if len(panes)!=1: raise BridgeError("远端活跃分屏定位不唯一")
-        thread=active_threads_in_pane(panes[0],provider,binding.get("pid"),binding.get("start"))
-        return {"status":"matched" if thread else "unavailable", "thread":thread, "source":"native-process"}
+        extra={}
+        thread=active_threads_in_pane(panes[0],provider,binding.get("pid"),binding.get("start"),extra)
+        return dict({"status":"matched" if thread else "unavailable", "thread":thread, "source":"native-process"}, **extra)
     except (BridgeError,OSError,subprocess.TimeoutExpired) as exc:
         return {"status":"unavailable","reason":str(exc)[:200]}
 
@@ -1112,14 +1299,72 @@ def catalog_for_history(record_id, provider, active_thread=None):
     # Locate by opaque digest / exact native id without reparsing unrelated chats.
     if provider != "claude": return transcript_catalog(write_cache=False)
     root = provider_root(provider)
-    if not root: return []
     selected = []
-    for path in root.rglob("*.jsonl"):
+    for path in root.rglob("*.jsonl") if root else ():
         key = hashlib.sha256((provider + ":" + str(path.relative_to(root))).encode()).hexdigest()
         if key != record_id and (not active_thread or path.stem != active_thread): continue
         value = safe_entry(provider, root, path)
         if value: selected.append(value)
-    return with_children(provider, root, selected)
+    found = with_children(provider, root, selected) if root else []
+    return found + ch_transfer_catalog(record_id)
+
+
+# ─── ch transfers ────────────────────────────────────────────────────────────
+# Moving a conversation to this computer, ch copies the Claude transcript to
+# ~/.local/share/ch/transfers/<id>/<session>.jsonl and starts `claude --resume <that file>
+# --fork-session`. Claude writes the fork's own transcript (under ~/.claude/projects) only with
+# the first new turn; until then the copy is exactly the conversation on screen. Only these
+# files (and their sub-agent files) are read, only for ch route panes.
+CH_TRANSFER_SPACE = "claude:ch-transfer:"
+
+
+def ch_transfers_root():
+    root = Path.home() / ".local/share/ch/transfers"
+    return root.resolve() if root.is_dir() and not root.is_symlink() else None
+
+
+def ch_transfer_key(root, path):
+    return hashlib.sha256((CH_TRANSFER_SPACE + str(path.relative_to(root))).encode()).hexdigest()
+
+
+def ch_transfer_record(root, path):
+    """A transfer copy as a catalog entry: a real, non-symlinked file of this user, a root record."""
+    try:
+        if path.is_symlink() or not path.resolve().is_relative_to(root): return None
+        rel = path.relative_to(root)
+        if len(rel.parts) != 2 or not re.fullmatch(UUID_RE, rel.parts[0]) or not re.fullmatch(UUID_RE, path.stem): return None
+        info = path.lstat()
+        if not stat_module.S_ISREG(info.st_mode) or info.st_uid != os.getuid(): return None
+        meta = record_meta(path, "claude")
+        if not meta or meta.get("parent"): return None
+        return dict(meta, id=ch_transfer_key(root, path), modified=info.st_mtime, size=info.st_size, _path=path)
+    except (OSError, ValueError, TypeError, AttributeError): return None
+
+
+def ch_transfer_entry(path):
+    """The transfer copy a live agent was started on (`resume_path`), else None."""
+    root = ch_transfers_root()
+    if not root or not isinstance(path, str) or not path.startswith("/"): return None
+    return ch_transfer_record(root, Path(path))
+
+
+def ch_transfer_catalog(record_id):
+    """Find a transfer copy, or a sub-agent of one, by its record id; reads no other file."""
+    root = ch_transfers_root()
+    if not root or not isinstance(record_id, str): return []
+    for path in root.glob("*/*.jsonl"):
+        try: rel = str(path.relative_to(root))
+        except ValueError: continue
+        if hashlib.sha256((CH_TRANSFER_SPACE + rel).encode()).hexdigest() == record_id:
+            entry = ch_transfer_record(root, path)
+            return with_children("claude", root, [entry]) if entry else []
+    for path in root.glob("*/*/subagents/*.jsonl"):
+        try: key = hashlib.sha256(("claude:" + str(path.relative_to(root))).encode()).hexdigest()
+        except ValueError: continue
+        if key != record_id: continue
+        parent = ch_transfer_record(root, path.parent.parent.with_suffix(".jsonl"))
+        return with_children("claude", root, [parent]) if parent else []
+    return []
 
 
 def scoped_records(provider, workspace, limit=12):
@@ -1153,9 +1398,30 @@ def remote_resolve(items):
         if not isinstance(workspace, str) or provider not in ("claude", "codex"): continue
         active = remote_active_history(workspace, provider)
         record = locate_thread(provider, active.get("thread"), workspace) if active.get("status") == "matched" else None
-        out[workspace] = {"active": active, "record": public_record(record) if record else None,
-                          "candidates": [] if record else [public_record(x) for x in scoped_records(provider, workspace)]}
+        source = "native-process"
+        candidates = [] if record else scoped_records(provider, workspace)
+        # No live session id yet: the agent was started on a ch transfer copy. When nothing of this
+        # route has been written since (no transcript in its own project folder), that copy is
+        # what the pane shows; otherwise it is only one more candidate.
+        transfer = None if record or active.get("status") == "matched" else ch_transfer_entry(active.get("resume_path"))
+        if transfer and not candidates: record, source, transfer = transfer, "ch-transfer", None
+        if transfer: candidates.append(transfer)
+        out[workspace] = {"active": public_active(active), "record": public_record(record) if record else None, "source": source,
+                          "candidates": [public_record(x) for x in candidates]}
     return out
+
+
+def public_active(active):
+    """The remote live-session result without the transcript file path it was started on."""
+    return {k: v for k, v in active.items() if k != "resume_path"}
+
+
+def remote_catalog_records(provider, workspace):
+    """The route's own project conversations, plus the transfer copy its agent was started on."""
+    records = scoped_records(provider, workspace, 100)
+    transfer = ch_transfer_entry(remote_active_history(workspace, provider).get("resume_path")) if provider == "claude" else None
+    if transfer and all(x["id"] != transfer["id"] for x in records): records.append(transfer)
+    return records
 
 
 def remote_history_page(request, catalog=None):
@@ -1168,7 +1434,7 @@ def remote_history_page(request, catalog=None):
     selected=dict(request)
     if follow and "before" not in request and current: selected["record_id"]=current["id"]
     result=attach_kids(history_page(selected,catalog),catalog,selected)
-    result["active_status"]=active
+    result["active_status"]=public_active(active)
     if current: result["active_record"]=public_record(current)
     result["active_changed"]=selected["record_id"]!=request["record_id"]
     return result
@@ -1304,7 +1570,7 @@ def remote_dispatch(request):
     if op == "image":
         try: return remote_transcript_image(request)
         except BridgeError as exc: return {"image_error": str(exc)[:200]}
-    if op == "catalog": return {"records": [public_record(x) for x in scoped_records(request.get("provider", "claude"), request["workspace"], 100)]}
+    if op == "catalog": return {"records": [public_record(x) for x in remote_catalog_records(request.get("provider", "claude"), request["workspace"])]}
     if op == "kids": return remote_kids_main(request.get("items"))
     if op == "bgOutput": return bg_output_main(request)
     if op == "fileView": return view_file(request.get("path"), request.get("cwd"), view_roots(request.get("record_id"), request.get("provider", "claude"), request.get("workspace")))
@@ -1367,13 +1633,15 @@ def remote_resolution(route, context):
     key = json.dumps(route["ssh"])
     if key not in _remote_results: prefetch_remote([(route, context["provider"])])
     data = _remote_results.get(key)
-    if isinstance(data, BridgeError): return {"status": "remote_error", "reason": str(data), "remote": context}
+    # The other computer did not answer this time (network, SSH, time limit): nothing was decided.
+    if isinstance(data, BridgeError): return {"status": "remote_error", "transient": True, "reason": str(data), "remote": context}
     item = (data or {}).get(route["workspace"])
-    if not item: return {"status": "remote_error", "reason": "远端没有返回这个窗格的结果", "remote": context}
+    if not item: return {"status": "remote_error", "transient": True, "reason": "远端没有返回这个窗格的结果", "remote": context}
     active = item.get("active") or {}
     if item.get("record"):
         record = wrap_remote_record(item["record"], route, context)
-        return {"status": "matched", "source": "native-process", "record_id": record["id"], "thread": record["thread"], "record": record, "remote": context}
+        source = item.get("source") if item.get("source") in ("native-process", "ch-transfer") else "native-process"
+        return {"status": "matched", "source": source, "record_id": record["id"], "thread": record["thread"], "record": record, "remote": context}
     candidates = [wrap_remote_record(x, route, context) for x in item.get("candidates", [])]
     if active.get("status") == "matched":
         return {"status": "pending", "thread": active.get("thread"), "remote": context, "candidates": candidates,
@@ -1402,12 +1670,17 @@ def route_for_context(context, memo=None):
     agent = next((a for a in found if a.get("pane_id")==context.get("target") and a["identity"]==context.get("identity")),None)
     if not agent: raise BridgeError("远端窗格已改变，请刷新会话列表")
     info = call(prefix+["pane","process-info","--pane",agent["pane_id"]]).get("process_info",{})
-    route=route_from_process_info(info)
+    relay = {}
+    route=route_from_process_info(info, relay)
     if route: return route
+    # ch's relay is still there and reconnecting: a moment, not a lost link.
+    if relay.get("route"): raise BridgeError("ch 正在重新连接远端电脑，稍后自动重试")
     raise BridgeError("远端 SSH 路由已断开，请刷新会话列表")
 
 
-def route_from_process_info(info):
+def route_from_process_info(info, relay=None):
+    """The live ch SSH attach in this process tree. `relay` (a dict) gets the relay's own route
+    when there is no live attach right now."""
     queue = [(p.get("pid"),p.get("argv",[])) for p in info.get("foreground_processes",[])]; seen=set()
     while queue and len(seen)<64:
         pid, initial = queue.pop(0)
@@ -1415,6 +1688,7 @@ def route_from_process_info(info):
         seen.add(pid); snapshot=process_snapshot(pid); argv=snapshot["argv"] if snapshot else initial
         route=ch_ssh_route(argv)
         if route: return route
+        if relay is not None and not relay.get("route"): relay["route"]=ch_relay_route(argv)
         if snapshot: queue.extend((child,[]) for child in snapshot["children"])
     return None
 
@@ -2266,6 +2540,9 @@ def codex_kid_files(path, thread, root):
 def kids_report(path, provider, thread, now=None):
     """{total, running, items[≤KIDS_LIST]: record + running/state}. Running first, then newest."""
     root = provider_root(provider)
+    # A ch transfer copy keeps its sub-agents beside it, outside the provider root.
+    transfers = ch_transfers_root() if provider == "claude" and path else None
+    if transfers and Path(path).is_relative_to(transfers): root = transfers
     if not root or not path: return {"total": 0, "running": 0, "items": []}
     now = now or time.time()
     events = kid_parent_events(path, provider)
@@ -3093,34 +3370,77 @@ def with_record(ref, catalog):
     return ref
 
 
-def resolve_one(agent, prefix):
+def resolve_one(agent, prefix, links=None):
+    probe = probe_pane(agent, prefix, agent["agent"])
+    catalog = []
+    ref = resolve_probed(agent, prefix, probe, catalog)
+    return settle_history(agent, prefix, ref, probe, links, catalog or None)
+
+
+def resolve_probed(agent, prefix, probe, catalog_out):
     provider = agent["agent"]
-    probe = probe_pane(agent, prefix, provider)
     # Fast path: a local Claude keeps its current runtime session directory open, which
     # already reflects /clear and /resume; locate just that file instead of scanning all.
-    if provider == "claude" and not probe["route"] and len(probe["active"]) == 1:
+    if provider == "claude" and not history_route(probe) and len(probe["active"]) == 1:
         thread = next(iter(probe["active"]))
         entry = locate_thread(provider, thread, probe["cwd"] or agent.get("foreground_cwd") or agent.get("cwd") or "")
         if entry: return dict(matched(entry, "native-process"), record=public_record(entry))
         return {"status": "pending", "thread": thread, "source": "native-process", "reason": "会话刚开始，历史文件还没写出"}
-    if probe["route"]:
+    if history_route(probe):
         global _remote_deadline
         _remote_deadline = time.monotonic() + 15
         _remote_results.clear()
         try: return resolve_agent_history(agent, prefix, [], None, probe)
         finally: _remote_deadline = None
     catalog = transcript_catalog()
+    catalog_out.extend(catalog)
     index = (codex_thread_names(), codex_loaded_threads()) if provider == "codex" else None
     return with_record(resolve_agent_history(agent, prefix, catalog, index, probe), catalog)
 
 
-def follow_pane(request, prefix):
+def link_history(request, prefix, links):
+    """The person's own pick of the conversation a live agent shows (`link`), or `clear`. Only
+    the bridge state file is written; the record must be a root conversation of the computer that
+    holds this pane's history (re-listed here, never trusted from the phone)."""
+    target = request.get("target")
+    if not isinstance(target, str) or not re.fullmatch(r"w[A-Za-z0-9]+:p[A-Za-z0-9]+", target): raise BridgeError("Invalid pane target")
+    agent = next((a for a in agents(prefix) if a.get("pane_id") == target), None)
+    if not agent or request.get("identity") != agent["identity"]: raise BridgeError("Agent changed or disappeared; reload the agent list")
+    if agent.get("agent") not in TRANSCRIPT_PROVIDERS: raise BridgeError("这个 Agent 没有可关联的对话记录")
+    probe = probe_pane(agent, prefix, agent["agent"])
+    key = link_key(prefix, agent)
+    entry = dict(links.get(key) or {})
+    if probe.get("run") and entry.get("run") and entry["run"] != probe["run"]: entry = {}
+    if request.get("clear") is True:
+        entry.pop("manual", None)
+        links.put(key, dict(entry, at=time.time()) if entry else None); links.save()
+        return {"linked": None}
+    record_id = request.get("record_id")
+    if not isinstance(record_id, str) or not re.fullmatch(r"(?:remote:[a-f0-9]{24}:)?[a-f0-9]{64}", record_id): raise BridgeError("Invalid history record")
+    route = history_route(probe)
+    if record_id.startswith("remote:"):
+        if not route or not record_id.startswith("remote:" + route["key"] + ":"): raise BridgeError("这条记录不在这个窗格连着的电脑上")
+        if not probe["route"]: raise BridgeError("ch 正在重新连接远端电脑，连上后再关联")
+        global _remote_deadline
+        _remote_deadline = None
+        records = remote_catalog(route, remote_context(agent, prefix))
+    else:
+        if route: raise BridgeError("这个窗格的历史在远端电脑上，不能关联本机记录")
+        records = [public_record(x) for x in transcript_catalog() if not x.get("parent")]
+    record = next((x for x in records if x["id"] == record_id and x.get("provider") == agent["agent"]), None)
+    if not record: raise BridgeError("没找到这条历史记录，请刷新后再选")
+    links.put(key, dict(entry, manual={"record": record, "at": time.time()}, run=probe.get("run") or entry.get("run"), pane=agent["pane_id"], at=time.time()))
+    links.save()
+    return {"linked": linked_ref(record, "manual")}
+
+
+def follow_pane(request, prefix, links=None):
     target = request.get("target")
     if not isinstance(target, str) or not re.fullmatch(r"w[A-Za-z0-9]+:p[A-Za-z0-9]+", target):
         raise BridgeError("Invalid pane target")
     agent = next((a for a in agents(prefix) if a.get("pane_id") == target), None)
     if agent:
-        if agent.get("agent") in TRANSCRIPT_PROVIDERS: agent["history_ref"] = resolve_one(agent, prefix)
+        if agent.get("agent") in TRANSCRIPT_PROVIDERS: agent["history_ref"] = resolve_one(agent, prefix, links)
         state = "same" if agent["identity"] == request.get("identity") else "changed"
         return {"follow": True, "state": state, "agents": [agent], "pane": None}
     # No agent in the pane any more: tell "exited, the shell is still there" from "pane closed".
@@ -6760,7 +7080,7 @@ def handle(request, state_dir=None):
         prefix = select_session(request)
         if op == "closeInfo": return close_info(request, prefix)
         return close_pane(request, prefix, state_dir or Path.home() / ".local/state/herdr-pocket")
-    if op not in ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent"):
+    if op not in ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent", "link"):
         raise BridgeError("Unknown operation")
     if op == "status" and request.get("tmux") is True:
         # The background watcher: Herdr's agents (when a session is named and Herdr is there) and
@@ -6774,11 +7094,14 @@ def handle(request, state_dir=None):
     # The screen notes live in the state folder the request runs with (main passes the real one).
     screens = state_dir or True
     if op == "status": return {"agents": herdr_status(prefix, screens)}
-    if op == "agents" and request.get("target") is not None:
-        return follow_pane(request, prefix)
-    found = agents(prefix, include_history=op == "agents", screens=screens)
     if op == "agents":
-        return {"agents": found}
+        links = links_for(state_dir)
+        try:
+            if request.get("target") is not None: return follow_pane(request, prefix, links)
+            return {"agents": agents(prefix, include_history=True, screens=screens, links=links)}
+        finally: links.save()
+    if op == "link": return link_history(request, prefix, links_for(state_dir))
+    found = agents(prefix, screens=screens)
     target = request.get("target")
     agent = next((a for a in found if a.get("pane_id") == target), None)
     if not agent or request.get("identity") != agent["identity"]:

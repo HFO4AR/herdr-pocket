@@ -170,3 +170,9 @@
 .note.no-transcript strong{color:var(--ink);font-weight:600}
 .note.no-transcript .fine{color:var(--muted);font-size:var(--fs-xs)}
 .note.no-transcript .btn,.note.no-transcript button{flex-shrink:0;align-self:center}
+/* A read that fails for a moment: quiet, the messages above stay. */
+.note.history-retry{background:var(--sunken);color:var(--ink-2);margin:10px 0}
+.note.history-retry .grow{display:flex;flex-direction:column;gap:2px;min-width:0}
+.note.history-retry strong{color:var(--ink);font-weight:600}
+.note.history-retry .fine{color:var(--muted);font-size:var(--fs-xs);overflow-wrap:anywhere}
+.note.history-retry button{flex-shrink:0;align-self:center}
