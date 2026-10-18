@@ -11,7 +11,7 @@ const FOLLOW_SETTLE=2500;
 
 function followRemote(c){return !!(c.agent?.history_ref?.remote||c.record?.remote);}
 // Local resolution is cheap (one process walk); a remote ch route costs an SSH round trip.
-function followInterval(c){return c.exited?12000:followRemote(c)?20000:10000;}
+function followInterval(c){return c.exited?12000:!c.record&&c.agent?.history_ref?.transient?6000:followRemote(c)?20000:10000;}
 // refreshStatus hands over this pane's newest status row (undefined once it left the agent list).
 function followHint(cur){
  const c=S.chat;if(!c?.agent||!FOLLOW.supported)return;
@@ -73,7 +73,9 @@ function followApply(c,r){
  // Nothing changed after all (a status blip): release the hold, refresh names.
  const held=c.following||c.stale||c.unsure;c.following=false;c.stale=false;c.unsure=null;
  c.agent={...c.agent,title:a.title,terminal_title:a.terminal_title,terminal_title_stripped:a.terminal_title_stripped,history_ref:a.history_ref};
- if(held){renderComposer();updateChatMeta();}}
+ if(held){renderComposer();updateChatMeta();}
+ // Still not linked: say what is known now (a moment without the other computer reads differently).
+ if(!cur&&!c.noTranscript){const t=historyIssueText(a.history_ref);if(t!==c.historyIssue){c.historyIssue=t;paintTimeline();}}}
 
 // The same conversation under a fresh identity (or a transcript that just appeared).
 function followAdopt(c,a,record){

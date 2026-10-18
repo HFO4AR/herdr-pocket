@@ -205,7 +205,7 @@ function agentRow(a){
  const meta=el('div','card-meta');meta.dataset.glance=k;const project=projectOf(a);meta.append(el('span','project',project||providerName(a.agent)));
  if(closeIsCh(a))meta.append(el('span','tag remote-tag','远端'));
  modeRowTags(meta,a);
- const ref=a.history_ref;if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(el('span','sep warn','历史未关联'));queueBadge(meta,a);
+ const ref=a.history_ref;if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(el('span','sep warn',ref.transient?'历史暂时读不到':'历史未关联'));queueBadge(meta,a);
  const preview=glancePreview(a);if(preview){meta.append(preview);n.classList.add('has-glance');}
  text.append(meta);
  const side=el('div','row-side');const at=statusSince(a);
@@ -318,12 +318,20 @@ async function openAgent(a){
  if(noTranscript(a)){S.chat.noTranscript=true;S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal(true);return;}
  const epoch=++S.epoch;renderChat();
  const ref=a.history_ref;
- if(ref?.record){S.bindings.delete(S.session+'/'+a.identity);S.chat.record=ref.record;await fetchHistory(false,true);return;}
- const remembered=S.bindings.get(S.session+'/'+a.identity);if(remembered){S.chat.record=remembered;S.chat.manual=true;await fetchHistory(false,true);return;}
+ // The bridge keeps a pick (source manual) and, while the evidence cannot be read for a moment,
+ // the last confirmed conversation (stale). Only real evidence replaces a pick made in this app.
+ const remembered=S.bindings.get(bindingKey(a));
+ if(ref?.record&&(ref.source==='manual'||!ref.stale||!remembered)){if(!ref.stale&&ref.source!=='manual')S.bindings.delete(bindingKey(a));S.chat.record=ref.record;if(ref.source==='manual')S.chat.manual=true;await fetchHistory(false,true);return;}
+ if(remembered){S.chat.record=remembered;S.chat.manual=true;await fetchHistory(false,true);return;}
  const id=ref?.thread||(a.agent_session?.kind!=='path'?a.agent_session?.value:null);
  if(id&&ref?.status!=='pending'&&S.device){try{const r=await remote('catalog',{thread:id});if(epoch!==S.epoch)return;const rec=r.records.find(x=>x.provider===a.agent&&(!ref?.record_id||x.id===ref.record_id));if(rec){S.chat.record=rec;await fetchHistory(false,true);return;}}catch(e){if(epoch===S.epoch)error(e);}}
  if(epoch===S.epoch){S.chat.historyIssue=historyIssueText(ref);paintTimeline();if(a.agent_status==='working'||a.agent_status==='blocked')fetchTerminal(true);}}
-function historyIssueText(ref){const reason=ref?.reason;switch(ref?.status){case 'remote_error':return '远端历史读取失败：'+(reason||'连接不可用');case 'pending':return (reason||'会话刚开始，历史文件还没写出')+'。稍后会自动出现。';case 'remote_candidates':case 'ambiguous':case 'unavailable':return (reason||'没有能唯一确认的会话标识')+(ref?.candidates?.length?'，下面列出了候选。':'。');case 'remote_missing':return reason||'远端这个工作目录下还没有历史记录。';case 'remote':return '这个窗格通过 SSH 连到别的电脑，历史在那台电脑上；终端输出仍可查看。';case 'missing':return reason||'会话标识已知，但没找到对应的历史文件。';default:return reason||'没有能确认的会话标识，可以手动选择历史，或查看终端输出。';}}
+// Pane + terminal + kind: a session id Herdr reports later must not lose the pick.
+function bindingKey(a){return [S.session,a.pane_id,a.terminal_id||'',a.agent].join('/');}
+// "Cannot read it right now" (retried by itself) reads differently from "there is nothing to find".
+function historyIssueText(ref){const reason=ref?.reason;switch(ref?.status){
+ case 'retry':return '这次没读到窗格信息，正在重试…';
+ case 'remote_error':return ref.transient?'远端电脑暂时连不上'+(reason?'（'+reason+'）':'')+'，正在重试，连上后自动关联。':'远端历史读取失败：'+(reason||'连接不可用');case 'pending':return (reason||'会话刚开始，历史文件还没写出')+'。稍后会自动出现。';case 'remote_candidates':case 'ambiguous':case 'unavailable':return (reason||'没有能唯一确认的会话标识')+(ref?.candidates?.length?'，下面列出了候选。':'。');case 'remote_missing':return '远端连上了，但没找到这个会话的记录'+(reason?'（'+reason+'）':'')+'。可以手动选择。';case 'remote':return '这个窗格通过 SSH 连到别的电脑，历史在那台电脑上；终端输出仍可查看。';case 'missing':return reason||'会话标识已知，但没找到对应的历史文件。';default:return reason||'没有能确认的会话标识，可以手动选择历史，或查看终端输出。';}}
 function openRecord(r,push=false){
  if(push&&S.chat)S.chatStack.push({...S.chat,mode:S.chatMode,savedMessages:S.messages,savedChildren:S.children,savedBefore:S.before,savedMore:S.more,savedScroll:document.getElementById('chat-scroll')?.scrollTop||0,savedStick:S.stick});else S.chatStack=[];
  resetChat({record:r,agent:null,title:r.title,provider:r.provider});S.epoch++;renderChat();fetchHistory(false,true);}
@@ -336,6 +344,8 @@ function olderPending(){return !!HQ.older&&HQ.older.epoch===S.epoch;}
 function fetchHistory(older=false,initial=false){
  if(!S.chat?.record)return Promise.resolve();
  if(older)return historyOlder();
+ // Waiting out a failed read: polls hold off, an explicit refresh does not.
+ if(!initial&&S.chat.retryAt>Date.now())return Promise.resolve();
  if(histBusy()||!initial&&olderPending()){HQ.again=HQ.againEpoch===S.epoch?Math.max(HQ.again,initial?2:1):initial?2:1;HQ.againEpoch=S.epoch;return Promise.resolve();}
  return historyRead(false,initial);}
 function olderSet(epoch,state,error=''){if(epoch!==S.epoch)return;HQ.epoch=epoch;HQ.state=state;HQ.error=error;olderSync();}
@@ -367,7 +377,7 @@ async function historyRead(older,initial){
  // A cached copy is painted first; before SSH is up the read waits for the connection.
  if(initial){const wait=await cacheFill(record,epoch);if(epoch!==S.epoch||wait){if(wait&&epoch===S.epoch)paintTimeline();return;}S.chat.historyLoading=true;paintTimeline();}
  const args={record_id:record.id};if(record.remote)args.remote=record.remote;if(older)args.before=S.before;
- try{const r=await remote('history',args);if(epoch!==S.epoch)return;kidsFromHistory(record,r);const hadError=!!S.chat.historyError;S.chat.historyError=null;S.chat.historyLoading=false;S.chat.cached=0;S.chat.waiting=false;const prior=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
+ try{const r=await remote('history',args);if(epoch!==S.epoch)return;kidsFromHistory(record,r);const hadError=!!(S.chat.historyError||S.chat.historyRetry);S.chat.historyError=null;S.chat.historyRetry='';S.chat.retryN=0;S.chat.retryAt=0;S.chat.historyLoading=false;S.chat.cached=0;S.chat.waiting=false;const prior=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
   const known=new Set(S.messages.map(x=>x.id));
   if(older)S.messages=r.messages.filter(m=>!known.has(m.id)).concat(S.messages);
   else if(initial)S.messages=r.messages.slice();
@@ -387,9 +397,16 @@ async function historyRead(older,initial){
  catch(e){if(epoch!==S.epoch)return;
   // An earlier page that did not load says so in place, with 重试; the chat itself keeps polling.
   if(older){olderSet(epoch,'error',e.message);return;}
-  S.paused=true;S.chat.historyLoading=false;S.chat.historyError='历史读取失败：'+e.message;paintTimeline();}}
+  S.chat.historyLoading=false;
+  // A read that fails for a moment (network, the other computer, ch reconnecting) keeps what is
+  // shown and retries by itself, more slowly each time; a record that is gone stops and says so.
+  if(historyTransient(e.message)){const c=S.chat;c.retryN=(c.retryN||0)+1;c.retryAt=Date.now()+Math.min(60000,4000*2**Math.min(c.retryN-1,4));
+   const had=c.historyRetry;c.historyRetry=e.message||'连接不可用';if(!had||!S.messages.length)paintTimeline();else updateRetryNote();return;}
+  S.paused=true;S.chat.historyError='历史读取失败：'+e.message;paintTimeline();}}
  finally{if(S.fetchEpoch===epoch)S.polling=false;
   if(HQ.again&&HQ.againEpoch===S.epoch&&!histBusy()&&(older||!olderPending())){const init=HQ.again===2;HQ.again=0;setTimeout(()=>fetchHistory(false,init),0);}}}
+function historyTransient(msg){return !/已不存在|Invalid|格式异常|过大|超过 2 MB|exceeds/.test(String(msg||''));}
+function updateRetryNote(){const n=document.querySelector('.history-retry .retry-why');if(n)n.textContent=S.chat?.historyRetry||'';}
 // Re-render the timeline but keep the reader where they are: follow the bottom
 // only when they were already there, otherwise hold position and count news.
 function paintTimeline(){const n=document.getElementById('chat-scroll');const top=n?n.scrollTop:0;const flip=n?tlFlipStart(n):null;renderTimeline();if(!n)return;n.scrollTop=S.stick?n.scrollHeight:top;if(flip)tlFlipEnd(n,flip);updateJump();}
@@ -590,8 +607,10 @@ async function pickHistory(){
  async function search(query=''){const token=++requestNumber;list.replaceChildren(el('div','loading','读取中…'));
   try{const r=await remote('catalog',{query,...(targetAgent?.history_ref?.remote?{remote:targetAgent.history_ref.remote}:{})});if(token!==requestNumber)return;list.replaceChildren();
    r.records.forEach(rec=>{const b=btn('','menu-item',()=>{closeSheet();chooseHistory(rec,targetAgent);});b.setAttribute('aria-label',rec.title+' · '+rec.thread.slice(0,8));const t=el('span','grow');t.append(el('span','menu-label',rec.title),el('small','',relative(rec.modified)+' · '+rec.thread.slice(0,8)));b.append(avatar(rec.provider),t);list.append(b);});
-   if(!r.records.length)list.append(el('p','fine','没有匹配的记录'));if(r.next!==null&&r.next!==undefined)list.append(el('p','fine','超过 100 条，输入项目、标题或会话 ID 缩小范围。'));}
+   if(!r.records.length)list.append(el('p','fine',!query&&targetAgent?.history_ref?.remote?'远端这个项目下还没有对话记录':'没有匹配的记录'));if(r.next!==null&&r.next!==undefined)list.append(el('p','fine','超过 100 条，输入项目、标题或会话 ID 缩小范围。'));}
   catch(e){if(token===requestNumber)list.replaceChildren(el('p','note error',e.message));}}
+ // Not known yet which computer holds this pane's history: never offer this computer's records.
+ if(targetAgent?.history_ref?.status==='retry'){list.append(el('p','fine','这次没读到窗格信息，还不知道历史在哪台电脑上。稍后再试。'));box.append(list);return;}
  let timer;box.append(searchBox('搜索历史记录',q=>{clearTimeout(timer);timer=setTimeout(()=>search(q),400);}),list);await search(targetAgent?.history_ref?.query||'');}
 function chooseHistory(rec,targetAgent){
  if(!targetAgent||targetAgent.agent_session?.value||rec.provider!==targetAgent.agent){openRecord(rec,true);return;}
@@ -599,7 +618,14 @@ function chooseHistory(rec,targetAgent){
  box.append(el('p','fine','没能自动确认这个窗格的会话。只有确定这段记录属于下面的在线 Agent 时才关联；不会恢复或新建会话。'));
  const pair=el('div','card pair');pair.append(el('div','card-meta','在线 Agent'),el('div','card-title',titleOf(targetAgent)+' · '+targetAgent.pane_id),el('div','card-meta','历史记录'),el('div','card-title',rec.title+' · '+rec.thread.slice(0,8)));box.append(pair);
  const actions=el('div','sheet-actions');
- actions.append(btn('只读查看','secondary',()=>{closeSheet();openRecord(rec,true);}),btn('关联当前 Agent','primary',()=>{closeSheet();S.bindings.set(S.session+'/'+targetAgent.identity,rec);resetChat({agent:targetAgent,record:rec,title:titleOf(targetAgent),provider:targetAgent.agent,manual:true});S.epoch++;renderChat();fetchHistory(false,true);}));box.append(actions);}
+ actions.append(btn('只读查看','secondary',()=>{closeSheet();openRecord(rec,true);}),btn('关联当前 Agent','primary',()=>{closeSheet();linkHistory(targetAgent,rec);}));box.append(actions);}
+// The pick is kept on the computer (bridge `link`) so it survives app restarts and a failed
+// auto-match; this app also keeps it in memory for an older bridge or a moment without SSH.
+function linkHistory(a,rec){
+ S.bindings.set(bindingKey(a),rec);resetChat({agent:a,record:rec,title:titleOf(a),provider:a.agent,manual:true});S.epoch++;renderChat();fetchHistory(false,true);
+ if(S.demo)return;remote('link',{session:S.session,target:a.pane_id,identity:a.identity,record_id:rec.id}).then(r=>{
+  const i=S.agents.findIndex(x=>x.pane_id===a.pane_id);if(r?.linked&&i>=0&&S.agents[i].identity===a.identity){S.agents[i]={...S.agents[i],history_ref:r.linked};cacheLive();}})
+ .catch(e=>{if(!/Unknown operation|不支持的操作/.test(e.message||''))toast('这次关联只记在手机上：'+(e.message||e));});}
 
 // ─── History tab ────────────────────────────────────────────────────────────
 // Day sections (sticky), filter chips with counts, debounced search and endless scrolling.

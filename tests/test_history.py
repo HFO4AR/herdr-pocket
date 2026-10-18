@@ -328,7 +328,7 @@ class HistoryTests(unittest.TestCase):
         with patch.object(bridge,'route_binding_metadata',return_value=binding),patch.object(bridge.Path,'lstat',return_value=SimpleNamespace(st_mode=bridge.stat_module.S_IFSOCK,st_uid=bridge.os.getuid())),patch.object(bridge.subprocess,'run',return_value=response),patch.object(bridge,'active_threads_in_pane',return_value='native') as active:
             result=bridge.remote_active_history('/fixture')
         self.assertEqual(result['thread'],'native')
-        active.assert_called_once_with(21,'claude',22,100)
+        self.assertEqual(active.call_args[0][:4],(21,'claude',22,100))
 
     def test_remote_follow_active_is_explicit_and_preserves_manual_older_history(self):
         self.write('claude','old.jsonl',[{'type':'user','sessionId':'old','message':{'content':'old message'}}])

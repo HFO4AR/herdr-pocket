@@ -455,10 +455,12 @@ function tlBuild(list,open){
   const live=tlWorking()&&!S.outbox.some(o=>o.key===draftKey()&&o.state!=='failed');const turns=buildTurns(S.messages,live);count=turns.length;slashMatch(turns);const next=new Map();for(const turn of turns){slashBefore(list,turn.start);dayMark(turn.start);list.append(keptTurn(turn,who,open,next));}TL_KEEP.nodes=next;}
  if(!commandsOnly){count+=slashCards().length;slashRest(list);}
  outboxRows(list,dayMark);
+ // Quiet, under the newest messages (where the reader is): they stay, the read retries by itself.
+ if(S.chat.historyRetry&&!S.chat.historyError){const n=el('div','note history-retry');n.setAttribute('role','status');const t=el('span','grow');t.append(el('strong','','暂时读不到，正在重试'),el('span','fine retry-why',S.chat.historyRetry));n.append(t,btn('重试','secondary small',()=>{S.chat.retryAt=0;fetchHistory(false,true);}));list.append(n);}
  // The live activity line (activity.js) follows what was sent; queued messages come after it.
  actRow(list);
  queueTimeline(list);
- if(!count&&!S.chat.historyError){
+ if(!count&&!S.chat.historyError&&!S.chat.historyRetry){
   if(S.chat.historyLoading||S.more)list.append(el('div','empty small',S.chat.historyLoading?'正在读取对话记录…':'这一页没有可显示的消息，继续加载更早记录。'));
   // A real empty state, not a stray line over a blank page.
   else if(commandsOnly)empty(list,'还没有执行过命令','Agent 跑过的命令和输出会列在这里。',undefined,'terminal');
