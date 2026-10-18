@@ -3937,6 +3937,228 @@ def answer_question(request, io):
     return {"answered": True, "options": sorted(wanted), "steps": steps}
 
 
+# ─── Claude's settings panel (/status, /usage) ──────────────────────────────
+# Claude Code 2.1.268 draws /status, /usage, /config and /stats as one full-screen panel with tabs
+# ("Settings  Status   Config   Usage   Stats"); each command opens it on its own tab and the rest of
+# what it knows sits behind the other tabs. Seen live (100×40 and 90×20 panes, with and without
+# NO_COLOR): ←/→/Tab switch tabs and wrap; on Status a short pane scrolls one row per ↓ / ↑ (an ↑ / ↓
+# mark at the right edge, the "Esc to cancel" footer once at the end); a tab switch starts the next
+# one at its top; Esc closes the panel and leaves nothing of it on screen. The tab in front is told
+# apart only by colour (gone with NO_COLOR), so each tab is recognised by what it shows.
+# Config holds settings: reached with → its focus stays on the tab row ("←/→/tab to switch · ↓ to
+# return"), while ↓ there enters its search box and the list below takes Enter/Space as a change.
+# /config itself opens with the search box focused (Esc only clears it). Stats takes ↓ into its own
+# view. So only → walks the tabs, ↓ / ↑ scroll only Status / Usage, Esc closes, and every key waits for
+# a screen that shows the panel with its focus on the tab row; anything else stops the walk.
+PANEL_TAB_WORDS = ("Status", "Config", "Usage", "Stats")
+PANEL_SEARCH = re.compile(r"(?i)type to filter|enter/space to change|space to (?:change|toggle)|/ to search|enter to (?:select|confirm|change|apply|save)")
+PANEL_FOOTER = re.compile(r"(?i)\besc to (?:cancel|close|clear)\b|←/→/tab to switch|\bto switch\b|r to cycle dates|ctrl\+s to copy|↓ stats")
+PANEL_EDGE = re.compile(r"\s{2,}[↑↓]\s*$")
+PANEL_LOADING = re.compile(r"(?i)\bloading\b")
+PANEL_SCROLL_LIMIT, PANEL_DEADLINE = 40, 22.0
+
+
+def panel_tabs(line):
+    """The tab labels of a settings-panel tab row ("Settings  Status   Config   Usage   Stats")."""
+    words = [w for w in re.split(r"\s{2,}", line.strip()) if w]
+    if len(words) < 3 or words[0] != "Settings" or "Status" not in words[1:] or any(len(w) > 24 for w in words): return None
+    return words[1:]
+
+
+def panel_view(text):
+    """The panel on a screen: {tabs, tab, body, footer, safe}, or None when it is not up.
+    `tab` is the one in front as its content shows it (None when unknown); `body` the rows between
+    the tab row and the footer with the right-edge scroll marks taken off; `footer` the key hint
+    when it is on screen (it is not while a long tab still has rows below)."""
+    lines = [x.rstrip() for x in str(text or "").replace("\r", "").split("\n")]
+    at = max((i for i, x in enumerate(lines) if panel_tabs(x)), default=-1)
+    if at < 0: return None
+    tabs = panel_tabs(lines[at])
+    rest = lines[at + 1:]
+    while rest and not rest[-1].strip(): rest.pop()
+    footer = ""
+    if rest and PANEL_FOOTER.search(rest[-1]) and not PANEL_EDGE.search(rest[-1]):
+        footer = rest.pop().strip()
+    # The top body row carries an ↑ at the right edge while the tab is scrolled down.
+    top = next((x for x in rest if x.strip()), "")
+    scrolled = bool(re.search(r"\s{2,}↑\s*$", top)) or top.strip() == "↑"
+    body = [PANEL_EDGE.sub("", x).rstrip() if PANEL_EDGE.search(x) else x for x in rest]
+    body = [x if x.strip() not in ("↑", "↓") else "" for x in body]
+    while body and not body[0].strip(): body.pop(0)
+    while body and not body[-1].strip(): body.pop()
+    joined = "\n".join(body)
+    if re.search(r"(?m)^\s*(?:Version|Session name|Session ID|Session kind|Peer address|cwd|Auth token|Model|Setting sources|Organization policy|MCP servers|Memory):\s", joined): tab = "Status"
+    elif "Search settings" in joined: tab = "Config"
+    elif re.search(r"(?m)^\s*(?:Total cost:|Current session\b|Current week\b)|\b\d{1,3}% used\b", joined): tab = "Usage"
+    elif re.search(r"(?m)^\s*Overview\s{2,}Models\s*$", joined): tab = "Stats"
+    else: tab = None
+    if tab and tab not in tabs: tab = None
+    return {"tabs": tabs, "tab": tab, "body": body, "footer": footer, "scrolled": scrolled,
+            "safe": not PANEL_SEARCH.search(footer + "\n" + "\n".join(body[-3:])), "loading": bool(PANEL_LOADING.search(joined))}
+
+
+def panel_merge(seen, rows):
+    """Rows of a tab scrolled further: `rows` starts somewhere inside `seen`; add what is new."""
+    for skip in range(len(seen) + 1):
+        tail = seen[skip:]
+        if rows[:len(tail)] == tail: return seen + rows[len(tail):]
+    return seen + rows
+
+
+class PanelIO:
+    """What panel_tour needs: the visible screen as plain text, and one key press."""
+    def __init__(self, screen, key):
+        self.screen, self.key = screen, key
+
+
+def herdr_panel_io(prefix, agent):
+    target = agent["pane_id"]
+    kind = "pane" if agent.get("relay") else "agent"
+    return PanelIO(lambda: strip_sgr(call(prefix + [kind, "read", target, "--source", "visible"]).get("text", "")),
+                   lambda name: call(prefix + [kind, "send-keys", target, name]))
+
+
+def tmux_panel_io(pane):
+    names = {"right": "Right", "down": "Down", "up": "Up", "esc": "Escape"}
+    def screen():
+        try: return strip_sgr(tmux_run(["capture-pane", "-p", "-t", pane["_tid"]], sock=pane["_sock"]))
+        except TmuxFailed as exc: raise BridgeError("读不到这个 tmux 窗格：" + str(exc)) from exc
+    return PanelIO(screen, lambda name: tmux_run(["send-keys", "-t", pane["_tid"], names[name]], sock=pane["_sock"]))
+
+
+def panel_check(text, provider):
+    """Before any key: the panel is up with its focus on the tab row, and no dialog is waiting."""
+    if provider != "claude": raise BridgeError("没按键：只有 Claude 的 /status 面板要翻标签")
+    view = panel_view(text)
+    if not view: raise BridgeError("没按键：屏幕上没看到 Claude 的设置面板（Status / Config / Usage）")
+    if parse_menu(text, provider): raise BridgeError("没按键：屏幕上有个选择框在等你，先处理它")
+    if not view["safe"]: raise BridgeError("没按键：面板的焦点在搜索框或设置列表里，这时按键可能改到设置；在终端里看吧")
+    if not view["tab"]: raise BridgeError("没按键：没认出面板现在是哪个标签")
+    return view
+
+
+def panel_tour(io, provider):
+    """Collect every tab of Claude's settings panel, then close it.
+
+    From the tab it opened on, → once per remaining tab; each press waits until the screen shows
+    the next tab by its content (unknown content counts only when the tab row is still there and
+    the body changed). Status / Usage rows below the screen come in with ↓, one row per press, until
+    the footer shows (a tab found scrolled part-way, ↑ at its top row, first goes back up with ↑). Esc closes it at the end, or as soon as a step goes wrong while the panel is
+    still on screen (Esc on this panel cancels, it never changes a setting); a screen that no longer
+    shows the panel gets no key at all. Nothing else is ever pressed."""
+    started = time.monotonic()
+    steps, sections, stopped = [], {}, None
+
+    def press(name):
+        io.key(name); steps.append(name)
+
+    def look(changed, patience=None):
+        """The panel once it is settled (same body twice, not loading) and `changed` says yes."""
+        deadline = time.monotonic() + (patience if patience is not None else ANSWER_PATIENCE)
+        last = None
+        while True:
+            view = panel_view(io.screen())
+            if view and changed(view):
+                if last is not None and view["body"] == last["body"] and not view["loading"]: return view
+                last = view
+            else: last = None
+            if time.monotonic() > deadline: return view if view and changed(view) else None
+            time.sleep(ANSWER_PAUSE)
+
+    first = panel_check(io.screen(), provider)
+    view = look(lambda v: v["tab"] == first["tab"]) or first
+    tabs, start = view["tabs"], view["tab"]
+    order = [tabs[(tabs.index(start) + i) % len(tabs)] for i in range(len(tabs))]
+
+    def collect(view):
+        scrolled = 0
+        # Opened part-way down (scrolled before): back to its top first, ↑ one row at a time.
+        while view["tab"] in ("Status", "Usage") and view["scrolled"] and scrolled < PANEL_SCROLL_LIMIT:
+            if not view["safe"] or time.monotonic() - started > PANEL_DEADLINE: break
+            before = view["body"]
+            press("up"); scrolled += 1
+            nxt = look(lambda v, t=view["tab"], b=before: v["tabs"] == tabs and v["tab"] in (t, None) and v["body"] != b, patience=ANSWER_PATIENCE / 2)
+            if not nxt: break
+            view = dict(nxt, tab=view["tab"])
+        rows, scrolled = view["body"], 0
+        # Rows below the screen: only Status and Usage are plain text where ↓ scrolls.
+        while view["tab"] in ("Status", "Usage") and not view["footer"] and scrolled < PANEL_SCROLL_LIMIT:
+            if not view["safe"] or time.monotonic() - started > PANEL_DEADLINE: break
+            before = view["body"]
+            press("down"); scrolled += 1
+            # The rows in view may not tell which tab they are: the tab row stays, and ↓ never switches.
+            nxt = look(lambda v, t=view["tab"], b=before: v["tabs"] == tabs and v["tab"] in (t, None) and v["body"] != b, patience=ANSWER_PATIENCE / 2)
+            if not nxt: break
+            view = dict(nxt, tab=view["tab"])
+            rows = panel_merge(rows, view["body"])
+        # Still more than the screen shows: no footer yet, or a list saying "↓ 10 more below".
+        more = not view["footer"] or bool(re.search(r"↓ \d+ more below", "\n".join(view["body"][-2:])))
+        sections[view["tab"] or order[len(sections)]] = {"text": "\n".join(rows), "more": more}
+        return view
+
+    view = collect(view)
+    for want in order[1:]:
+        if time.monotonic() - started > PANEL_DEADLINE: stopped = "时间不够了，后面的标签没翻"; break
+        if not view["safe"]: stopped = "面板的焦点不在标签上，已停下"; break
+        before = view
+        press("right")
+        nxt = look(lambda v, w=want, b=before: v["tabs"] == tabs and (v["tab"] == w or (v["tab"] is None and v["body"] != b["body"])))
+        if not nxt: stopped = "按 → 之后没认出 %s 标签，已停下" % want; break
+        if nxt["tab"] is None: nxt = dict(nxt, tab=want)
+        view = collect(nxt)
+    # Close it: only while the screen still shows the panel.
+    closed = False
+    if panel_view(io.screen()):
+        press("esc")
+        deadline = time.monotonic() + ANSWER_PATIENCE
+        while True:
+            if not panel_view(io.screen()): closed = True; break
+            if time.monotonic() > deadline: break
+            time.sleep(ANSWER_PAUSE)
+    else: closed = True
+    out = [{"tab": t, "text": sections[t]["text"], "more": sections[t]["more"]} for t in tabs if t in sections]
+    result = {"tabs": out, "order": tabs, "start": start, "closed": closed, "steps": steps}
+    if stopped: result["stopped"] = stopped
+    return result
+
+
+PANEL_KEYS = {"v", "op", "session", "id", "target", "identity", "command"}
+
+
+def panel_request_check(request):
+    if set(request) - PANEL_KEYS: raise BridgeError("没按键：请求里有不认识的字段")
+    req_id = request.get("id")
+    if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
+    if request.get("command") not in ("status", "usage"): raise BridgeError("没按键：只有 /status 和 /usage 会翻面板")
+
+
+def panel_run(request, state_dir, io, provider):
+    """Receipt first (never replayed), then the walk; a failure after a key leaves it unknown."""
+    digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    panel_check(io.screen(), provider)
+    db, previous = receipt_open(state_dir, request["id"], digest, "上次翻面板的结果未知：先看一眼终端，别直接重来")
+    if previous is not None: return previous
+    try:
+        result = dict(panel_tour(io, provider), sent=True, receipt=request["id"])
+        receipt_save(db, request["id"], result)
+        return result
+    finally:
+        db.close()
+
+
+def herdr_panel(request, prefix, agent, state_dir):
+    panel_request_check(request)
+    if agent.get("agent_status") not in ("idle", "done"):
+        raise BridgeError("没按键：Agent 不是空闲状态（在干活或在等你确认），先不翻面板")
+    io = herdr_panel_io(prefix, agent)
+    try: io.screen()
+    except HerdrRejected as exc:
+        # A ch pane: Herdr's agent commands refuse it, the pane itself takes the same reads and keys.
+        if exc.code != "agent_not_ready" or not relay_pane(agent, prefix): raise
+        io = herdr_panel_io(prefix, dict(agent, relay=True))
+    return panel_run(request, state_dir, io, agent.get("agent", ""))
+
+
 # ─── Images ─────────────────────────────────────────────────────────────────
 # The phone uploads re-encoded pictures over SFTP to ~/.herdr-pocket/uploads/<day>/<sha256>.<ext>
 # (plus a small <sha256>.thumb.jpg). A prompt names them by that relative name only; the bridge
@@ -5980,7 +6202,7 @@ def tmux_kill(request, state_dir):
 #    read, Enter only on a verified cursor; its receipt is written before the first key.
 #  · key: ↑ ↓ Enter Esc Ctrl+C and Shift+Tab (BTab, only while the agent's own input footer is on
 #    screen and nothing waits: on a permission dialog Claude would take it as "don't ask again").
-TMUX_AGENT_OPS = ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent")
+TMUX_AGENT_OPS = ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent", "panelTour")
 TMUX_ANSWER_KEYS = {"up": "Up", "down": "Down", "enter": "Enter"}
 
 
@@ -6113,6 +6335,12 @@ def tmux_agent_request(request, state_dir):
         if request.get("ansi") is True: result["ansi"] = screen
         return result
     if op == "answer": return tmux_answer(request, state_dir, pane, found)
+    if op == "panelTour":
+        panel_request_check(request)
+        text = tmux_visible(pane)
+        if text is None: raise BridgeError("读不到这个 tmux 窗格，没按键")
+        if tmux_state(pane, found, text) == "working": raise BridgeError("没按键：Agent 不是空闲状态（在干活或在等你确认），先不翻面板")
+        return panel_run(request, state_dir, tmux_panel_io(pane), found["kind"])
     base = {"v": 1, "op": "tmuxSend", "id": request.get("id"), "target": pane["pane_id"], "identity": pane["identity"]}
     if op == "key":
         key = request.get("key")
@@ -7154,7 +7382,7 @@ def handle(request, state_dir=None):
         prefix = select_session(request)
         if op == "closeInfo": return close_info(request, prefix)
         return close_pane(request, prefix, state_dir or Path.home() / ".local/state/herdr-pocket")
-    if op not in ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent", "link"):
+    if op not in ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent", "link", "panelTour"):
         raise BridgeError("Unknown operation")
     if op == "status" and request.get("tmux") is True:
         # The background watcher: Herdr's agents (when a session is named and Herdr is there) and
@@ -7184,6 +7412,8 @@ def handle(request, state_dir=None):
         return stage_file(request, prefix, agent)
     if op == "commands":
         return custom_commands(agent)
+    if op == "panelTour":
+        return herdr_panel(request, prefix, agent, state_dir or Path.home() / ".local/state/herdr-pocket")
     if op == "read":
         # `menu: true` (after a slash command) parses a picker even when Herdr does not call it blocked.
         screen = with_menu(read_screen(prefix, agent, 160), agent, request.get("menu") is True)

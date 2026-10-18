@@ -8,6 +8,8 @@
 //    after sending one, the app reads the pane's screen (read-only) until it settles and keeps it in
 //    a 「命令输出」 card for this run. An open panel or picker gets the keys it needs (Esc, ↑ ↓ Enter);
 //    while it stays open, normal sends and the queue wait, so a message never lands in a picker.
+//  · Claude /status and /usage open a tabbed panel: panel.js has the bridge walk every tab once and
+//    the card lists them all as rows (Codex /status is shown as rows straight from its screen).
 //  · Claude transcript rows <command-name>/<local-command-stdout> render as one command card.
 // Sending keeps every existing rule: fresh UUID per request, nothing is replayed after an unknown outcome.
 const SLASH_BUILTIN={
@@ -111,7 +113,9 @@ function slashKeydown(e,compose,input){
 // ─── Output cards ───────────────────────────────────────────────────────────
 function slashCards(key=draftKey()){return SL.cards.get(key)||[];}
 function slashCard(key,text){const a=S.chat?.agent;const card={id:'s'+(++SL.seq),key,text:text.trim(),name:slashName(text),at:Date.now(),state:'sending',reason:'',screen:'',menu:null,panel:false,capturing:false,done:false,error:'',readAt:0,
-  info:slashList(a).find(c=>c.name===slashName(text))||null};
+  info:slashList(a).find(c=>c.name===slashName(text))||null,provider:a?.agent||''};
+ // Claude /status and /usage: after the first read, panel.js may walk the panel's tabs (once).
+ card.tourChance=card.provider==='claude'&&typeof PANEL_COMMANDS!=='undefined'&&PANEL_COMMANDS.includes(card.name)&&text.trim()==='/'+card.name;
  if(!SL.cards.has(key))SL.cards.set(key,[]);const list=SL.cards.get(key);list.push(card);if(list.length>12)list.shift();return card;}
 function slashDrop(card){const list=SL.cards.get(card.key);if(list){const i=list.indexOf(card);if(i>=0)list.splice(i,1);}}
 // The latest card shows a panel or picker that is still open (as of its last read).
@@ -120,6 +124,7 @@ function slashPanelOpen(key){return !!slashPanelCard(key);}
 // Before a normal send: re-read the screen if the last command left a panel open; refuse while it still is.
 async function slashHold(a,key){
  const card=slashPanelCard(key);if(!card)return false;
+ if(card.tour==='running'){toast('正在读 /'+card.name+' 的面板，读完会自己关掉，稍等再发');S.stick=true;paintTimeline();return true;}
  if(!card.capturing)await slashCapture(card,{quick:true});
  if(!card.panel)return false;
  toast('上一条命令的面板还开着，先在卡片里点 Esc 关掉再发');S.stick=true;paintTimeline();return true;}
@@ -134,7 +139,7 @@ function slashCut(text,cmd){
 const slashSleep=ms=>new Promise(r=>setTimeout(r,ms));
 // Read-only screen capture until the screen stops changing (about 1–7 s).
 async function slashCapture(card,opts={}){
- const c=S.chat,a=c?.agent;if(!a||c.stale||card.capturing||card.key!==draftKey())return;
+ const c=S.chat,a=c?.agent;if(!a||c.stale||card.capturing||card.tour==='running'||card.key!==draftKey())return;
  card.capturing=true;card.error='';slashPaint(card);
  const started=Date.now(),limit=opts.quick?2500:7000;let prev=null;
  try{
@@ -150,7 +155,8 @@ async function slashCapture(card,opts={}){
    if(prev!==null&&r.text===prev&&Date.now()-started>1200)break;
    if(opts.quick&&prev===null&&card.panel===false)break;
    if(Date.now()-started>limit)break;prev=r.text;await slashSleep(700);}
- }finally{card.capturing=false;card.done=true;slashPaint(card);}}
+ }finally{card.capturing=false;card.done=true;slashPaint(card);}
+ if(!opts.quick&&S.chat===c&&typeof panelAfterCapture==='function')panelAfterCapture(card);}
 async function slashKey(card,key,label){
  const a=S.chat?.agent;if(!a||S.chat.stale||card.busy)return;card.busy=true;slashPaint(card);
  try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});if(S.demo){toast('演示：未发送按键');return;}toast('已发送 '+label);card.busy=false;await slashCapture(card,{after:450});}
@@ -162,6 +168,7 @@ function slashPaint(card){const n=document.querySelector('[data-slash="'+card.id
  const next=slashCardView(card,n.classList.contains('in-turn'));n.replaceWith(next);const nb=next.querySelector('.slash-screen');if(nb)nb.scrollTop=stuck?nb.scrollHeight:top;}
 function slashStateText(card){
  if(card.state==='sending')return '发送中…';if(card.state==='rejected')return '没发出去';if(card.state==='failed')return '发送未确认';
+ if(card.tour==='running')return '正在翻面板…';if(card.sections?.length&&!card.panel)return '读完了 · 面板已关';
  if(card.capturing&&!card.screen)return '正在读终端画面…';if(card.panel)return card.menu?'等你选':'面板开着';if(card.capturing)return '正在更新…';
  return card.closed?'面板已关':card.readAt?'读于 '+clock(card.readAt/1000):'已发送';}
 function slashCardView(card,inTurn){
@@ -173,9 +180,13 @@ function slashCardView(card,inTurn){
  if(card.state==='failed'||card.state==='rejected'){box.append(el('p','slash-error',card.reason+(card.state==='failed'?'。不会自动重发，先看一眼终端。':'。可以再发一次。')));
   box.append(slashActions(card,false));return box;}
  if(card.state==='sending')return box;
- const pre=el('pre','slash-screen',card.screen||(card.capturing?'正在读终端画面…':'（没读到画面，点刷新再试）'));pre.tabIndex=0;pre.setAttribute('aria-label','命令输出内容');box.append(pre);
+ if(card.tour==='running'){const hint=el('p','slash-hint panel-going');hint.append(el('span','spinner mini'),document.createTextNode('在电脑上逐个翻 状态 → 设置 → 用量 → 统计，读完按 Esc 关掉；只按切换标签的键，不改设置。'));box.append(hint);}
+ const body=typeof panelBody==='function'?panelBody(card):null;
+ if(body)box.append(body);
+ else{const pre=el('pre','slash-screen',card.screen||(card.capturing?'正在读终端画面…':'（没读到画面，点刷新再试）'));pre.tabIndex=0;pre.setAttribute('aria-label','命令输出内容');box.append(pre);}
  if(card.error)box.append(el('p','slash-error',card.error));
- if(card.panel){const hint=el('p','slash-hint',card.menu?'它在等你选。用下面的键操作，Esc 取消。':'这个命令打开了一个面板，看完点 Esc 关掉；没关上之前，新消息先不发。');box.append(hint);
+ if(card.tourError)box.append(el('p','slash-error',card.tourError));
+ if(card.panel&&card.tour!=='running'){const hint=el('p','slash-hint',card.menu?'它在等你选。用下面的键操作，Esc 取消。':'这个命令打开了一个面板，看完点 Esc 关掉；没关上之前，新消息先不发。');box.append(hint);
   const keys=el('div','slash-keys');const k=(t,key,cls)=>{const b=btn(t,cls||'secondary small',()=>slashKey(card,key,t));b.disabled=!!card.busy||!S.chat?.agent||S.chat.stale;return b;};
   keys.append(k('Esc 关闭','esc','primary small'));
   // A numbered picker needs ↑ ↓ Enter; other panels may also page sideways (Claude /status tabs).
@@ -184,7 +195,11 @@ function slashCardView(card,inTurn){
   box.append(keys);}
  box.append(slashActions(card,true));return box;}
 function slashActions(card,ok){const row=el('div','slash-actions');
- if(ok){const r=btn('刷新','link-btn',()=>slashCapture(card,{after:0}),'refresh');r.disabled=card.capturing||!S.chat?.agent||S.chat.stale;row.append(r);if(card.screen)row.append(btn('复制','link-btn',()=>copyText(card.screen),'copy'));}
+ if(ok){const r=btn('刷新','link-btn',()=>slashCapture(card,{after:0}),'refresh');r.disabled=card.capturing||card.tour==='running'||!S.chat?.agent||S.chat.stale;
+  // After a walked panel the screen no longer shows it: 刷新 would only read the input box.
+  if(!(card.sections?.length&&!card.panel))row.append(r);
+  const all=typeof panelBody==='function'&&(card.sections?.length||(card.provider==='codex'&&card.name==='status'))?panelCopy(card):'';
+  if(all||card.screen)row.append(btn('复制','link-btn',()=>copyText(all||card.screen),'copy'));}
  row.append(btn('收起','link-btn',()=>{slashDrop(card);paintTimeline();},'close'));return row;}
 
 // ─── Timeline ───────────────────────────────────────────────────────────────

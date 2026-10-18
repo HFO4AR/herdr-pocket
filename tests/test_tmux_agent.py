@@ -352,6 +352,21 @@ class TmuxAgentTests(unittest.TestCase):
         self.assertEqual(self.sent(), [])
         self.assertFalse(any(x[0] == "load-buffer" for x in self.log))
 
+    def test_status_panel_tour_with_tmux_keys(self):
+        # /status's tabs (test_panel.ClaudePanel): → per tab, Esc at the end, as tmux key names.
+        from test_panel import ClaudePanel
+        tui = self.tuis["%1"] = ClaudePanel(small=True)
+        a = self.agent()
+        self.assertNotEqual(a["agent_status"], "blocked", "the panel is not a waiting dialog")
+        result = self.h(op="panelTour", target="%1", identity=a["identity"], id=UUIDS[0], command="status")
+        self.assertEqual(self.keys(), ["Down", "Right", "Right", "Right", "Escape"])
+        self.assertEqual(([t["tab"] for t in result["tabs"]], result["closed"], tui.changed), (["Status", "Config", "Usage", "Stats"], True, []))
+        # The panel gone: nothing is pressed.
+        self.log.clear()
+        with self.assertRaisesRegex(bridge.BridgeError, "^没按键：屏幕上没看到"):
+            self.h(op="panelTour", target="%1", identity=self.agent()["identity"], id=UUIDS[1], command="status")
+        self.assertEqual(self.keys(), [])
+
 
 class CodexScreen:
     """One real captured Codex 0.163 screen (fixtures/codex_tmux.json); a plain capture drops its colours."""
