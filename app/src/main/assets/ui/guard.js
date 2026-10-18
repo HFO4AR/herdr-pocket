@@ -133,7 +133,9 @@ async function guardAfterLive(){const dev=hgDev(),st=hgState(dev);if(!st||!st.se
   st.restart.back=st.restart.before.filter(a=>a.session&&now.has(a.session));st.restart.lost=st.restart.before.filter(a=>!a.session||!now.has(a.session));st.restart.done=true;}
  cachePut('herdr',{started:st.server.started,agents:S.agents.slice(0,60).map(hgSnap)},dev);
  if(st.restart&&S.tab==='live'&&!S.chat)render();}
-function hgHistory(lost){if(typeof resumeLost==='function'){resumeLost(lost);return;}setTab('history');}
+function hgHistory(lost){if(typeof resumeLost==='function'){resumeLost(lost);return;}
+ // pickup.js: 「全部继续」 for the conversations that went with the old server.
+ if(typeof pickupAll==='function'&&typeof pickupCount==='function'&&pickupCount()){pickupAll();return;}setTab('history');}
 function hgLostList(card,items){if(!items?.length)return;const ul=el('ul','hg-lost');items.slice(0,4).forEach(a=>{const li=el('li');li.append(el('span','hg-kind',providerName?providerName(a.agent):a.agent),el('span','truncate',a.title||'（无标题）'));ul.append(li);});
  if(items.length>4)ul.append(el('li','fine','还有 '+(items.length-4)+' 个'));card.append(ul);}
 function hgRestartCard(main,st){const r=st.restart;if(!r||r.dismissed||!r.done)return;
