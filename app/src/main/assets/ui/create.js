@@ -165,10 +165,13 @@ async function createOpen(pane,text){
 NEW.pending=[];
 const NEW_POLL=1500,NEW_SLOW=45000,NEW_GIVE_UP=120000;
 function newPendingHere(){const dev=S.device?.id||'';return NEW.pending.filter(p=>p.device===dev&&p.session===S.session);}
-function createPending(r,text,label){
- const p={device:S.device?.id||'',session:S.session,pane:r.pane_id,kind:r.kind,label,cwd:r.cwd||'',text,at:Date.now(),state:'starting',newWorkspace:!!r.new_workspace,place:r.place_label||''};
+// `resume` (pickup.js): the conversation key it picks up; `quiet` (全部继续): no toast, and no chat
+// opens by itself when it shows up (several come up at once).
+function createPending(r,text,label,quiet){
+ const p={device:S.device?.id||'',session:S.session,pane:r.pane_id,kind:r.kind,label,cwd:r.cwd||'',text,at:Date.now(),state:'starting',newWorkspace:!!r.new_workspace,place:r.place_label||'',
+  ...(typeof r.resume==='string'?{resume:r.resume}:{}),...(quiet?{quiet:true}:{})};
  NEW.pending=NEW.pending.filter(x=>!(x.device===p.device&&x.pane===p.pane)).concat(p);
- toast('标签页开好了，'+label+' 正在启动，出来后自动打开');
+ if(!quiet)toast('标签页开好了，'+label+' 正在启动，出来后自动打开');
  if(S.tab==='live'&&!S.chat&&!(typeof T!=='undefined'&&T.view))render();
  createWatch();}
 function newPendingDrop(p){NEW.pending=NEW.pending.filter(x=>x!==p);if(!NEW.pending.some(x=>x.state!=='lost'))clearInterval(NEW.watch);}
@@ -182,10 +185,10 @@ function createWatch(){
   if(!here.length||busy||!S.device||S.demo)return;busy=true;
   try{const s=await remote('status',{session:here[0].session});if(here[0].device!==(S.device?.id||''))return;
    for(const p of here){const a=(s.agents||[]).find(x=>x.pane_id===p.pane&&x.agent);if(!a||!NEW.pending.includes(p)||p.opening)continue;
-    if(S.tab==='live'&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount){
+    if(!p.quiet&&S.tab==='live'&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount){
      // The row stays (as 起来了) until the chat is open, so the list never shows neither.
      p.opening=true;newPendingPaint();toast(p.label+' 起来了');try{await createOpen(p.pane,p.text);}finally{newPendingDrop(p);if(!S.chat)newPendingPaint();}}
-    else{newPendingDrop(p);if(p.text)S.drafts.set(p.session+'/'+a.identity,p.text);toast(p.label+' 起来了，在会话列表里'+(p.text?'；第一条消息放在它的输入框里了':''));newPendingPaint();}}}
+    else{newPendingDrop(p);if(p.text)S.drafts.set(p.session+'/'+a.identity,p.text);if(!p.quiet)toast(p.label+' 起来了，在会话列表里'+(p.text?'；第一条消息放在它的输入框里了':''));newPendingPaint();}}}
   catch(_){/* the next beat asks again */}
   finally{busy=false;}},NEW_POLL);}
 // Repaint the list for a changed row, unless something is in the way (same rule as tmux.js).
@@ -209,8 +212,9 @@ function newPendingSection(main){
 function newPendingRow(p){
  const slow=p.state!=='starting'&&!p.opening,where=newBase(p.cwd||'')+(p.cwd?' · '+newShort(p.cwd):'');
  const b=btn('','card-button agent-row new-pending tone-'+(slow?'alert':'work'),()=>newPendingSheet(p));
- b.setAttribute('aria-label',(slow?p.label+' 还没出现':'正在启动 '+p.label+'…')+' · '+where);
- const t=el('div','grow');t.append(el('div','card-title',slow?p.label+' 还没出现':'正在启动 '+p.label+'…'));
+ const head=slow?p.label+' 还没出现':p.resume?'正在继续'+p.label:'正在启动 '+p.label+'…';
+ b.setAttribute('aria-label',head+' · '+where);
+ const t=el('div','grow');t.append(el('div','card-title',head));
  const meta=el('div','card-meta');meta.append(el('span','project',newBase(p.cwd||'')||p.label));
  meta.append(el('span','sep',p.opening?'起来了，正在打开':p.state==='lost'?'没等到，去电脑上看看那个标签页':slow?'等得有点久，点开看看':p.kind==='ch'?'ch 在连另一台电脑':'标签页开好了，等它出来'));
  t.append(meta);

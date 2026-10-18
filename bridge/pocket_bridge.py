@@ -184,7 +184,11 @@ def agents(prefix, include_history=False, screens=False):
     catalog = transcript_catalog() if live else []
     codex_index = (codex_thread_names(), codex_loaded_threads()) if any(a["agent"] == "codex" for a in live) else None
     for agent in live:
-        agent["history_ref"] = resolve_agent_history(agent, prefix, catalog, codex_index, probes[agent["pane_id"]])
+        probe = probes[agent["pane_id"]]
+        agent["history_ref"] = resolve_agent_history(agent, prefix, catalog, codex_index, probe)
+        # A ch pane: the command that attaches it again (`create` with `resume`, kind ch).
+        ch = probe.get("ch_resume")
+        if ch and probe["route"] and Path(probe["route"]["workspace"]).name == ch["session"]: agent["ch_resume"] = ch
     return result
 
 
@@ -845,6 +849,7 @@ def probe_pane(agent, prefix, provider):
         argv = snapshot["argv"] if snapshot else initial_argv
         found["remote"] = found["remote"] or bool(argv and Path(argv[0]).name in ("ssh", "mosh", "mosh-client"))
         found["route"] = found["route"] or ch_ssh_route(argv)
+        found["ch_resume"] = found.get("ch_resume") or ch_resume_in_argv(argv)
         native = is_agent_process(argv, provider)
         found["native"] = found.get("native", False) or native
         if native:
@@ -930,6 +935,22 @@ def ch_ssh_route(argv):
     route = {"ssh":options+[argv[i]], "workspace":str(state / "workspaces" / command[4])}
     route["key"] = hashlib.sha256(json.dumps(route,sort_keys=True).encode()).hexdigest()[:24]
     return route
+
+
+def ch_resume_in_argv(argv):
+    """ch's relay (the pane's foreground process) carries the command that attaches the same ch
+    session again as a JSON argv item: ["ch", "--host", <host>, "resume", <session uuid>]. Read as
+    data only, never run here; {host, session} when exactly that shape, else None."""
+    if not argv or Path(argv[0]).name not in SCRIPT_HOSTS: return None
+    for item in argv[1:8]:
+        if not isinstance(item, str) or not item.startswith("[") or len(item) > 4096: continue
+        try: value = json.loads(item)
+        except ValueError: continue
+        if (isinstance(value, list) and len(value) == 5 and all(isinstance(x, str) for x in value)
+                and Path(value[0]).name == "ch" and value[1] == "--host" and value[3] == "resume"
+                and CH_HOST.fullmatch(value[2]) and RESUME_ID.fullmatch(value[4])):
+            return {"host": value[2], "session": value[4]}
+    return None
 
 
 _remote_results = {}
@@ -4020,7 +4041,7 @@ CREATE_KINDS = ("codex", "claude", "ch")
 # because a `cursor` on PATH is usually the editor, not the agent.
 CREATE_MORE = ("opencode", "gemini", "pi", "devin", "agy", "cline", "omp", "mastracode", "copilot", "kimi", "kiro",
                "droid", "amp", "grok", "hermes", "kilo", "qodercli", "qwen", "maki")
-CREATE_KEYS = {"v", "op", "session", "id", "kind", "cwd", "workspace"}
+CREATE_KEYS = {"v", "op", "session", "id", "kind", "cwd", "workspace", "resume"}
 CREATE_BUDGET = 26.0   # seconds for one create at most; the app waits 35 s for any request
 # A create answers within a few seconds: the tab, then the start handed to Herdr. The phone shows
 # 「正在启动」 and polls until the agent is there, instead of a spinner for the whole startup.
@@ -4141,6 +4162,121 @@ def create_dir(raw):
     if not resolved.is_dir(): raise BridgeError("没创建：" + shown + " 不是目录")
     if not os.access(resolved, os.X_OK): raise BridgeError("没创建：没权限进入 " + shown)
     return str(resolved)
+
+
+# ─── Picking an old conversation up again (create / tmuxNew with `resume`) ──
+# The phone names a conversation, never a command: {id} for Claude / Codex (the transcript's own
+# session / thread id, which must be a root conversation in this user's transcript roots) or
+# {id, host} for ch (a ch session uuid and a host that ch's own config lists). The command line is
+# built here from those checked tokens only: Herdr's `agent start` gets the agent arguments as argv
+# items after `--` (claude --resume <id> / codex resume <id>), and the ch / tmux text is fixed words
+# plus the two checked tokens (no shell characters can get through the patterns).
+RESUME_KINDS = ("claude", "codex", "ch")
+RESUME_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+CH_HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}")
+CH_CONFIG_LIMIT = 262_144
+CH_HOST_ROW = re.compile(r'(?m)^[ \t]*\[[ \t]*hosts\.(?:"([^"\n]{1,64})"|([A-Za-z0-9_-]{1,64}))[ \t]*\][ \t]*(?:#.*)?$')
+
+
+def ch_hosts():
+    """Host names ch knows (`[hosts.<name>]` tables of its config); None when it cannot be read.
+    Only the table names are taken: targets, ports and key paths are not read out."""
+    base = os.environ.get("XDG_CONFIG_HOME") or ""
+    folder = Path(base) if base.startswith("/") else Path.home() / ".config"
+    try:
+        with (folder / "ch" / "config.toml").open("rb") as stream: text = stream.read(CH_CONFIG_LIMIT).decode("utf-8", "replace")
+    except OSError: return None
+    return {m.group(1) or m.group(2) for m in CH_HOST_ROW.finditer(text)}
+
+
+def resume_spec(raw, kind):
+    """The checked conversation to pick up and how: {kind, id, args} (agent arguments) or, for ch,
+    {kind, id, host, command}. Raises 没继续：… for anything else."""
+    if kind not in RESUME_KINDS: raise BridgeError("没继续：只有 Claude、Codex 和 ch 的对话能接着聊")
+    if not isinstance(raw, dict) or not raw.get("id") or set(raw) - ({"id", "host"} if kind == "ch" else {"id"}):
+        raise BridgeError("没继续：要继续哪段对话没说清楚")
+    rid = raw["id"]
+    if not isinstance(rid, str) or not RESUME_ID.fullmatch(rid): raise BridgeError("没继续：对话 ID 的格式不对")
+    if kind != "ch": return {"kind": kind, "id": rid, "args": ["--resume", rid] if kind == "claude" else ["resume", rid]}
+    host = raw.get("host")
+    if not isinstance(host, str) or not CH_HOST.fullmatch(host): raise BridgeError("没继续：ch 主机名不对")
+    hosts = ch_hosts()
+    if hosts is None: raise BridgeError("没继续：读不到 ch 的主机配置（~/.config/ch/config.toml）")
+    if host not in hosts: raise BridgeError("没继续：ch 里没有叫 " + host + " 的主机")
+    return {"kind": kind, "id": rid, "host": host, "command": ["ch", "--host", host, "resume", rid]}
+
+
+def resume_text(spec):
+    """The line typed into a shell (ch in a Herdr pane, anything in tmux): fixed words + checked tokens."""
+    words = spec.get("command") or [spec["kind"]] + spec["args"]
+    return " ".join(shlex.quote(w) for w in words)
+
+
+def resume_record(spec):
+    """Claude / Codex: the transcript must be here, as a root conversation (a sub-agent cannot be resumed)."""
+    if spec["kind"] == "ch": return None
+    found = [x for x in transcript_catalog() if x.get("provider") == spec["kind"] and x.get("thread") == spec["id"]]
+    root = next((x for x in found if not x.get("parent")), None)
+    if root: return root
+    if found: raise BridgeError("没继续：这是子 Agent 的记录，只能继续它的主对话")
+    raise BridgeError("没继续：这台电脑上没找到这段对话的记录（可能已经删掉了）")
+
+
+RESUME_SKIP_ARGS = {"app-server", "exec", "e", "mcp-server", "review", "login", "logout", "mcp", "debug", "sandbox"}
+
+
+def user_processes(limit=4000):
+    """(pid, argv) of this user's processes: /proc/<pid>/cmdline only (no environment, no files)."""
+    uid = os.getuid()
+    try: entries = [e for e in os.scandir("/proc") if e.name.isdigit()]
+    except OSError: return
+    for entry in entries[:limit]:
+        try:
+            if entry.stat(follow_symlinks=False).st_uid != uid: continue
+            with open(os.path.join(entry.path, "cmdline"), "rb") as stream:
+                argv = [a for a in stream.read(65536).decode(errors="replace").split("\0") if a]
+        except OSError: continue
+        yield int(entry.name), argv
+
+
+def resume_running(spec):
+    """A process of this user that has this conversation open right now, else None: a Claude whose
+    runtime task folder (FD link name, follows /clear and /resume) or, without one, whose argv
+    (--resume / --session-id) names it; a Codex TUI started with `resume <id>`; for ch an SSH attach
+    to that ch session. The Codex app-server keeps rollouts open after the TUI quits, so it is skipped."""
+    for pid, argv in user_processes():
+        if spec["kind"] == "ch":
+            route = ch_ssh_route(argv)
+            if route and Path(route["workspace"]).name == spec["id"]: return pid
+            continue
+        if not is_agent_process(argv, spec["kind"]): continue
+        if spec["kind"] == "codex" and RESUME_SKIP_ARGS & set(argv[1:3]): continue
+        active = set()
+        if spec["kind"] == "claude":
+            snapshot = process_snapshot(pid)
+            active = set(snapshot.get("active_threads", [])) if snapshot else set()
+        if spec["id"] in (active or explicit_session_ids(argv, spec["kind"])): return pid
+    return None
+
+
+def resume_checks(spec):
+    """Read-only, before any receipt: the conversation is here and not open somewhere already."""
+    record = resume_record(spec)
+    if resume_running(spec):
+        raise BridgeError("没继续：这段对话已经在运行了（在某个终端里开着）。打开那个就行，不用再开一个")
+    return record
+
+
+def auto_workspace(workspaces, cwd):
+    """`workspace: "auto"`: the workspace whose panes sit in that directory (busiest), else a new one."""
+    best, score = "new", 0
+    for w in workspaces:
+        for d in w["dirs"]:
+            try: same = os.path.realpath(d["path"]) == cwd
+            except (OSError, ValueError): same = False
+            points = 100 + d["agents"] * 3 + d["panes"] if same else 0
+            if points > score: best, score = w["workspace_id"], points
+    return best
 
 
 # ─── Directory tree for the 新建 sheets (read-only) ─────────────────────────
@@ -4400,7 +4536,7 @@ def pane_agent_state(pane, kind):
     return "ready" if status in ("idle", "done") else "blocked" if status == "blocked" else "starting"
 
 
-def start_in_pane(prefix, pane_id, kind, name, deadline):
+def start_in_pane(prefix, pane_id, kind, name, deadline, args=()):
     """Hand the start to Herdr and wait only briefly (CREATE_START_WAIT_MS): a ready agent answers
     "ready" at once; a slower one is "starting" and keeps starting after Herdr's wait ends (checked
     with Herdr 0.8.2). The phone then polls. A shell that is not at its prompt yet is retried for
@@ -4409,8 +4545,8 @@ def start_in_pane(prefix, pane_id, kind, name, deadline):
     while True:
         if deadline - time.monotonic() < wait_ms / 1000 + 2: return {"state": "starting", "agent_name": name}
         try:
-            call(prefix + ["agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", str(wait_ms)],
-                 timeout=wait_ms / 1000 + 4)
+            call(prefix + ["agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", str(wait_ms)]
+                 + (["--", *args] if args else []), timeout=wait_ms / 1000 + 4)
             return {"state": "ready", "agent_name": name}
         except HerdrRejected as exc:
             if exc.code in CREATE_SHELL_NOT_READY and time.monotonic() - began < CREATE_SHELL_WAIT:
@@ -4427,11 +4563,12 @@ def start_in_pane(prefix, pane_id, kind, name, deadline):
             return {"state": "starting", "agent_name": name}
 
 
-def start_ch(prefix, pane_id, deadline):
-    """Type `ch new` into the new shell and look for Claude for a moment (CREATE_CH_WAIT); ch then
-    still has to log in to the other computer, so "starting" is the usual answer. The phone polls."""
+def start_ch(prefix, pane_id, deadline, text=CH_NEW):
+    """Type `ch new` (or the checked `ch --host H resume ID`) into the new shell and look for Claude
+    for a moment (CREATE_CH_WAIT); ch then still has to log in to the other computer, so "starting"
+    is the usual answer. The phone polls."""
     try:
-        call(prefix + ["pane", "run", pane_id, CH_NEW])
+        call(prefix + ["pane", "run", pane_id, text])
     except HerdrRejected as exc:
         return {"state": "failed", "code": exc.code, "detail": exc.detail[:300], "typed": exc.code not in CREATE_PRE_START}
     except BridgeError:
@@ -4446,7 +4583,22 @@ def start_ch(prefix, pane_id, deadline):
     return {"state": seen or "starting", "detected": bool(seen)}
 
 
+def refusal_as_resume(exc):
+    """A resume refused before anything was made says 没继续 instead of 没创建 (same meaning)."""
+    text = str(exc)
+    return BridgeError("没继续：" + text[len("没创建："):]) if text.startswith("没创建：") else exc
+
+
 def create_agent(request, prefix, state_dir):
+    if request.get("resume") is None: return create_checked(request, prefix, state_dir)
+    try: return create_checked(request, prefix, state_dir)
+    except BridgeError as exc:
+        changed = refusal_as_resume(exc)
+        if changed is exc: raise
+        raise changed from exc
+
+
+def create_checked(request, prefix, state_dir):
     started_at = time.monotonic()
     deadline = started_at + CREATE_BUDGET
     extra = set(request) - CREATE_KEYS
@@ -4457,20 +4609,30 @@ def create_agent(request, prefix, state_dir):
     kind = request.get("kind")
     if kind not in CREATE_KINDS + CREATE_MORE: raise BridgeError("没创建：不支持的 Agent 类型")
     place = request.get("workspace")
-    if not isinstance(place, str) or not (place == "new" or re.fullmatch(r"w[A-Za-z0-9]{1,16}", place)):
+    if not isinstance(place, str) or not (place in ("new", "auto") or re.fullmatch(r"w[A-Za-z0-9]{1,16}", place)):
         raise BridgeError("没创建：位置不对")
+    spec = resume_spec(request["resume"], kind) if request.get("resume") is not None else None
+    digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    # A request already handled answers from its receipt, before any check against today's state
+    # (a resumed conversation is running by now, which the checks below would refuse).
+    done = receipt_peek(state_dir, req_id, digest)
+    if done is not None: return done
     if not find_executable(kind):
-        raise BridgeError("没创建：这台电脑上没找到 " + kind + " 命令")
+        raise BridgeError("没创建：这台电脑上没找到 " + kind + " 命令" + ("（装好，或检查它在不在 PATH / ~/.local/bin 里）" if spec else ""))
     # Reads only so far: a failure here created nothing, and says so (not "outcome unknown").
     try:
         workspaces = create_workspaces(prefix)
-        if place != "new" and not any(w["workspace_id"] == place for w in workspaces):
+        if place not in ("new", "auto") and not any(w["workspace_id"] == place for w in workspaces):
             raise BridgeError("没创建：那个工作区已经不在了，刷新一下")
         cwd = create_dir(request.get("cwd"))
+        if spec: resume_checks(spec)
     except (BridgeError, OSError) as exc:
-        if str(exc).startswith("没创建"): raise
+        if str(exc).startswith(("没创建", "没继续")):
+            if spec and "不存在" in str(exc) and str(exc).startswith("没创建：目录"): raise BridgeError(str(exc) + "了（可能被删掉或改名了）") from exc
+            raise
         raise BridgeError("没创建：读不到 Herdr 的工作区（" + str(exc)[:160] + "）") from exc
-    digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    asked = place
+    if place == "auto": place = auto_workspace(workspaces, cwd)
     db, previous = receipt_open(state_dir, req_id, digest)
     if previous is not None: return previous
     try:
@@ -4490,10 +4652,13 @@ def create_agent(request, prefix, state_dir):
                   "tab_id": (made.get("tab") or {}).get("tab_id") or root.get("tab_id"),
                   "workspace_id": (made.get("workspace") or {}).get("workspace_id") or root.get("workspace_id") or place,
                   "new_workspace": place == "new", "state": "starting"}
+        if asked == "auto": result["workspace_label"] = next((w["label"] for w in workspaces if w["workspace_id"] == place), "")
+        if spec: result["resume"] = {"id": spec["id"], **({"host": spec["host"]} if spec.get("host") else {})}
         # Saved before starting: even if this process dies now, a retry reports the pane, not a new one.
         receipt_save(db, req_id, result)
         name = "pocket-" + req_id[:8]
-        outcome = start_ch(prefix, pane_id, deadline) if kind == "ch" else start_in_pane(prefix, pane_id, kind, name, deadline)
+        if kind == "ch": outcome = start_ch(prefix, pane_id, deadline, resume_text(spec) if spec else CH_NEW)
+        else: outcome = start_in_pane(prefix, pane_id, kind, name, deadline, spec["args"] if spec else ())
         if outcome["state"] != "ready":
             # One last look: what is actually in the pane now.
             try:
@@ -4729,7 +4894,7 @@ TMUX_AGENT_SCREENS = 24        # agent panes whose screen is read for their stat
 TMUX_WORKING = re.compile(r"(?i)\besc to interrupt\b|^\s*[·✢✳✶✻✽*]\s+[A-Za-z][a-z'-]{2,30}…")
 TMUX_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}")
 TMUX_SESSION_ID = re.compile(r"\$\d{1,9}")
-TMUX_NEW_KEYS = {"v", "op", "id", "name", "cwd"}
+TMUX_NEW_KEYS = {"v", "op", "id", "name", "cwd", "resume"}
 TMUX_KILL_KEYS = {"v", "op", "id", "target", "identity", "scope"}
 UUID_ID = re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
 
@@ -5235,27 +5400,49 @@ def tmux_info(request):
 
 
 def tmux_new(request, state_dir):
+    """tmux_new_session, with 没继续 instead of 没创建 when it picks an old conversation up."""
+    if request.get("resume") is None: return tmux_new_session(request, state_dir)
+    try: return tmux_new_session(request, state_dir)
+    except BridgeError as exc:
+        changed = refusal_as_resume(exc)
+        if changed is exc: raise
+        raise changed from exc
+
+
+def tmux_resume_spec(raw):
+    """tmuxNew `resume`: {kind, id[, host]}, checked like create's (resume_spec)."""
+    if not isinstance(raw, dict) or set(raw) - {"kind", "id", "host"}: raise BridgeError("没继续：要继续哪段对话没说清楚")
+    return resume_spec({k: v for k, v in raw.items() if k != "kind"}, raw.get("kind"))
+
+
+def tmux_new_session(request, state_dir):
     """`tmux new-session -d [-s NAME] -c DIR`, detached (nothing on the computer's screen changes).
     Starts the user's default tmux server when none runs: that is what the person asked for.
-    Always the default server (named servers are only listed and used)."""
+    Always the default server (named servers are only listed and used). With `resume` the checked
+    resume line (resume_text) is then typed into the new shell, once it runs (send-keys -l + Enter)."""
     if set(request) - TMUX_NEW_KEYS: raise BridgeError("没创建：请求里有不认识的字段")
     req_id = request.get("id")
     if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
     name = request.get("name")
     if name is not None and (not isinstance(name, str) or not TMUX_NAME.fullmatch(name)):
         raise BridgeError("没创建：名字只能用英文字母、数字、- 和 _（最多 64 个）")
+    spec = tmux_resume_spec(request["resume"]) if request.get("resume") is not None else None
     if not tmux_binary(): raise BridgeError("没创建：这台电脑上没找到 tmux")
     digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     # A request already handled answers from its receipt before any check against today's state.
     done = receipt_peek(state_dir, req_id, digest)
     if done is not None: return done
+    if spec and not find_executable(spec["kind"]):
+        raise BridgeError("没创建：这台电脑上没找到 " + spec["kind"] + " 命令（装好，或检查它在不在 PATH / ~/.local/bin 里）")
     # Reads only so far: a failure (a tmux server of another version, a hung server) created nothing.
     try:
         panes = tmux_panes(only="") or []
         if name and any(p["session"] == name for p in panes): raise BridgeError("没创建：已经有叫 " + name + " 的 tmux 会话了")
         cwd = create_dir(request.get("cwd"))
+        if spec: resume_checks(spec)
     except (BridgeError, OSError) as exc:
-        if str(exc).startswith("没创建"): raise
+        if spec and str(exc).startswith("没创建：目录") and "不存在" in str(exc): raise BridgeError(str(exc) + "了（可能被删掉或改名了）") from exc
+        if str(exc).startswith(("没创建", "没继续")): raise
         raise BridgeError("没创建：读不到 tmux（" + str(exc)[:160] + "）") from exc
     db, previous = receipt_open(state_dir, req_id, digest, "上次新建的结果未知：先刷新列表看看，别直接重试")
     if previous is not None: return previous
@@ -5273,10 +5460,21 @@ def tmux_new(request, state_dir):
         made = re.match(r"(%\d{1,9})(?:\x1f|\\037|_)(.*)", out.strip())
         pane_id, session = (made.group(1), made.group(2)[:120]) if made else ("", name or "")
         result = {"created": True, "session": session, "cwd": cwd, "pane": None}
+        if spec: result.update(resume={"kind": spec["kind"], "id": spec["id"], **({"host": spec["host"]} if spec.get("host") else {})}, typed=False)
         receipt_save(db, req_id, result)
         try: pane = tmux_new_pane(pane_id, session, {p["pane_id"] for p in panes})
         except BridgeError: pane = None
         if pane: result.update(pane=tmux_public(pane), session=pane["session"])
+        if spec:
+            # Into the new session's own shell only (its pane id from -P, or the one new pane found).
+            target = pane["pane_id"] if pane else pane_id
+            if target and TMUX_RAW_ID.fullmatch(target):
+                try:
+                    tmux_run(["send-keys", "-t", target, "-l", "--", resume_text(spec)])
+                    tmux_run(["send-keys", "-t", target, "Enter"])
+                    result["typed"] = True
+                except BridgeError as exc: result["detail"] = str(exc)[:200]
+            else: result["detail"] = "没找到新会话的窗格，启动命令没输进去"
         receipt_save(db, req_id, result)
         return result
     finally:
@@ -5646,7 +5844,9 @@ def handle(request, state_dir=None):
         try: prefix = select_session(request)
         except BridgeError as exc:
             # Nothing was created: the phone shows this in the sheet and lets the person try again.
-            if op == "create": raise BridgeError("没创建：" + str(exc)) from exc
+            if op == "create":
+                refused = BridgeError("没创建：" + str(exc))
+                raise (refusal_as_resume(refused) if request.get("resume") is not None else refused) from exc
             raise
         if op == "createInfo": return create_info(prefix)
         return create_agent(request, prefix, state_dir or Path.home() / ".local/state/herdr-pocket")

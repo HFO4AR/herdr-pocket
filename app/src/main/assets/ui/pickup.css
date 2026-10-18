@@ -1,0 +1,35 @@
+/* 继续这个对话 (pickup.js): 最近断开的 on 会话, the 继续 sheets, history footers and tags. */
+.pk-label{padding-right:0}
+.pk-label .pk-all{margin-left:auto;min-height:40px;display:inline-flex;align-items:center;gap:5px;font-weight:600;letter-spacing:0}
+.pk-label .pk-all svg{width:15px;height:15px}
+.pk-row .avatar{opacity:.82}
+.pk-row .card-title{color:var(--ink-2)}
+.pk-row .card-meta .sep{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pk-row .row-side{justify-content:center}
+.pk-go{display:inline-flex;align-items:center;gap:4px;min-height:32px;padding:0 11px 0 9px;border-radius:999px;background:var(--soft);color:var(--accent);
+ box-shadow:inset 0 0 0 1px var(--soft-line);font-size:var(--fs-xs);font-weight:600;white-space:nowrap}
+.pk-go svg{width:14px;height:14px;stroke-width:2.2}
+.pk-row:active .pk-go{background:var(--soft-line)}
+.pk-note{margin-top:calc(-1 * var(--sp-1));margin-bottom:var(--sp-4)}
+.card-meta .tag.pk-live-tag{background:var(--success-soft);color:var(--success)}
+
+/* History view: the read-only line and the one button to talk again. */
+.pk-bar{display:flex;align-items:center;gap:10px;padding:4px 2px}
+.pk-bar .readonly{flex:1;min-width:0;text-align:left;padding:4px 0}
+.pk-bar>button{flex-shrink:0;white-space:nowrap}
+.pk-bar>button svg,.follow-actions .pk-resume svg,.follow-actions .pk-open svg{width:16px;height:16px}
+@media (max-width:359px){.pk-bar{flex-direction:column;align-items:stretch}.pk-bar .readonly{text-align:center}}
+
+/* 全部继续: one row per conversation, a check box, then its outcome. */
+.pk-picks{margin-top:12px;border:1px solid var(--line);border-radius:var(--radius-card);padding:4px}
+.pk-pick{min-height:56px;gap:10px}
+.pk-pick .avatar{width:30px;height:30px;font-size:11px;border-radius:9px;flex-shrink:0}
+.pk-pick .grow{min-width:0}
+.pk-pick small{display:block;max-width:100%}
+.pk-pick:not(.on) .menu-label,.pk-pick:not(.on) small{color:var(--faint)}
+.pk-check{flex:0 0 22px;width:22px;height:22px;border-radius:7px;border:1.5px solid var(--line-strong);display:grid;place-items:center;background:var(--raised)}
+.pk-check.on{border-color:var(--accent-raw);background:var(--accent-raw);color:var(--on-accent)}
+.pk-check svg{width:15px;height:15px;stroke-width:2.6}
+.pk-pick-error{color:var(--danger)!important;white-space:normal;line-height:1.45;margin-top:2px}
+.pk-pick .badge{margin-left:4px}
+.pk-sheet .new-facts{margin-top:14px}
