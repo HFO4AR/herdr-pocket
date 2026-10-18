@@ -1,0 +1,31 @@
+/* guard.js: Herdr down / restarted cards on 会话, the 启动 Herdr and Herdr 守护 sheets. */
+.hg-card{margin:0 0 var(--sp-3);padding:var(--sp-3) var(--sp-4);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-card);box-shadow:var(--shadow);font-size:var(--fs-sm);color:var(--ink-2)}
+.hg-card>.row{display:flex;align-items:flex-start;gap:var(--sp-3)}
+.hg-card>.row>svg{width:20px;height:20px;flex-shrink:0;margin-top:1px}
+.hg-card strong{display:block;font-size:var(--fs-md);font-weight:600;color:var(--ink)}
+.hg-card .fine{display:block;margin-top:2px}
+.hg-card>.row>.icon-btn{margin:-10px -10px 0 0;opacity:.7}
+.hg-down{border-color:var(--warn-line);background:var(--warn-soft)}
+.hg-down>.row>svg{color:var(--warn)}
+.hg-restart>.row>svg{color:var(--accent)}
+.hg-line{margin:var(--sp-2) 0 0;line-height:1.5}
+.hg-lost{list-style:none;margin:6px 0 0;padding:0}
+.hg-lost li{display:flex;gap:8px;align-items:baseline;min-width:0;padding:3px 0;font-size:var(--fs-sm)}
+.hg-lost .hg-kind{flex-shrink:0;font-size:var(--fs-2xs);font-weight:600;color:var(--muted);text-transform:none}
+.hg-lost .truncate{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.hg-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:var(--sp-3);align-items:center}
+.hg-actions .small{min-height:40px}
+.hg-facts li.warn svg{color:var(--warn)}
+.hg-facts li .ob-cmd{margin-top:6px}
+.hg-wait{display:flex;align-items:center;gap:10px;padding:var(--sp-4) 0;color:var(--muted);font-size:var(--fs-sm)}
+.hg-error,.hg-note{margin:var(--sp-3) 0;font-size:var(--fs-sm);line-height:1.55;color:var(--ink-2)}
+.hg-error{color:var(--danger)}
+.hg-now{margin:var(--sp-3) 0 0;padding:var(--sp-3);border-radius:var(--radius-control);background:var(--success-soft);font-size:var(--fs-sm)}
+.hg-now strong{display:block;color:var(--success);font-weight:600}
+.hg-now .fine{display:block;margin-top:2px}
+.hg-plan{margin-top:var(--sp-3)}
+.hg-path{margin:10px 0 4px;font-size:var(--fs-xs);color:var(--muted);overflow-wrap:anywhere}
+.hg-path code{font-family:var(--mono);color:var(--ink-2)}
+.hg-pre{margin:0;padding:8px 10px;max-height:240px;overflow:auto;background:var(--code-bg);border-radius:var(--radius-control);font-family:var(--mono);font-size:11px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)}
+.hg-script summary{font-size:var(--fs-xs);color:var(--accent);min-height:32px;display:flex;align-items:center;cursor:pointer}
+.hg-off{color:var(--danger)}
