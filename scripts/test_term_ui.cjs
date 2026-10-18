@@ -17,7 +17,7 @@ async function fresh(width,height,theme){
  await page.addInitScript(()=>{window.PocketNative={request(id,op,raw){
   if(!['devices','demo','disconnect','protect','watchState','settings','cacheGet','cachePut'].includes(op))throw Error('Forbidden native call in offline UI test: '+op);
   setTimeout(()=>nativeResult(id,{ok:true,data:op==='devices'?{devices:[]}:op==='cacheGet'?{value:null}:{}}),0);}};});
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
  await page.getByText('离线演示 · 示例数据，不连接电脑',{exact:true}).first().waitFor();
  await page.evaluate(t=>window.applyTheme(t),theme);

@@ -24,7 +24,7 @@ async function fresh(width=390,height=844,opts={}){
    if(op==='cacheGet'){cacheStore('get',a.device+'\n'+a.key).then(value=>done({value}));return;}
    if(op==='cachePut'){cacheStore('put',a.device+'\n'+a.key,a.value).then(()=>done({}));return;}
    done(op==='devices'?{devices:[]}:{});}};});
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  if(opts.dark)await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});
  await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
  await page.getByText('离线演示 · 示例数据，不连接电脑',{exact:true}).waitFor();

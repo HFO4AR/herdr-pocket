@@ -50,7 +50,7 @@ await page.addInitScript(()=>{
   }catch(e){reply(false,e.message);return;}
   reply(true,data);}};
 });
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 // No background polling or follow checks: every read in this test is one the test asks for.
 await page.evaluate(()=>{window.followInterval=()=>1e9;S.paused=true;
  // Transcript pictures arrive late (like a slow SSH read): tall, so a late load would push the text.

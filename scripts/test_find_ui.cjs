@@ -52,7 +52,7 @@ async function fresh(width=390,height=844,dark=false){
    else if(!['watchState','protect','setAlerts','cacheGet','cachePut'].includes(op))throw Error('unexpected native op '+op);
    }catch(e){setTimeout(()=>nativeResult(id,{ok:false,error:e.message}),10);return;}
    setTimeout(()=>nativeResult(id,{ok:true,data}),10);}};});
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  if(dark)await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});
  await page.evaluate(()=>{window.followInterval=()=>1e9;window.copyText=t=>{fx.copied.push(t);toast('已复制');};S.paused=true;});
  await page.getByRole('button',{name:/修登录页/}).click();

@@ -58,7 +58,7 @@ await page.addInitScript(()=>{
  // Fake transfer progress: the test moves it by hand.
  window.fxStep=(id,done,state,extra={})=>{const t=fx.transfers.find(x=>x.id===id);t.done=done;if(state)t.state=state;Object.assign(t,extra);};
 });
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 const calls=op=>page.evaluate(o=>fx.calls.filter(c=>c.op===o).map(c=>c.a),op);
 const theme=t=>page.evaluate(t=>{document.documentElement.dataset.theme=t;},t);
 const shot=async name=>{await page.evaluate(()=>document.getElementById('toast').classList.remove('show'));await page.waitForTimeout(300);await page.screenshot({path:path.join(shots,'sftp-'+name+'.png')});};

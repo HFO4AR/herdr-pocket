@@ -50,7 +50,7 @@ await page.addInitScript(()=>{
   }catch(e){setTimeout(()=>nativeResult(id,{ok:false,error:e.message}),10);return;}
   setTimeout(()=>nativeResult(id,{ok:true,data}),10);}};
 });
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 await page.evaluate(()=>{window.followInterval=()=>1e9;});
 const count=op=>page.evaluate(o=>fx.calls.filter(c=>c.op===o).length,op);
 const card=name=>page.locator('.device-card').filter({hasText:name});

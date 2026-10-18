@@ -41,7 +41,7 @@ async function open(width,height,theme){
    }catch(e){setTimeout(()=>nativeResult(id,{ok:false,error:e.message}),5);return;}
    setTimeout(()=>nativeResult(id,{ok:true,data}),5);}};
  });
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
  return page;}
 

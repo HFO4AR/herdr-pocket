@@ -33,7 +33,7 @@ async function fresh(width=390,height=844,dark=false){
  const context=await browser.newContext({viewport:{width,height},deviceScaleFactor:2,hasTouch:true,colorScheme:dark?'dark':'light'});
  const page=await context.newPage();page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});
  await page.addInitScript(()=>{window.PocketNative={request(id,op){if(!['devices','demo','disconnect','protect','watchState','settings','cacheGet','cachePut','haptic'].includes(op))throw Error('Forbidden native call in offline UI test: '+op);setTimeout(()=>nativeResult(id,{ok:true,data:op==='devices'?{devices:[]}:{}}),0);},haptic(k){(window.haptics=window.haptics||[]).push(k);}};});
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  if(dark)await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});
  await page.evaluate(({screens,modes})=>{
   const t=n=>new Date(Date.UTC(2026,9,15,9,n)).toISOString();
@@ -174,7 +174,7 @@ console.log('PASS: 320 px, dark and landscape layouts');
 const ctx=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:2});page=await ctx.newPage();
 page.on('pageerror',e=>{errors.push(e.message);});
 await page.addInitScript(()=>{window.PocketNative={request(id,op){if(!['devices','demo','disconnect','protect','watchState','settings'].includes(op))throw Error('Forbidden native call: '+op);setTimeout(()=>nativeResult(id,{ok:true,data:op==='devices'?{devices:[]}:{}}),0);}};});
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
 await page.locator('.agent-row',{hasText:'把移动端做成真正的聊天工具'}).click();
 await page.locator('#mode-bar').waitFor();

@@ -72,7 +72,7 @@ async function launch(cfg){
    }catch(e){return reply(id,false,{error:e.message});}
    reply(id,true,data);}};
  },cfg);
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  await page.evaluate(()=>{window.followInterval=()=>1e9;});
  return page;}
 

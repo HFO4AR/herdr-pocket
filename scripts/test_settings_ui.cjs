@@ -27,7 +27,7 @@ await page.addInitScript(()=>{
   if(op==='openUrl')return reply(id,{});
   if(['demo','disconnect','protect'].includes(op))return reply(id,{});
   throw Error('Forbidden native call in offline UI test: '+op);}};});
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 const folder=path.join(root,'ui-artifacts');fs.mkdirSync(folder,{recursive:true});
 
 // Launch: automatic update check (cached natively) puts a dot on the 设置 tab and toasts once.

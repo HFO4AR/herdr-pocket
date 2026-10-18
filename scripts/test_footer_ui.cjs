@@ -17,7 +17,7 @@ async function fresh(w,h,dark,reduce=false){
  const ctx=await browser.newContext({viewport:{width:w,height:h},deviceScaleFactor:1,hasTouch:true,colorScheme:dark?'dark':'light',reducedMotion:reduce?'reduce':'no-preference'});
  const page=await ctx.newPage();page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});
  await page.addInitScript(()=>{window.PocketNative={request(id,op){if(!['devices','demo','disconnect','protect','watchState','settings','cacheGet','cachePut','haptic','cacheInfo'].includes(op))throw Error('Forbidden native call: '+op);setTimeout(()=>nativeResult(id,{ok:true,data:op==='devices'?{devices:[]}:{}}),0);}};});
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  if(dark)await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});
  await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
  return page;}

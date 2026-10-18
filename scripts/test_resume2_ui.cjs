@@ -69,7 +69,7 @@ async function boot(opts={}){
    }catch(e){setTimeout(()=>nativeResult(id,{ok:false,error:e.message}),10);return;}
    setTimeout(()=>nativeResult(id,{ok:true,data}),delay);}};
  },[IDS,opts]);
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  await page.evaluate(()=>{window.followInterval=()=>1e9;});
  return page;}
 const role=(page,r,name)=>page.getByRole(r,{name,exact:true});
@@ -265,7 +265,7 @@ let saved;
 // ── 6. Demo: shown, never started ──
 {const page=await browser.newPage({viewport:{width:390,height:844}});
  await page.addInitScript(()=>{window.PocketNative={request(id,op){if(!['devices','demo','disconnect','protect','watchState'].includes(op))throw Error('Forbidden native call in offline UI test: '+op);setTimeout(()=>nativeResult(id,{ok:true,data:op==='devices'?{devices:[]}:{}}),0);}};});
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
  await page.getByText('离线演示 · 示例数据，不连接电脑',{exact:true}).waitFor();
  await page.evaluate(()=>pickupSheet(pkConv('claude','c2222222-2222-4222-8222-222222222222',{cwd:'/home/demo/site',title:'演示对话'})));

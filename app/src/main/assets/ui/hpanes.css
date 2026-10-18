@@ -1,0 +1,12 @@
+/* Herdr's plain terminals in 会话 (hpanes.js): rows like the 终端 tab's (lists.css .term-row). */
+.hp-row .card-title.term-cmd{font-size:14px}
+.hp-row .card-title.term-cmd.idle{font-size:15px}
+.hp-row .row-side{justify-content:center}
+.hp-row .hp-where{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hp-row .hp-tab{flex-shrink:0}
+.card-meta .hp-tag{font-family:var(--mono);font-weight:500}
+.hp-ws{margin-top:10px}
+.hp-label+.hp-ws{margin-top:2px}
+.hp-list+.hp-ws{margin-top:12px}
+.hp-more{display:flex;align-items:center;gap:6px;margin:8px auto 0;min-height:44px}
+.hp-more svg{width:16px;height:16px}

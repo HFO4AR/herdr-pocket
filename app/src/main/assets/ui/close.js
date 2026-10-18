@@ -84,6 +84,8 @@ async function closeSession(a){
  if(st==='working')warn('还在干活，关闭会中断当前任务',true,stop());
  else if(st==='blocked')warn('它在等你确认，关闭会中断当前任务',true,stop());
  if(queued)warn('还有 '+queued+' 条排队的消息，关闭后不会再发',true);
+ // A plain pane from the 会话 list says what runs in front (bridge `foreground`).
+ if(!a.agent&&a.kind&&a.kind!=='shell'&&a.foreground)warn('里面正在运行 '+a.foreground+'，关闭会结束它');
  box.append(el('div','section-label','怎么关'));
  const opts=el('div','close-opts');opts.setAttribute('role','radiogroup');opts.setAttribute('aria-label','关闭方式');box.append(opts);
  const foot=el('div','close-foot');const status=el('div','close-status hidden');status.setAttribute('role','status');status.setAttribute('aria-live','polite');foot.append(status);
