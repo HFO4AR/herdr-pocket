@@ -1,0 +1,22 @@
+/* Quick rename (rename.js). The chat title looks as before; it is a button whose hit area spans the
+   whole title block (title and subtitle), with a small pencil the first time and on hover / focus. */
+.chat-id{position:relative;min-width:0}
+.chat-title-btn{display:inline-flex;align-items:center;gap:5px;max-width:100%;min-height:0;padding:0;margin:0;font:inherit;color:inherit;text-align:left;vertical-align:top;border-radius:0}
+.chat-title-btn::after{content:'';position:absolute;inset:-2px -4px;border-radius:10px;transition:background-color .15s var(--ease)}
+.chat-title-btn:active{transform:none}
+.chat-title-btn:active::after{background:var(--press)}
+.chat-title-btn:focus-visible{outline:none}
+.chat-title-btn:focus-visible::after{outline:2px solid var(--focus);outline-offset:-2px}
+.chat-title-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-title-pen{flex:0 0 auto;width:13px;height:13px;color:var(--faint);opacity:0;transition:opacity .2s var(--ease)}
+.chat-title-btn.hint .chat-title-pen,.chat-title-btn:focus-visible .chat-title-pen{opacity:1}
+@media(hover:hover){.chat-title-btn:hover .chat-title-pen{opacity:1}}
+/* The subtitle says where a rename is: 改名排队中 / 改名已发出 / 已改名. */
+.meta-rename{font-weight:600;color:var(--ink-2)}
+.meta-rename.ok{color:var(--success)}
+.meta-rename.warn{color:var(--warn)}
+.rename-input{margin-top:2px}
+.rename-hint{line-height:1.6;overflow-wrap:anywhere}
+.rename-cmd{font:500 12px var(--mono);color:var(--ink-2);background:var(--code-bg);border:1px solid var(--code-line);border-radius:5px;padding:.5px 4px;font-variant-ligatures:none}
+.rename-later{margin:10px 2px 0}
+.rename-sheet .sheet-actions{margin-top:var(--sp-4)}

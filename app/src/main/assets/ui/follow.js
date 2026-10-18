@@ -72,7 +72,9 @@ function followApply(c,r){
   c.following=false;c.stale=true;c.unsure=a;renderComposer();updateChatMeta();return;}
  // Nothing changed after all (a status blip): release the hold, refresh names.
  const held=c.following||c.stale||c.unsure;c.following=false;c.stale=false;c.unsure=null;
- c.agent={...c.agent,title:a.title,terminal_title:a.terminal_title,terminal_title_stripped:a.terminal_title_stripped,history_ref:a.history_ref};
+ const was=titleOf(c.agent);c.agent={...c.agent,title:a.title,terminal_title:a.terminal_title,terminal_title_stripped:a.terminal_title_stripped,history_ref:a.history_ref};
+ // A new name for the same conversation (/rename, here or on the computer) reaches the header.
+ renameFollowTitle(c,was);
  if(held){renderComposer();updateChatMeta();}}
 
 // The same conversation under a fresh identity (or a transcript that just appeared).
