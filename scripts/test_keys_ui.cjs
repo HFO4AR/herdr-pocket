@@ -35,7 +35,7 @@ await page.addInitScript(()=>{
   if(['protect','settings','disconnect','trustHost','forgetHost','cacheGet','cachePut','demo','identityImportCancel','watchState','setAlerts'].includes(op))return reply(id,{ok:true,data:op==='cacheGet'?{value:null}:{}});
   throw Error('Unexpected native op '+op);}};
 });
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 const calls=op=>page.evaluate(o=>fx.calls.filter(c=>c.op===o).map(c=>c.a),op);
 const overflow=()=>page.evaluate(()=>document.documentElement.scrollWidth>innerWidth||[...document.querySelectorAll('.sheet,.main')].some(n=>n.scrollWidth>n.clientWidth+1));
 const shot=async name=>{if(shots){await page.waitForTimeout(600);await page.screenshot({path:path.join(shots,name+'.png')});}};

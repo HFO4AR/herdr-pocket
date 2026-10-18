@@ -18,7 +18,7 @@ await page.addInitScript(()=>{
   if(['devices','protect','watchState','dropFiles','dropImages','settings'].includes(op))return ok(op==='devices'?{devices:[]}:op==='settings'?{theme:'system',textZoom:100,alerts:true,notifications:true,version:'test'}:{});
   if(op==='cacheGet')return ok({value:null});if(op==='cachePut')return ok({saved:false});
   throw Error('Forbidden native call in offline UI test: '+op);}};});
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 const folder=path.join(root,'ui-artifacts');fs.mkdirSync(folder,{recursive:true});
 const shot=async file=>{await page.evaluate(()=>document.getElementById('toast').classList.remove('show'));await page.waitForTimeout(250);await page.screenshot({path:file});};
 const banner=page.getByRole('status',{name:'分享',exact:true});

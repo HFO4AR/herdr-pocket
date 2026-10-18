@@ -56,7 +56,7 @@ await page.addInitScript(({P,TOUR})=>{
   }catch(e){reply(id,{ok:false,error:e.message});return;}
   reply(id,{ok:true,data});}};
 },{P,TOUR});
-await page.goto('data:text/html;charset=utf-8;base64,'+Buffer.from(html).toString('base64'));
+await page.goto(require('./ui_bundle.cjs').url(html));
 await page.evaluate(()=>{window.followInterval=()=>1e9;window.copyText=t=>{fx.copied=t;};});
 const shot=async name=>{await page.evaluate(()=>document.getElementById('toast').classList.remove('show'));await page.waitForTimeout(250);await page.screenshot({path:path.join(shots,'status-'+name+'.png')});};
 const box=()=>page.getByRole('textbox',{name:'消息输入框',exact:true});

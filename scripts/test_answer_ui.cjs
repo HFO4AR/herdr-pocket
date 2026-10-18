@@ -37,7 +37,7 @@ const browser=await chromium.launch({headless:true,...(process.env.CHROME_BIN?{e
 const page=await browser.newPage({viewport:{width:390,height:844},deviceScaleFactor:2});
 const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});
 await page.addInitScript(()=>{window.PocketNative={request(id,op){if(!['devices','demo','disconnect','protect','watchState'].includes(op))throw Error('Forbidden native call in offline UI test: '+op);setTimeout(()=>nativeResult(id,{ok:true,data:op==='devices'?{devices:[]}:{}}),0);}};});
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 const folder=path.join(root,'ui-artifacts');fs.mkdirSync(folder,{recursive:true});
 await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
 

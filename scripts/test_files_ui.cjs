@@ -24,7 +24,7 @@ await page.addInitScript(()=>{
    return setTimeout(()=>nativeResult(id,{ok:true,data:{name:'2026-10-15/'+sha.slice(0,16)+'/'+nx.names[args.id],sha256:sha,size:nx.sizes[args.id]}}),900);}
   throw Error('Forbidden native call in offline UI test: '+op);}};
  nx.names={};nx.sizes={};});
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 const folder=path.join(root,'ui-artifacts');fs.mkdirSync(folder,{recursive:true});
 const shot=async file=>{await page.evaluate(()=>document.getElementById('toast').classList.remove('show'));await page.waitForTimeout(250);await page.screenshot({path:file});};
 await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();

@@ -43,7 +43,7 @@ await page.addInitScript(()=>{
   else if(!['watchState','protect','setAlerts','cacheGet','cachePut'].includes(op))throw Error('unexpected native op '+op);
   setTimeout(()=>nativeResult(id,fail?{ok:false,error:fail}:{ok:true,data}),0);}};
 });
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 await page.evaluate(()=>{window.followInterval=()=>1e9;});
 const run=()=>page.evaluate(async()=>{FOLLOW.last=0;await followRun();});
 const poll=()=>page.evaluate(async()=>{S.chat.retryAt=0;await fetchHistory();});

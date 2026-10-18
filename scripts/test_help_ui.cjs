@@ -41,7 +41,7 @@ await page.addInitScript(()=>{
  // Clipboard: keep what was copied so the test can read it back.
  window.copied=[];Object.defineProperty(navigator,'clipboard',{value:{writeText:async t=>{copied.push(t);}}});
 });
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 const overflow=()=>page.evaluate(()=>document.documentElement.scrollWidth>innerWidth||[...document.querySelectorAll('.sheet,.main')].some(n=>n.scrollWidth>n.clientWidth+1));
 const dialog=name=>page.getByRole('dialog',{name});
 

@@ -12,10 +12,14 @@ function leaveTerminal(){T.view=null;T.generation++;}
 function clearTerminals(){leaveTerminal();if(T.shell){T.shell.observer?.disconnect();T.shell.term.dispose();}T.shell=null;T.panes=[];}
 // What a plain pane is running. Shells set titles like "<dir>: <command>"; a bare shell is idle.
 const SHELLS=/^(bash|zsh|sh|fish|dash|ksh|tmux|login|-?bash|-?zsh)$/i;
+// A shell at its prompt titles itself with its directory ("~/proj", "/srv/app"). The 会话 list's panes
+// also say what runs in front (bridge `kind`, `foreground`), which wins over the title.
 function paneInfo(p){
  const raw=cleanTitle(p.terminal_title_stripped||p.terminal_title||p.title||'');const dir=String(p.foreground_cwd||p.cwd||'').split('/').filter(Boolean).pop()||'~';
- const m=raw.match(/^([^:]{1,80}):\s*(.+)$/);const cmd=(m?m[2]:raw).trim();const idle=!cmd||SHELLS.test(cmd)||cmd===dir;
- return {title:idle?'空闲 shell':cmd,idle,dir,cmd};}
+ const m=raw.match(/^([^:]{1,80}):\s*(.+)$/);const cmd=(m?m[2]:raw).trim();const path=!m&&/^[~/]/.test(cmd);
+ let idle=!cmd||SHELLS.test(cmd)||cmd===dir||path;if(p.kind==='shell')idle=true;else if(p.kind)idle=false;
+ const fg=typeof p.foreground==='string'?p.foreground:'';
+ return {title:idle?'空闲 shell':(path||!cmd||SHELLS.test(cmd))&&fg?fg:cmd||fg||'终端',idle,dir,cmd};}
 function paneTitle(p){const i=paneInfo(p);return i.idle?'Shell · '+i.dir:i.title;}
 // The home directory as the bridge last reported it for this computer (createInfo / tmuxInfo).
 function shortPath(p){const home=NEW.info?.home||NEW.homes.get(S.device?.id||'')||'';p=String(p||'');return home&&(p===home||p.startsWith(home+'/'))?'~'+p.slice(home.length):p.replace(/^\/(home|Users)\/[^/]+(?=\/|$)/,'~');}
@@ -112,7 +116,7 @@ function termState(entry){
  return entry.kind==='ssh'?['ok','已连接']:['ok','实时'];}
 function renderTerminal(){
  const entry=T.view;if(!entry)return;S.chat=null;termFontVar();const root=shell();root.classList.add('terminal-shell');
- const head=el('header','chat-head term-head');head.append(ib('back',entry.kind==='tmux'?'返回列表':'返回终端列表',()=>{leaveTerminal();render();}));
+ const head=el('header','chat-head term-head');head.append(ib('back',entry.kind==='tmux'||S.tab==='live'?'返回列表':'返回终端列表',()=>{leaveTerminal();render();}));
  const [st,stLabel]=termState(entry);
  const av=el('div','avatar term-av'+(entry.kind==='ssh'?' ssh':''));av.append(icon(entry.kind==='ssh'?'globe':'terminal'),el('span','status-dot '+(st==='ok'?'ok':st==='warn'?'work':'')));head.append(av);
  const name=el('div','grow chat-id');const sub=el('small','term-sub');const chip=el('span','term-state '+st,stLabel);chip.id='term-state';
@@ -254,6 +258,7 @@ function terminalMenu(){const entry=T.view;const box=sheet('终端选项');
  menuItem(box,'回到底部',()=>termBottom(entry),'down');
  if(typeof filesTermItem==='function')filesTermItem(box,entry);
  if(entry.kind==='tmux')tmuxMenu(box);
+ if(entry.kind==='pane'&&!entry.demo&&typeof hpMenu==='function')hpMenu(box,entry);
  if(entry.kind==='ssh')menuItem(box,'关闭 SSH shell',()=>confirmAction('关闭 SSH shell？','这会关闭独立 SSH 通道，里面运行的程序可能随之结束。Herdr 窗格不受影响。','关闭 shell',async()=>{try{if(!entry.demo)await rpc('shellClose',{terminalId:entry.id});entry.disposed=true;entry.observer.disconnect();entry.term.dispose();if(T.shell===entry)T.shell=null;leaveTerminal();render();}catch(e){error(e);}},true),'x','里面运行的程序可能随之结束');
  else box.append(el('p','fine','返回列表只退出手机查看，不关闭电脑上的窗格。'));
 }

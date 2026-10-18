@@ -264,8 +264,8 @@ function livePage(main){
  function draw(){list.replaceChildren();const q=S.agents.length>8?S.search.trim().toLowerCase():'';const matches=S.agents.filter(a=>liveMatch(a,q)&&(!S.liveProject||(projectOf(a)||'其他')===S.liveProject));
   if(!matches.length){
    if(q||S.liveProject)empty(list,'没有匹配的 Agent','换个关键词，或者看看全部会话。',btn('清除筛选','secondary',()=>{S.search='';S.liveProject='';render();}));
-   // tmux sessions listed below (tmux.js) are sessions too: only Herdr has no agent yet.
-   else if(typeof tmuxPanes==='function'&&tmuxPanes().length){const n=el('div','herdr-none');n.setAttribute('role','note');const t=el('div','grow');t.append(el('strong','','Herdr 里还没有 Agent'),el('span','fine','新建一个，或者在 Herdr 里启动。'));n.append(t);if(S.device&&S.session)n.append(createButton());list.append(n);}
+   // tmux sessions and Herdr terminals listed below (tmux.js, hpanes.js) are sessions too: only Herdr has no agent yet.
+   else if(typeof tmuxPanes==='function'&&tmuxPanes().length||typeof hpVisible==='function'&&hpVisible().length){const n=el('div','herdr-none');n.setAttribute('role','note');const t=el('div','grow');t.append(el('strong','','Herdr 里还没有 Agent'),el('span','fine','新建一个，或者在 Herdr 里启动。'));n.append(t);if(S.device&&S.session)n.append(createButton());list.append(n);}
    else if(!starting)empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&(S.session||tmuxCan())?createButton():undefined);
    return;}
   // 子 Agent 运行中 (kids.js) sits with 执行中: the agent is not done while its sub-agents work.
@@ -293,13 +293,16 @@ async function loadLive(){
   S.herdr=r.herdr!==false;if(r.herdr===false){S.hostIssue=null;S.sessions=[];S.session='';S.agents=[];S.fromCache=false;if('tmux' in r)S.hostTmux=r.tmux;return;}
   S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];S.fromCache=false;return;}
   S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
-  const a=await remote('agents',{session:S.session});if(epoch!==S.epoch)return;S.agents=a.agents;S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();glanceRefresh(true);if(S.pendingPane){S.liveLoading=false;openPending();return;}}
+  // Herdr's plain terminals come along while 会话 is on screen (hpanes.js), no extra round trip.
+  const dev=S.device?.id||'',session=S.session,panes=typeof hpWant==='function'&&hpWant();
+  const a=await remote('agents',{session:S.session,...(panes?{panes:true}:{})});if(epoch!==S.epoch)return;S.agents=a.agents;if(panes)hpTake(a.panes,dev,session);S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();glanceRefresh(true);if(S.pendingPane){S.liveLoading=false;openPending();return;}}
  catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
  finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
 // Lightweight status refresh: Herdr state only, keeps resolved history refs.
 async function refreshStatus(){
  if(!S.device||S.demo||S.statusBusy||!S.session||!S.statusSupported||S.liveLoading)return;S.statusBusy=true;
- try{const r=await remote('status',{session:S.session});const known=new Map(S.agents.map(a=>[a.pane_id,a]));let changed=false;
+ const dev=S.device.id,session=S.session,panes=typeof hpWant==='function'&&hpWant();
+ try{const r=await remote('status',{session:S.session,...(panes?{panes:true}:{})});const paneNews=panes&&hpTake(r.panes,dev,session);const known=new Map(S.agents.map(a=>[a.pane_id,a]));let changed=false;
   const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}if(old.agent_status!==a.agent_status||titleOf(old)!==titleOf(a))changed=true;return {...old,...a,history_ref:old.history_ref,picker:a.picker};});
   if(next.length!==S.agents.length)changed=true;
   const fresh=next.filter(a=>!known.has(a.pane_id)||known.get(a.pane_id).identity!==a.identity);
@@ -308,7 +311,7 @@ async function refreshStatus(){
    // Waiting on a picker or on another dialog (等你选择 / 等你确认) under the same state.
    else if(!!cur.picker!==!!S.chat.agent.picker){S.chat.agent={...S.chat.agent,picker:cur.picker};updateChatMeta();renderComposer();}}
   if(fresh.length&&S.tab==='live'&&!S.chat){loadLive();return;}
-  if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}
+  if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();else if(paneNews)hpRepaint();}
  catch(e){if(/Unknown operation|不支持的操作/.test(e.message))S.statusSupported=false;}
  finally{S.statusBusy=false;}}
 

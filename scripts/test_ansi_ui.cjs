@@ -37,7 +37,7 @@ async function fresh({width=390,height=844,dark=false}={}){
    const a=JSON.parse(raw||'{}');let data=op==='devices'?{devices:[]}:{};
    if(op==='cachePut')cacheStore.set(a.key,a.value);if(op==='cacheGet')data={value:cacheStore.get(a.key)||null};
    setTimeout(()=>nativeResult(id,{ok:true,data}),0);}};});
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  if(dark)await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});
  await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
  await page.getByText('离线演示 · 示例数据，不连接电脑',{exact:true}).waitFor();

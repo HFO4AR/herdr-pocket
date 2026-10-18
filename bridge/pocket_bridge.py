@@ -316,14 +316,66 @@ def settle_history(agent, prefix, ref, probe, links, catalog=None):
     return ref
 
 
-def panes(prefix):
+def panes(prefix, details=False):
+    """Ordinary panes (no agent Herdr recognises) of every workspace. `details` (the 会话 list asks
+    with `agents` / `status` + `panes: true`) adds each pane's tab label and what runs in front:
+    `foreground` (the process name only, never its arguments) and `kind` (pane_kind)."""
     found = []
     workspaces = call(prefix + ["workspace", "list"]).get("workspaces", [])
+    tabs = {}
+    if details:
+        try: tabs = {t.get("tab_id"): t for t in call(prefix + ["tab", "list"]).get("tabs", []) if isinstance(t, dict)}
+        except BridgeError: tabs = {}
     for workspace in workspaces:
         for pane in call(prefix + ["pane", "list", "--workspace", workspace["workspace_id"]]).get("panes", []):
             if pane.get("agent") or not pane.get("terminal_id"): continue
-            found.append(dict(pane, identity=identity(pane), workspace_label=workspace.get("label", "")))
+            entry = dict(pane, identity=identity(pane), workspace_label=workspace.get("label", ""))
+            tab = tabs.get(pane.get("tab_id"))
+            if tab and isinstance(tab.get("label"), str): entry["tab_label"] = tab["label"][:80]
+            found.append(entry)
+    if details and found:
+        def look(pane):
+            try: return call(prefix + ["pane", "process-info", "--pane", pane["pane_id"]]).get("process_info", {})
+            except (BridgeError, OSError, ValueError): return None
+        if len(found) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(8, len(found))) as pool: infos = list(pool.map(look, found))
+        else: infos = [look(found[0])]
+        for pane, info in zip(found, infos):
+            kind = pane_kind(info)
+            if kind: pane.update(kind)
     return found
+
+
+# What runs in front of an ordinary pane, for the 会话 list: `shell` (its prompt), `run` (a command),
+# `ssh` (ssh / mosh to elsewhere), `tmux` (a tmux client), `ch` (ch's relay or SSH attach whose agent
+# Herdr does not list right now, e.g. while it reconnects) or `herdr` (a Herdr client in a pane).
+PANE_SHELLS = {"bash", "zsh", "sh", "fish", "dash", "ksh", "tcsh", "csh", "login", "nu", "xonsh", "elvish"}
+
+
+def pane_kind(info):
+    procs = (info or {}).get("foreground_processes") if isinstance(info, dict) else None
+    if not isinstance(procs, list) or not procs: return None
+    names = []
+    kind = None
+    for proc in procs[:8]:
+        if not isinstance(proc, dict): continue
+        argv = [x for x in proc.get("argv") or [] if isinstance(x, str)]
+        name = Path(argv[0]).name if argv else str(proc.get("name") or "")
+        name = name.lstrip("-")
+        if not name: continue
+        names.append(name)
+        if ch_relay_route(argv) or ch_ssh_route(argv) or name in ("ch", "ch.route") or \
+                (name in SCRIPT_HOSTS and len(argv) > 1 and Path(argv[1]).name in ("ch", "ch.route")): kind = "ch"
+        elif name == "herdr" and kind != "ch": kind = "herdr"
+    if not names: return None
+    first = names[0]
+    if not kind:
+        kind = "shell" if all(n in PANE_SHELLS for n in names) else "tmux" if first == "tmux" else \
+            "ssh" if first in ("ssh", "mosh", "mosh-client") else "run"
+    # Only the process name: arguments can hold anything (tokens, paths); the title already says what the shell shows.
+    shown = next((n for n in names if n not in PANE_SHELLS), first)
+    return {"kind": kind, "foreground": shown[:40]}
 
 
 def relay_pane(agent, prefix):
@@ -5199,7 +5251,7 @@ def create_checked(request, prefix, state_dir):
     if not isinstance(req_id, str) or not re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", req_id):
         raise BridgeError("Mutation requires a UUID request id")
     kind = request.get("kind")
-    if kind not in CREATE_KINDS + CREATE_MORE: raise BridgeError("没创建：不支持的 Agent 类型")
+    if kind not in CREATE_KINDS + CREATE_MORE + ("shell",): raise BridgeError("没创建：不支持的 Agent 类型")
     place = request.get("workspace")
     if not isinstance(place, str) or not (place in ("new", "auto") or re.fullmatch(r"w[A-Za-z0-9]{1,16}", place)):
         raise BridgeError("没创建：位置不对")
@@ -5209,7 +5261,7 @@ def create_checked(request, prefix, state_dir):
     # (a resumed conversation is running by now, which the checks below would refuse).
     done = receipt_peek(state_dir, req_id, digest)
     if done is not None: return done
-    if not find_executable(kind):
+    if kind != "shell" and not find_executable(kind):
         raise BridgeError("没创建：这台电脑上没找到 " + kind + " 命令" + ("（装好，或检查它在不在 PATH / ~/.local/bin 里）" if spec else ""))
     # Reads only so far: a failure here created nothing, and says so (not "outcome unknown").
     try:
@@ -5243,11 +5295,23 @@ def create_checked(request, prefix, state_dir):
         result = {"created": True, "kind": kind, "cwd": cwd, "pane_id": pane_id,
                   "tab_id": (made.get("tab") or {}).get("tab_id") or root.get("tab_id"),
                   "workspace_id": (made.get("workspace") or {}).get("workspace_id") or root.get("workspace_id") or place,
-                  "new_workspace": place == "new", "state": "starting"}
+                  "new_workspace": place == "new", "state": "ready" if kind == "shell" else "starting"}
         if asked == "auto": result["workspace_label"] = next((w["label"] for w in workspaces if w["workspace_id"] == place), "")
         if spec: result["resume"] = {"id": spec["id"], **({"host": spec["host"]} if spec.get("host") else {})}
         # Saved before starting: even if this process dies now, a retry reports the pane, not a new one.
         receipt_save(db, req_id, result)
+        # A plain terminal (会话 「新建终端」): the tab's own shell is all there is to start. The new
+        # pane goes back as the 会话 list shows it (with its identity), so the phone opens it at once.
+        if kind == "shell":
+            try:
+                got = call(prefix + ["pane", "get", pane_id])
+                pane = got.get("pane", got) if isinstance(got, dict) else {}
+                if pane.get("pane_id") == pane_id and pane.get("terminal_id") and not pane.get("agent"):
+                    label = next((w.get("label", "") for w in workspaces if w["workspace_id"] == result["workspace_id"]), "")
+                    result["pane"] = dict(pane, identity=identity(pane), workspace_label=label)
+            except BridgeError: pass
+            receipt_save(db, req_id, result)
+            return result
         name = "pocket-" + req_id[:8]
         if kind == "ch": outcome = start_ch(prefix, pane_id, deadline, resume_text(spec) if spec else CH_NEW)
         else: outcome = start_in_pane(prefix, pane_id, kind, name, deadline, spec["args"] if spec else ())
@@ -7214,6 +7278,16 @@ def herdr_start(request, state_dir):
     return result
 
 
+def with_panes(result, request, prefix):
+    """`agents` / `status` with `panes: true` (the 会话 list on screen): the ordinary panes too, in
+    the same round trip (panes(details=True)). Read-only. A pane listing that fails leaves `panes`
+    out, so the phone keeps the list it has; the agents answer stands either way."""
+    if request.get("panes") is not True: return result
+    try: result["panes"] = panes(prefix, details=True)
+    except (BridgeError, OSError, ValueError, KeyError, TypeError): pass
+    return result
+
+
 def server_brief():
     """For `sessions`: which run of the default server is up (pid and start time from its log), so
     the phone can tell that Herdr restarted. Read-only, no subprocess."""
@@ -7321,12 +7395,12 @@ def handle(request, state_dir=None):
     prefix = select_session(request)
     # The screen notes live in the state folder the request runs with (main passes the real one).
     screens = state_dir or True
-    if op == "status": return {"agents": herdr_status(prefix, screens)}
+    if op == "status": return with_panes({"agents": herdr_status(prefix, screens)}, request, prefix)
     if op == "agents":
         links = links_for(state_dir)
         try:
             if request.get("target") is not None: return follow_pane(request, prefix, links)
-            return {"agents": agents(prefix, include_history=True, screens=screens, links=links)}
+            return with_panes({"agents": agents(prefix, include_history=True, screens=screens, links=links)}, request, prefix)
         finally: links.save()
     if op == "link": return link_history(request, prefix, links_for(state_dir))
     found = agents(prefix, screens=screens)
