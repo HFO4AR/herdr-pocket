@@ -281,5 +281,32 @@ class CreateTests(unittest.TestCase):
         self.assertEqual(bridge.handle(self.req(), self.state)["created"], True, "no receipt was taken")
 
 
+    # 会话 「新建终端」: a tab with its own shell, nothing started or typed in it.
+    def test_shell_is_a_new_tab_only(self):
+        self.pane_after = {"pane_id": "w1:p9", "terminal_id": "term_9", "tab_id": "w1:t5", "workspace_id": "w1", "cwd": str(self.project)}
+        r = bridge.handle(self.req(kind="shell"), self.state)
+        self.assertEqual((r["created"], r["state"], r["pane_id"], r["kind"]), (True, "ready", "w1:p9", "shell"))
+        self.assertEqual(self.mutations(), [["tab", "create", "--workspace", "w1", "--cwd", str(self.project), "--no-focus"]])
+        self.assertEqual(r["pane"]["identity"], bridge.identity(self.pane_after))
+        self.assertEqual(r["pane"]["workspace_label"], "site")
+        # Same id again: the receipt answers, no second tab.
+        self.assertEqual(bridge.handle(self.req(kind="shell"), self.state)["pane_id"], "w1:p9")
+        self.assertEqual(len(self.mutations()), 1)
+
+    def test_shell_pane_unreadable_or_taken_has_no_pane(self):
+        self.pane_after = {"pane_id": "w1:p9", "terminal_id": "term_9", "agent": "codex"}
+        r = bridge.handle(self.req(kind="shell"), self.state)
+        self.assertEqual((r["created"], r["state"]), (True, "ready"))
+        self.assertNotIn("pane", r)
+
+    def test_shell_cannot_resume_or_skip_checks(self):
+        with self.assertRaisesRegex(bridge.BridgeError, "^没继续"):
+            bridge.handle(self.req(kind="shell", resume={"id": "12345678-1234-4234-8234-123456789012"}), self.state)
+        with self.assertRaisesRegex(bridge.BridgeError, "^没创建"):
+            bridge.handle(self.req(kind="shell", workspace="w9"), self.state)
+        self.assertEqual(self.mutations(), [])
+        info = bridge.handle({"v": 1, "op": "createInfo", "session": "default"})
+        self.assertNotIn("shell", [k["kind"] for k in info["kinds"]])
+
 if __name__ == "__main__":
     unittest.main()

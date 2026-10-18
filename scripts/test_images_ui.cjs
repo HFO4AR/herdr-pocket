@@ -25,7 +25,7 @@ await page.addInitScript(()=>{
    const hue={upload:12,ch:200,transcript:140}[args.kind]||60;const full=args.variant==='full';
    return ok({url:pic(full?1200:360,full?900:270,hue+(args.block||0)*30,args.kind==='transcript'?'截图 '+(args.block+1):args.kind==='ch'?'远端':'照片'),width:360,height:270});}
   throw Error('Forbidden native call in offline UI test: '+op);}};});
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 const folder=path.join(root,'ui-artifacts');
 // Screenshots without a leftover toast from an earlier step.
 const shot=async file=>{await page.evaluate(()=>document.getElementById('toast').classList.remove('show'));await page.waitForTimeout(250);await page.screenshot({path:file});};fs.mkdirSync(folder,{recursive:true});

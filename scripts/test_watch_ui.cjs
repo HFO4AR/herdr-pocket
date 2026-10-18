@@ -22,7 +22,7 @@ await page.addInitScript(()=>{window.watchPayloads=[];window.cacheStore=new Map(
   if(op==='watchState')watchPayloads.push(a);
   if(op==='cachePut')cacheStore.set(a.key,a.value);if(op==='cacheGet')data={value:cacheStore.get(a.key)||null};
   setTimeout(()=>nativeResult(id,{ok:true,data}),0);}};});
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
 await page.getByText('离线演示 · 示例数据，不连接电脑',{exact:true}).waitFor();
 const ASYNC=id=>JSON.stringify({questions:[{title:'先修哪个？ '+id,options:['修测试','写文档']}]});

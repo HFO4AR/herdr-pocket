@@ -33,7 +33,7 @@ async function open(w,h,dark){
  const ctx=await browser.newContext({viewport:{width:w,height:h},deviceScaleFactor:2,hasTouch:true,isMobile:true,colorScheme:dark?'dark':'light'});
  const page=await ctx.newPage();page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});
  await page.addInitScript(()=>{window.PocketNative={request(id,op){if(!['devices','demo','disconnect','protect','watchState'].includes(op))throw Error('Forbidden native call in offline UI test: '+op);setTimeout(()=>nativeResult(id,{ok:true,data:op==='devices'?{devices:[]}:{}}),0);}};});
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
  if(dark)await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});
  const cdp=await ctx.newCDPSession(page);

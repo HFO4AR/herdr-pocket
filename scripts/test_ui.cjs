@@ -9,7 +9,7 @@ const page=await browser.newPage({viewport:{width:390,height:844},deviceScaleFac
 const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});
 await page.exposeFunction('testLog',console.log);
 await page.addInitScript(()=>{let devices=[];window.PocketNative={request(id,op,raw){const a=JSON.parse(raw);let data={};if(op==='devices')data={devices};else if(op==='saveDevice'){if(!a.host||!a.user||a.port<1||a.port>65535){setTimeout(()=>nativeResult(id,{ok:false,error:'填写主机、用户名和有效端口'}),0);return;}const deviceId=a.id||'fixture';devices=[{...a,id:deviceId,remember:!!a.remember}];delete devices[0].password;data={devices,id:deviceId};}else if(op==='deleteDevice'){devices=[];data={devices};}else if(op==='connect'){window.fixtureConnect=a;devices=devices.map(d=>({...d,remember:!!a.remember}));data={device:devices[0],devices,ready:false};}else if(!['demo','disconnect','protect'].includes(op)){throw Error('Forbidden network call in offline UI test: '+op);}setTimeout(()=>nativeResult(id,{ok:true,data}),0);}};});
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 await page.getByRole('button',{name:'添加第一台设备'}).click();
 await page.getByRole('button',{name:'保存设备',exact:true}).click();
 // Inline validation: nothing reaches native until the fields make sense.

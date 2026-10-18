@@ -20,7 +20,7 @@ async function fresh(width=390,height=844,opts={}){
   window.PocketNative={request(id,op,raw){nativeCalls.push(op);if(!['devices','demo','disconnect','protect','watchState','settings','cacheGet','cachePut'].includes(op))throw Error('Forbidden native call in offline UI test: '+op);
    const a=JSON.parse(raw||'{}');let data={};if(op==='devices')data={devices:[]};if(op==='cacheGet')data={value:store.get(a.device+'\n'+a.key)||null};if(op==='cachePut')store.set(a.device+'\n'+a.key,a.value);
    setTimeout(()=>nativeResult(id,{ok:true,data}),0);}};});
- await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+ await page.goto(require('./ui_bundle.cjs').url(html));
  await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
  await page.getByText('离线演示 · 示例数据，不连接电脑',{exact:true}).waitFor();
  if(opts.demo)return page;

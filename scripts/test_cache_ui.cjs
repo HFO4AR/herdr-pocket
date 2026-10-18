@@ -43,7 +43,7 @@ await page.addInitScript(()=>{
   else if(!['watchState','protect','setAlerts','demo','disconnect'].includes(op))throw Error('unexpected native op '+op);
   setTimeout(()=>nativeResult(id,{ok:true,data}),0);}};
 });
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 const shot=name=>page.screenshot({path:path.join(shots,'cache-'+name+'.png')});
 
 // 1. Connecting: the cached list shows at once, nothing is read over SSH yet.

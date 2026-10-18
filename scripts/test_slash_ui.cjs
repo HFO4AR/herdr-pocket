@@ -50,7 +50,7 @@ await page.addInitScript(()=>{
   }catch(e){setTimeout(()=>nativeResult(id,{ok:false,error:e.message}),10);return;}
   setTimeout(()=>nativeResult(id,{ok:true,data}),10);}};
 });
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 await page.evaluate(()=>{window.followInterval=()=>1e9;});
 const shot=async name=>{await page.evaluate(()=>document.getElementById('toast').classList.remove('show'));await page.waitForTimeout(250);await page.screenshot({path:path.join(shots,'slash-'+name+'.png')});};
 const box=()=>page.getByRole('textbox',{name:'消息输入框',exact:true});

@@ -63,7 +63,7 @@ await page.addInitScript(()=>{
   }catch(e){setTimeout(()=>nativeResult(id,{ok:false,error:e.message}),10);return;}
   setTimeout(()=>nativeResult(id,{ok:true,data}),10);}};
 });
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 await page.evaluate(()=>{window.followInterval=()=>1e9;});
 const shot=async name=>{if(!shots)return;await page.evaluate(()=>document.getElementById('toast')?.classList.remove('show'));await page.waitForTimeout(300);await page.screenshot({path:path.join(shots,'tmuxagent-'+name+'.png')});};
 const both=async name=>{await shot(name);await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});await shot(name+'-dark');await page.evaluate(()=>{document.documentElement.dataset.theme='light';});};

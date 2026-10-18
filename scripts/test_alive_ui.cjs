@@ -21,7 +21,7 @@ await page.addInitScript(()=>{
   if(op==='cacheInfo')return reply(id,{bytes:0,entries:0});
   if(['openUrl','disconnect','protect'].includes(op))return reply(id,{});
   throw Error('Forbidden native call in offline UI test: '+op);}};});
-await page.goto('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+await page.goto(require('./ui_bundle.cjs').url(html));
 const folder=path.join(root,'ui-artifacts');fs.mkdirSync(folder,{recursive:true});
 const setCalls=()=>page.evaluate(()=>nx.calls.filter(c=>c.op==='setSetting').map(c=>[c.a.key,c.a.value]));
 
