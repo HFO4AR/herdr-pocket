@@ -102,17 +102,25 @@ function qaCard(model){
  const st=qaState(model.key);const card=el('section','qa-card '+(model.kind||'question'));card.setAttribute('role','group');card.setAttribute('aria-label',model.kind==='approval'?'等你确认':'Agent 的提问');
  // Redraw in place, keeping the option list where the reader scrolled it.
  const redraw=()=>{const top=card.querySelector('.qa-body')?.scrollTop||0;const next=qaCard(model);card.replaceWith(next);const body=next.querySelector('.qa-body');if(body)body.scrollTop=top;return next;};
- const head=el('div','qa-head');head.append(icon(model.kind==='approval'?'alert':'chat'));const t=el('strong','grow',model.title);if(model.step)t.append(el('span','qa-step',model.step));head.append(t);
+ // Several questions in one card (Codex async): numbered, counted, and after a first answer the next
+ // open one comes into view (qaNext). The card never scrolls on its own in the timeline (answer.css).
+ const n=model.questions.length,many=n>1;
+ const head=el('div','qa-head');head.append(icon(model.kind==='approval'?'alert':'chat'));const t=el('strong','grow',model.title);const step=many?'已答 '+qaCount(model,st)+'/'+n:model.step;if(step)t.append(el('span','qa-step',step));head.append(t);
  if(model.onRaw)head.append(btn('用按键操作','link-btn',model.onRaw));card.append(head);
  const body=el('div','qa-body');
  if(model.context){const pre=el('pre','qa-context',model.context);body.append(pre);}
  const locked=st.busy||qaSent(st);
+ // A first choice on a single-choice question moves on to the next open one.
+ const pick=(i,was)=>{const next=redraw();if(many&&!was)qaNext(next,model,st,i);};
  model.questions.forEach((q,i)=>{
-  const box=el('div','qa-q');if(q.header)box.append(el('div','qa-header',q.header));if(q.question)box.append(el('p','qa-question',q.question));
+  const box=el('div','qa-q');box.dataset.q=String(i);
+  if(many){const top=el('div','qa-qtop');top.append(el('span','qa-num'+(qaDone(q,st,i)?' done':''),'第 '+(i+1)+'/'+n+' 题'+(qaDone(q,st,i)?' · 已答':'')));if(q.header)top.append(el('span','qa-header',q.header));box.append(top);}
+  else if(q.header)box.append(el('div','qa-header',q.header));
+  if(q.question)box.append(el('p','qa-question',q.question));
   const list=el('div','qa-options');list.setAttribute('role',q.multi?'group':'radiogroup');list.setAttribute('aria-label',q.question||model.title);
   const chosen=q.multi?(st.multi[i]||(st.multi[i]=new Set())):null;
   q.options.forEach(o=>{const on=q.multi?chosen.has(o.n):st.sel[i]===o.n&&!st.other[i];
-   const b=btn('','qa-opt'+(on?' on':''),()=>{if(q.multi){if(chosen.has(o.n))chosen.delete(o.n);else chosen.add(o.n);}else{st.sel[i]=o.n;st.other[i]=false;}st.error='';redraw();});
+   const b=btn('','qa-opt'+(on?' on':''),()=>{const was=qaDone(q,st,i);if(q.multi){if(chosen.has(o.n))chosen.delete(o.n);else chosen.add(o.n);}else{st.sel[i]=o.n;st.other[i]=false;}st.error='';if(q.multi)redraw();else pick(i,was);});
    b.setAttribute('role',q.multi?'checkbox':'radio');b.setAttribute('aria-checked',String(on));b.disabled=locked;
    const mark=el('span','qa-mark'+(q.multi?' box':''));if(on)mark.append(icon('check'));const txt=el('span','qa-opt-text');txt.append(el('span','qa-label',o.label));if(o.description)txt.append(el('small','qa-desc',o.description));b.append(mark,txt);list.append(b);});
   if(q.textRow!==null&&q.textRow!==undefined){const on=!!st.other[i];
@@ -125,7 +133,9 @@ function qaCard(model){
   box.append(list);body.append(box);});
  card.append(body);
  const foot=el('div','qa-foot');foot.setAttribute('aria-live','polite');
- if(st.error){const n=el('p','qa-error',st.error);n.setAttribute('role','alert');foot.append(n);}
+ if(st.error){const e=el('p','qa-error',st.error);e.setAttribute('role','alert');foot.append(e);}
+ // The answer bar stays in view (sticky in the timeline): how many are answered and a way to the next open one.
+ const progress=many?el('div','qa-progress'):null;if(progress)foot.append(progress);
  const submit=btn(model.submitText||'发送回答','primary qa-submit',()=>{if(qaReady(model,st))model.onSubmit(st);});
  // Closing never answers (see the top of this file). Hidden while an answer is on its way.
  const close=model.onClose&&!st.busy&&!qaSent(st)?btn(model.closeText||'暂不回答','secondary qa-close',()=>model.onClose(st)):null;
@@ -133,9 +143,23 @@ function qaCard(model){
  if(qaSent(st)||st.busy){submit.replaceChildren(el('span','spinner mini'),document.createTextNode(st.busy?'正在操作，先核对屏幕再确认…':model.kind==='approval'?'已确认，等它继续…':'已回答，等它继续…'));submit.classList.add('pending');}
  // 「写消息」: on a short screen the card takes the input's place; this folds it (foot.js, CSS shows it there).
  const row=el('div','qa-actions');if(model.onWrite)row.append(btn('写消息','secondary qa-write foot-write',model.onWrite,'pen'));if(close)row.append(close);row.append(submit);foot.append(row);card.append(foot);
- function sync(){submit.disabled=locked||!qaReady(model,st);}
+ function sync(){submit.disabled=locked||!qaReady(model,st);
+  if(progress){const done=qaCount(model,st),open=model.questions.findIndex((q,i)=>!qaDone(q,st,i));
+   progress.replaceChildren(el('span','qa-progress-text',done===n?n+' 题都答好了，可以发送':'已答 '+done+'/'+n+(done?' · 没答的不会发':'')));
+   if(open>=0&&!locked)progress.append(btn('去第 '+(open+1)+' 题','link-btn qa-goto',()=>qaShow(card,open),'down'));
+   const step=card.querySelector('.qa-head .qa-step');if(step)step.textContent='已答 '+done+'/'+n;
+   const num=card.querySelector('.qa-q[data-q="'+st.focus+'"] .qa-num');if(num){const d=qaDone(model.questions[st.focus],st,st.focus);num.classList.toggle('done',d);num.textContent='第 '+(st.focus+1)+'/'+n+' 题'+(d?' · 已答':'');}}}
  sync();return card;}
-function qaReady(model,st){return model.questions.some((q,i)=>(q.multi?st.multi[i]?.size>0:st.sel[i]!=null&&!st.other[i])||(st.other[i]&&qaLine(st.text[i]).length>0));}
+function qaDone(q,st,i){return (q.multi?st.multi[i]?.size>0:st.sel[i]!=null&&!st.other[i])||(!!st.other[i]&&qaLine(st.text[i]).length>0);}
+function qaCount(model,st){return model.questions.filter((q,i)=>qaDone(q,st,i)).length;}
+function qaReady(model,st){return model.questions.some((q,i)=>qaDone(q,st,i));}
+// Bring question i to the top of whatever scrolls it (the timeline, or the card body above the input).
+function qaShow(card,i){const box=card?.querySelector('.qa-q[data-q="'+i+'"]');if(box)box.scrollIntoView({block:'start',behavior:tlCalm()?'auto':'smooth'});}
+// After answering question i: the next open question below it, else the first open one above, else
+// nothing (the answer bar with 发送回答 is already in view).
+function qaNext(card,model,st,i){
+ const open=model.questions.map((q,k)=>k).filter(k=>k!==i&&!qaDone(model.questions[k],st,k));
+ const k=open.find(x=>x>i)??open[0];if(k!==undefined)requestAnimationFrame(()=>qaShow(card,k));}
 
 // ─── Blocked on a TUI menu ──────────────────────────────────────────────────
 // fetchTerminal hands every read here; the card only redraws when the menu itself changed.
@@ -176,7 +200,7 @@ function qaMenuModel(menu,a){
  let q=null,step='';const call=[...S.messages].reverse().find(m=>qaIsTool(m));const p=call?qaParse(call):null;
  if(p&&!p.async&&menu.kind==='question'&&qaOutcome(call,p,S.messages).state==='waiting'){
   const i=p.questions.findIndex(x=>qaLoose(x.question,menu.question)||(menu.question&&qaNorm(x.question).includes(qaNorm(menu.question))));
-  const k=i>=0?i:p.questions.length===1?0:-1;if(k>=0){q=p.questions[k];if(p.questions.length>1)step=(k+1)+'/'+p.questions.length;}}
+  const k=i>=0?i:p.questions.length===1?0:-1;if(k>=0){q=p.questions[k];if(p.questions.length>1)step='第 '+(k+1)+'/'+p.questions.length+' 题';}}
  if(!step&&menu.tabs?.length>1)step=menu.tabs.filter(t=>t.done).length+'/'+menu.tabs.length+' 已答';
  const rows=menu.options.filter(o=>!o.chat);const input=rows.find(o=>o.input);
  const options=rows.filter(o=>!o.input).map(o=>{const t=q?.options[o.n-1];const use=t&&qaLoose(t.label,o.label);return {n:o.n,label:use?t.label:o.label,description:use?t.description||o.description:o.description,screen:o.label};});
