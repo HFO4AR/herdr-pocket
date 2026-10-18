@@ -8,7 +8,19 @@
 .qa-head svg{width:18px;height:18px}
 .qa-head strong{font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .qa-step{margin-left:8px;font-size:12px;font-weight:500;color:var(--muted)}
-.qa-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:10px 12px 8px}
+/* No overscroll-behavior:contain here: Chrome/WebView treat an overflow:auto box as a scroll container
+   even when nothing overflows, and `contain` then swallowed every vertical drag that started on the
+   question or its options, so the timeline behind would not move (the middle of the screen felt dead). */
+.qa-body{flex:1;min-height:0;overflow:auto;padding:10px 12px 8px}
+.qa-q{scroll-margin-top:12px}
+.qa-qtop{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.qa-qtop .qa-header{margin-bottom:0}
+.qa-num{font-size:12px;font-weight:650;line-height:1.7;color:var(--muted)}
+.qa-num.done{color:var(--success)}
+.qa-progress{display:flex;align-items:center;gap:8px;min-height:28px;margin:-2px 0 -2px;font-size:12.5px;line-height:1.4;color:var(--muted)}
+.qa-progress-text{flex:1;min-width:0}
+.qa-progress .link-btn{flex-shrink:0;display:inline-flex;align-items:center;gap:3px;min-height:36px;padding:0 4px;color:var(--accent);font-size:12.5px;font-weight:600}
+.qa-progress .link-btn svg{width:15px;height:15px}
 .qa-q+.qa-q{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
 .qa-context{margin:0 0 10px;max-height:132px;overflow:auto;font:11.5px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;background:var(--terminal);color:var(--terminal-ink);border-radius:8px;padding:8px 10px}
 .qa-header{display:inline-block;margin-bottom:6px;padding:1px 8px;border-radius:6px;background:var(--soft);color:var(--accent);font-size:11.5px;font-weight:650;line-height:1.7}
@@ -71,6 +83,20 @@
 .qa-log-state.done{color:var(--success)}
 .qa-log-state.muted{color:var(--muted);font-weight:500}
 .qa-log .qa-card{margin:10px 0 0 30px;max-height:none;box-shadow:none}
+/* In the timeline the card is plain page content: one scroll container (the conversation), so a drag
+   anywhere on it scrolls; the answer bar sticks to the bottom of the view while the card is on screen.
+   overflow:clip keeps the rounded corners without making the card a scroll container (sticky needs that). */
+.qa-log .qa-card{overflow:clip}
+.qa-log .qa-body{overflow:visible}
+.qa-log .qa-foot{position:sticky;bottom:-18px;z-index:1;box-shadow:0 -6px 12px -10px rgba(0,0,0,.25)}
+/* Sticky offsets count from inside the conversation's padding (chat.css / layout.css .chat-body):
+   a negative bottom of the same size puts the bar on the edge, with nothing showing under it. */
+@media(max-height:500px){.qa-log .qa-foot{bottom:-8px}}
+@media(min-width:760px){.qa-log .qa-foot{bottom:-20px}}
+.wide-detail .qa-log .qa-foot{bottom:-24px}
+/* The back-to-latest arrow rises above that answer bar instead of covering 发送回答. */
+.chat-body-wrap:has(.qa-log .qa-foot) .jump-btn{bottom:var(--qa-jump,92px)}
+.chat-body-wrap:has(.qa-log .qa-progress) .jump-btn{--qa-jump:122px}
 
 @media(max-width:360px){.qa-log .qa-card{margin-left:0}.qa-opt{padding:10px}}
 @media(max-height:560px){
@@ -86,6 +112,9 @@
 /* In the footer the card shrinks with the panel (foot.css): the options scroll, head and answer bar stay. */
 .composer-wrap .qa-card{flex:0 1 auto;max-height:none}
 .composer-wrap .qa-card>.qa-head,.composer-wrap .qa-card>.qa-foot{flex-shrink:0}
+/* Above the input the options are a real scroll box with nothing behind it to hand a drag to (the
+   conversation is not its ancestor): keep the drag from stretching the whole page at its ends. */
+.composer-wrap .qa-body{overscroll-behavior:contain}
 /* The head's link (用按键操作) keeps a 44 px target inside the clipped card. */
 .composer-wrap .qa-head{min-height:44px}
 .composer-wrap .qa-head .link-btn{min-height:44px}
