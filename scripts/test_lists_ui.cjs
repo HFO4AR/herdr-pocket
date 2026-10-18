@@ -58,8 +58,9 @@ const overflow=page=>page.evaluate(()=>document.documentElement.scrollWidth-inne
  assert.ok(await overflow(page)<=0,'live overflows');
  await page.screenshot({path:path.join(folder,'lists-live-390.png')});
  // Freshness ticks without a re-render (status polls held: with agents working the list polls every 2.5 s).
- await page.evaluate(()=>{S.statusSupported=false;const n=document.querySelector('[data-fmt="upd"]');n.dataset.since=Date.now()-42000;});
- await page.getByText('42 秒前更新',{exact:true}).waitFor({timeout:3000});
+ // S.liveAt moves too: another poller may repaint the row from it (tmux list, activity) on a slow runner.
+ await page.evaluate(()=>{S.statusSupported=false;S.liveAt=Date.now()-42000;const n=document.querySelector('[data-fmt="upd"]');n.dataset.since=S.liveAt;});
+ await page.getByText(/^4\d 秒前更新$/).first().waitFor({timeout:5000});
  await page.evaluate(()=>{S.statusSupported=true;});
  await noInput(page);
  await page.context().close();console.log('PASS: 会话 groups, counts, freshness, search, project chips and clear');}
