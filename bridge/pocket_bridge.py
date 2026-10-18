@@ -151,6 +151,10 @@ def doctor():
     if result["herdr"]:
         try: result["running"] = sum(1 for s in sessions() if s.get("running"))
         except BridgeError as exc: result["error"] = str(exc)[:300]
+        # The default session's server: running / mismatch (another version) / stopped (herdrHealth).
+        st = guard_module()["status"](herdr_binary(), 8)
+        if st: result["server"] = {"state": ("mismatch" if st.get("compatible") is False else "running") if st.get("running") else "stopped",
+                                   "version": st.get("version")}
     return result
 
 
@@ -5581,6 +5585,850 @@ def herdr_status(prefix, screens=False):
     return [dict({k: a.get(k) for k in fields}, **{k: a[k] for k in extra if k in a}) for a in agents(prefix, screens=screens)]
 
 
+# ─── Herdr server health, 「启动 Herdr」 and 「Herdr 守护」 ──────────────────────────
+# The server of the default session can die under the person (the OOM killer, a crash). `herdrHealth`
+# says precisely how it is and how the last run ended (Herdr's own log, plus the system journal for a
+# memory kill), `herdrStart` starts it again on an explicit tap, and `guardPlan` / `guardSet` install
+# or remove the opt-in guard. The guard is the script below: written to ~/.herdr-pocket/guard and run
+# by a systemd user service (or, without systemd, by two crontab lines). The bridge loads the same
+# code for its own checks and starts, so both decide and start the same way. Nothing here stops,
+# restarts or signals a running Herdr, and nothing reads or writes its panes.
+GUARD_SCRIPT = r'''#!/usr/bin/env python3
+"""Herdr Pocket 「Herdr 守护」: keeps this user's Herdr server (the default session) running.
+
+Installed only when the person turns on 「Herdr 守护」 in Herdr Pocket, and removed by 「关闭守护」.
+Every 10 seconds it asks `herdr status server --json` whether the server answers. When the server is
+gone it reads the end of Herdr's own log (herdr-server.log) to tell how it ended:
+  · no clean shutdown logged (killed, crashed, out of memory)  -> start `herdr server` again;
+  · a clean shutdown while this guard was watching (`herdr server stop`, a kill with SIGTERM)
+    -> left alone, unless started with --always;
+  · it ended before this guard started (the computer restarted, a new login) -> started with --boot.
+Starts back off (10 s, 30 s, 1 min, 2 min, then every 5 min) while the server keeps dying.
+It never stops, restarts or signals a running Herdr, never starts a second one (a server that still
+holds its socket counts as running), and never reads or writes panes or agents.
+Standard library only; state (no message content) in ~/.local/state/herdr-pocket/guard-v1.json.
+"""
+import datetime
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+GUARD_VERSION = 1
+UNIT = "herdr-pocket-guard.service"
+SERVER_UNIT = "herdr-pocket-server"
+CHECK_EVERY = 10
+BACKOFF = (0, 10, 30, 60, 120, 300)
+QUIET_AFTER = 600
+STARTUP = re.compile(r'^(\S+)\s.*event="app\.startup".*?\bpid=(\d+)')
+SHUTDOWN = re.compile(r'^(\S+)\s.*event="app\.shutdown".*?\bpid=(\d+)')
+STAMP = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:?\d\d)?")
+DROP_ENV = ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_ORIGINAL_COMMAND", "INVOCATION_ID", "JOURNAL_STREAM",
+            "NOTIFY_SOCKET", "LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES", "MANAGERPID", "SYSTEMD_EXEC_PID", "WATCHDOG_PID", "WATCHDOG_USEC")
+_children = []
+_verbose = False
+
+
+def state_dir():
+    return Path.home() / ".local/state/herdr-pocket"
+
+
+def find_herdr(given=None):
+    for path in (given, shutil.which("herdr"), str(Path.home() / ".local/bin/herdr")):
+        if path and os.path.isfile(path) and os.access(path, os.X_OK): return os.path.abspath(path)
+    return None
+
+
+def clean_env(herdr=None):
+    """The environment Herdr (and so its pane shells) gets: ours without Herdr's and SSH's own
+    variables, with the folder of herdr and ~/.local/bin on PATH."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_") and k not in DROP_ENV}
+    parts = [p for p in (env.get("PATH") or "/usr/local/bin:/usr/bin:/bin").split(":") if p]
+    for extra in reversed(([os.path.dirname(herdr)] if herdr else []) + [str(Path.home() / ".local/bin")]):
+        if extra not in parts: parts.insert(0, extra)
+    env["PATH"] = ":".join(parts)
+    env.setdefault("HOME", str(Path.home()))
+    runtime = "/run/user/%d" % os.getuid()
+    if not env.get("XDG_RUNTIME_DIR") and os.path.isdir(runtime): env["XDG_RUNTIME_DIR"] = runtime
+    return env
+
+
+def run(args, timeout=10, env=None, stdin=None):
+    """(returncode, stdout, stderr); returncode None when it could not run or timed out."""
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env or clean_env(),
+                           input=stdin, stdin=None if stdin is not None else subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return None, "", str(exc)
+    return r.returncode, r.stdout, r.stderr
+
+
+def status(herdr, timeout=10):
+    """`herdr status server --json` for the default session, or None when it cannot be read."""
+    if not herdr: return None
+    code, out, _ = run([herdr, "status", "server", "--json"], timeout, clean_env(herdr))
+    if code != 0: return None
+    try: data = json.loads(out)
+    except ValueError: return None
+    return data if isinstance(data, dict) and "running" in data else None
+
+
+def config_dir():
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "herdr"
+
+
+def log_path(st=None):
+    """herdr-server.log sits next to the server socket (status reports the socket path)."""
+    sock = (st or {}).get("socket")
+    return (Path(sock).parent if isinstance(sock, str) and sock.startswith("/") else config_dir()) / "herdr-server.log"
+
+
+def listening(path):
+    """Some process still holds this unix socket open and listening (/proc/net/unix): a server that
+    is starting or hung. None when that cannot be read (no /proc)."""
+    try:
+        with open("/proc/net/unix") as f: lines = f.read().splitlines()[1:]
+    except OSError: return None
+    for line in lines:
+        parts = line.split(None, 7)
+        if len(parts) == 8 and parts[7] == path:
+            try:
+                if int(parts[3], 16) & 0x10000: return True
+            except ValueError: pass
+    return False
+
+
+def stamp(text):
+    """Epoch seconds of a log line's leading RFC 3339 time, or None."""
+    m = STAMP.match(text)
+    if not m: return None
+    zone = m.group(3) or "Z"
+    zone = "+00:00" if zone == "Z" else zone if ":" in zone else zone[:3] + ":" + zone[3:]
+    try: return datetime.datetime.fromisoformat(m.group(1) + "." + (m.group(2) or "0")[:6].ljust(6, "0") + zone).timestamp()
+    except ValueError: return None
+
+
+_log_cache = {}
+
+
+def log_runs(path, want=1, limit=16 << 20, chunk=256 << 10):
+    """The last `want` server runs in Herdr's log, oldest first: {pid, started, ended, clean, last}.
+    `clean` is a logged shutdown of that pid; `last` is the time of the run's last log line (about
+    when an unclean run died). Read backwards in chunks until enough startups are found."""
+    try:
+        info = os.stat(path)
+        key = (str(path), want, info.st_size, info.st_mtime_ns)
+        if key in _log_cache: return _log_cache[key]
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END); size = f.tell(); pos = size; data = b""
+            while pos > 0 and size - pos < limit:
+                step = min(chunk, pos); pos -= step; f.seek(pos); data = f.read(step) + data
+                if data.count(b'event="app.startup"') >= want + (1 if pos else 0): break
+    except OSError: return None
+    lines = data.decode("utf-8", "replace").splitlines()
+    if pos > 0 and lines: lines = lines[1:]
+    found, current = [], None
+    for line in lines:
+        m = STARTUP.match(line)
+        if m:
+            current = {"pid": int(m.group(2)), "started": stamp(m.group(1)), "ended": None, "clean": False, "last": stamp(m.group(1))}
+            found.append(current); continue
+        if current is None: continue
+        t = stamp(line)
+        if t is not None and not current["clean"]: current["last"] = t
+        m = SHUTDOWN.match(line)
+        if m and int(m.group(2)) == current["pid"]: current["clean"], current["ended"] = True, stamp(m.group(1))
+    _log_cache.clear(); _log_cache[key] = found[-want:]
+    return found[-want:]
+
+
+def boot_time():
+    try:
+        with open("/proc/stat") as f:
+            for line in f:
+                if line.startswith("btime "): return float(line.split()[1])
+    except (OSError, ValueError): pass
+    return None
+
+
+_oom_cache = {}
+
+
+def memory_kill(last, cgroup=None, timeout=8):
+    """Evidence in the system journal that this run was killed for memory: the kernel OOM killer
+    ("Killed process <pid> (herdr)"), earlyoom naming the pid, or systemd-oomd killing the cgroup
+    the server was last seen in. {"source", "line"}; False when the journal was searched and holds
+    none; None when it cannot be read (no journalctl, no permission)."""
+    if not last or not last.get("pid") or not shutil.which("journalctl"): return None
+    key = (last["pid"], last.get("started"), cgroup)
+    if key in _oom_cache: return _oom_cache[key]
+    found = _memory_kill(last, cgroup, timeout)
+    if found is not None: _oom_cache[key] = found
+    return found
+
+
+def _memory_kill(last, cgroup, timeout):
+    since = int((last.get("started") or time.time() - 86400) - 5)
+    pid = last["pid"]
+    code, out, err = run(["journalctl", "--no-pager", "-q", "-o", "short-iso", "--since", "@%d" % since,
+                          "-g", r"Killed process %d \(herdr\)|earlyoom|systemd-oomd" % pid], timeout)
+    if code not in (0, 1) or "insufficient permissions" in err or "not seeing messages from other users and the system" in err:
+        return None
+    for line in out.splitlines():
+        if "Killed process %d (herdr)" % pid in line: return {"source": "kernel", "line": line[-300:]}
+        if "earlyoom" in line and re.search(r"\b%d\b" % pid, line): return {"source": "earlyoom", "line": line[-300:]}
+        if "systemd-oomd" in line and cgroup and cgroup in line: return {"source": "systemd-oomd", "line": line[-300:]}
+    return False
+
+
+def server_cgroup(pid):
+    try:
+        with open("/proc/%d/cgroup" % pid) as f: text = f.read()
+    except (OSError, TypeError): return None
+    for line in text.splitlines():
+        if line.startswith("0::"): return line[3:].strip() or None
+    return None
+
+
+def systemd_user():
+    """The user's systemd instance answers (`systemctl --user`)."""
+    if sys.platform != "linux" or not shutil.which("systemctl"): return False
+    code, out, _ = run(["systemctl", "--user", "is-system-running"], 5)
+    return code is not None and out.strip() in ("running", "degraded", "starting", "initializing", "maintenance")
+
+
+def linger():
+    """loginctl Linger for this user: True / False / None (unknown)."""
+    import pwd
+    try: user = pwd.getpwuid(os.getuid()).pw_name
+    except KeyError: return None
+    if shutil.which("loginctl"):
+        code, out, _ = run(["loginctl", "show-user", user, "--property=Linger", "--value"], 5)
+        if code == 0 and out.strip() in ("yes", "no"): return out.strip() == "yes"
+    path = Path("/var/lib/systemd/linger")
+    return (path / user).exists() if path.is_dir() else None
+
+
+def oom_adjust():
+    """The lowest OOMScoreAdjust a user unit may ask for (the value the system gives the user's
+    systemd instance; lowering further needs root) when that is below what user units get by
+    default; else None (nothing to gain)."""
+    code, out, _ = run(["systemctl", "show", "user@%d.service" % os.getuid(), "--property=OOMScoreAdjust", "--value"], 5)
+    code2, out2, _ = run(["systemctl", "--user", "show", "--property=DefaultOOMScoreAdjust", "--value"], 5)
+    try: floor, default = int(out.strip()), int(out2.strip())
+    except ValueError: return None
+    if code != 0 or code2 != 0: return None
+    return floor if -1000 <= floor < default <= 1000 else None
+
+
+def start_systemd(herdr, oom):
+    """`herdr server` as its own transient user service: its own cgroup, OOMScoreAdjust when allowed."""
+    env = clean_env(herdr)
+    def args(name):
+        a = ["systemd-run", "--user", "--unit=" + name, "--collect", "--quiet",
+             "--description=Herdr server (started by Herdr Pocket)", "-p", "WorkingDirectory=" + str(Path.home())]
+        if oom is not None: a += ["-p", "OOMScoreAdjust=%d" % oom]
+        for k in ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "XDG_CONFIG_HOME", "SHELL"):
+            if env.get(k): a.append("--setenv=%s=%s" % (k, env[k]))
+        return a + ["--", herdr, "server"]
+    code, out, err = run(args(SERVER_UNIT), 20, env)
+    if code != 0 and re.search(r"(?i)already|exists|loaded", err):
+        # A finished run that was not collected yet keeps the name: forget its failed state, or
+        # use a fresh name. Never stop anything.
+        run(["systemctl", "--user", "reset-failed", SERVER_UNIT + ".service"], 5, env)
+        code, out, err = run(args(SERVER_UNIT), 20, env)
+        if code != 0:
+            name = "%s-%d" % (SERVER_UNIT, int(time.time()))
+            code, out, err = run(args(name), 20, env)
+            if code == 0: return {"unit": name + ".service"}
+    if code != 0: return {"error": (err or out or "systemd-run failed").strip()[:300]}
+    return {"unit": SERVER_UNIT + ".service"}
+
+
+def start_detached(herdr):
+    """`herdr server` in a new session with stdio on /dev/null, so it outlives this SSH request or
+    cron job (as long as the system keeps a logged-out user's processes, KillUserProcesses=no)."""
+    try:
+        child = subprocess.Popen([herdr, "server"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, cwd=str(Path.home()), env=clean_env(herdr),
+                                 start_new_session=True, close_fds=True)
+    except OSError as exc:
+        return {"error": str(exc)[:300]}
+    _children.append(child)
+    return {"pid": child.pid}
+
+
+def reap():
+    _children[:] = [c for c in _children if c.poll() is None]
+
+
+def start(herdr, method, wait=8.0, oom=None):
+    """Start the default session's Herdr server, detached. Never while one answers or still holds its
+    socket, and one start at a time (a lock shared with Herdr Pocket's 「启动 Herdr」)."""
+    folder = state_dir(); folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(folder / "herdr-start.lock", "a") as lock:
+        deadline = time.monotonic() + 15
+        while True:
+            try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB); break
+            except OSError:
+                if time.monotonic() > deadline: return {"started": False, "busy": True}
+                time.sleep(0.2)
+        st = status(herdr)
+        if st is None: return {"started": False, "error": "读不到 Herdr 的状态（herdr status 没回应）"}
+        if st.get("running"): return {"started": False, "already": True, "status": st}
+        sock = st.get("socket")
+        if isinstance(sock, str) and listening(sock): return {"started": False, "busy": True}
+        how = start_systemd(herdr, oom) if method == "systemd" else start_detached(herdr)
+        if how.get("error"): return {"started": False, "method": method, "error": how["error"]}
+        end, now = time.monotonic() + wait, None
+        while time.monotonic() < end:
+            time.sleep(0.3)
+            now = status(herdr, 5)
+            if now and now.get("running"): break
+        return dict({"started": True, "method": method, "running": bool(now and now.get("running")), "status": now}, **how)
+
+
+# ─── Watching ─────────────────────────────────────────────────────────────────
+
+def load_state():
+    try:
+        data = json.loads((state_dir() / "guard-v1.json").read_text())
+        if isinstance(data, dict) and data.get("v") == 1: return data
+    except (OSError, ValueError): pass
+    return {"v": 1, "events": []}
+
+
+def save_state(st):
+    folder = state_dir(); folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st["events"] = st.get("events", [])[-30:]
+    temp = folder / (".guard-v1.%d.tmp" % os.getpid())
+    temp.write_text(json.dumps(st))
+    os.chmod(temp, 0o600)
+    os.replace(temp, folder / "guard-v1.json")
+
+
+def note(st, what, reason, **extra):
+    event = dict({"at": int(time.time()), "what": what, "reason": reason}, **extra)
+    st.setdefault("events", []).append(event)
+    if _verbose: print("herdr-guard: %s (%s)%s" % (what, reason, " " + extra["detail"] if extra.get("detail") else ""), flush=True)
+
+
+def run_key(r):
+    return "%d@%d" % (r["pid"], int(r.get("started") or 0)) if r else None
+
+
+def judge(last, since, boot, cgroup):
+    """Why the server is gone: oom / crash / unknown (start), stopped (a clean stop while this guard
+    watched: leave it), before (ended before the guard was watching: start with --boot)."""
+    if not last: return "unknown", None
+    end = last["ended"] if last["clean"] else last["last"]
+    if boot and end and end < boot: return "before", None
+    if last["clean"]:
+        oom = memory_kill(last, cgroup)
+        if oom: return "oom", oom
+        return ("stopped" if end and end >= since - 1 else "before"), None
+    oom = memory_kill(last, cgroup)
+    return ("oom" if oom else "crash"), oom or None
+
+
+def tick(cfg, st, first=False):
+    """One look. Returns what it did: running / starting / waiting / left / started / failed / error."""
+    herdr = find_herdr(cfg["herdr"])
+    reap()
+    if not herdr:
+        if not st.get("missing"): st["missing"] = True; note(st, "error", "missing", detail="herdr not found"); save_state(st)
+        return "error"
+    if st.pop("missing", None): save_state(st)
+    now = time.time()
+    s = status(herdr)
+    if s is None: return "error"
+    if s.get("running"):
+        seen = st.get("seen") or {}
+        if now - seen.get("at", 0) > 300:
+            # Which run is up, and its cgroup (to recognise a systemd-oomd kill later).
+            runs = log_runs(log_path(s))
+            if runs: st["seen"] = {"key": run_key(runs[-1]), "pid": runs[-1]["pid"], "cgroup": server_cgroup(runs[-1]["pid"]), "at": int(now)}
+            else: st["seen"] = dict(seen, at=int(now))
+            save_state(st)
+        if st.get("fails") and now - st.get("last_start", 0) > QUIET_AFTER:
+            st["fails"] = 0; save_state(st)
+        return "running"
+    sock = s.get("socket")
+    if isinstance(sock, str) and listening(sock): return "starting"
+    if not first:
+        # An update or a restart by hand hands over within seconds: look once more.
+        time.sleep(3)
+        again = status(herdr)
+        if again is None or again.get("running"): return "running" if again else "error"
+    runs = log_runs(log_path(s))
+    last = runs[-1] if runs else None
+    key = run_key(last)
+    # Dealt with already (started again, or a clean stop left alone; --always overrides the latter).
+    if key and key == st.get("handled") and not (cfg.get("always") and st.get("handled_reason") == "stopped"): return "left"
+    seen = st.get("seen") or {}
+    reason, oom = judge(last, cfg["since"], boot_time(), seen.get("cgroup") if seen.get("key") == key else None)
+    want = reason in ("oom", "crash", "unknown") or (reason == "stopped" and cfg.get("always")) or (reason == "before" and cfg.get("boot"))
+    if not want:
+        # A clean stop this guard saw is someone's choice: remembered, so a later login or start of
+        # the guard leaves it too. One that ended before the guard watched is just not started now.
+        if reason == "stopped":
+            st["handled"], st["handled_reason"] = key, reason; note(st, "left", reason); save_state(st)
+        return "left"
+    if now < st.get("next", 0): return "waiting"
+    fails = st.get("fails", 0) + 1 if now - st.get("last_start", 0) < QUIET_AFTER else 1
+    result = start(herdr, cfg["method"], oom=cfg.get("oom"))
+    st["last_start"], st["fails"] = int(now), fails
+    st["next"] = int(now + BACKOFF[min(fails, len(BACKOFF) - 1)])
+    if result.get("started") or result.get("already"):
+        st["handled"], st["handled_reason"] = key, reason
+        extra = {"method": result.get("method"), "running": result.get("running")}
+        if oom: extra["oom"] = oom.get("source")
+        note(st, "started" if result.get("started") else "already", reason, **extra)
+        save_state(st)
+        return "started"
+    note(st, "failed", reason, detail=str(result.get("error") or ("busy" if result.get("busy") else "?"))[:200])
+    save_state(st)
+    return "failed"
+
+
+def parse_args(argv):
+    cfg = {"herdr": None, "boot": False, "always": False, "mode": None}
+    it = iter(argv)
+    for a in it:
+        if a in ("--watch", "--once"): cfg["mode"] = a[2:]
+        elif a == "--boot": cfg["boot"] = True
+        elif a == "--always": cfg["always"] = True
+        elif a == "--herdr": cfg["herdr"] = next(it, None)
+        else: raise SystemExit("herdr-guard: unknown argument " + a)
+    if not cfg["mode"]: raise SystemExit("usage: herdr-guard.py --watch|--once [--boot] [--always] [--herdr PATH]")
+    return cfg
+
+
+def main(argv):
+    global _verbose
+    cfg = parse_args(argv)
+    _verbose = True
+    os.umask(0o077)
+    state_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
+    if cfg["mode"] == "watch":
+        # Under systemd (--user): starts go to their own transient unit. "since" = this process.
+        cfg["method"] = "systemd" if os.environ.get("INVOCATION_ID") and systemd_user() else "detached"
+        cfg["since"] = time.time()
+        cfg["oom"] = oom_adjust() if cfg["method"] == "systemd" else None
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        first = True
+        while True:
+            with open(state_dir() / "guard.lock", "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                tick(cfg, load_state(), first)
+            first = False
+            time.sleep(CHECK_EVERY)
+    # --once (cron, every minute; --boot from @reboot): one look, a clean stop counts as watched
+    # when it happened after the computer started.
+    cfg["method"] = "detached"
+    cfg["since"] = boot_time() or 0
+    with open(state_dir() / "guard.lock", "a") as lock:
+        try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError: return 0
+        tick(cfg, load_state(), first=cfg["boot"])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+'''
+_guard_ns = None
+
+
+def guard_module():
+    global _guard_ns
+    if _guard_ns is None:
+        ns = {"__name__": "herdr_guard"}
+        exec(compile(GUARD_SCRIPT, "herdr-guard.py", "exec"), ns)
+        _guard_ns = ns
+    return _guard_ns
+
+
+GUARD_MARK = "# Installed by Herdr Pocket"
+CRON_MARK = "# herdr-pocket-guard"
+
+
+def guard_paths():
+    home = Path.home()
+    units = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config") / "systemd/user"
+    return {"script": home / ".herdr-pocket/guard/herdr-guard.py", "unit": units / guard_module()["UNIT"]}
+
+
+def guard_kind():
+    """("systemd" | "cron" | None, why not)."""
+    if sys.platform == "darwin": return None, "macOS 上还不支持 Herdr 守护（它靠 systemd 或 cron）。Herdr 停了可以点「启动 Herdr」。"
+    if not sys.platform.startswith("linux"): return None, "这台电脑的系统不支持 Herdr 守护。Herdr 停了可以点「启动 Herdr」。"
+    if guard_module()["systemd_user"](): return "systemd", None
+    if shutil.which("crontab"): return "cron", None
+    return None, "这台电脑没有 systemd 用户服务，也没有 crontab，守护装不了。Herdr 停了可以点「启动 Herdr」。"
+
+
+def guard_options(request):
+    boot, always = request.get("boot", True), request.get("always", False)
+    if not isinstance(boot, bool) or not isinstance(always, bool): raise BridgeError("Invalid guard options")
+    return {"boot": boot, "always": always}
+
+
+def guard_python():
+    """This interpreter through a stable name (a versioned path can vanish on an upgrade)."""
+    here = os.path.realpath(sys.executable or "")
+    for candidate in (shutil.which("python3"), "/usr/bin/python3", "/usr/local/bin/python3"):
+        if candidate and os.path.isabs(candidate) and os.path.realpath(candidate) == here: return candidate
+    return sys.executable or "/usr/bin/python3"
+
+
+def guard_command(herdr, mode, opts):
+    return [guard_python(), "-I", str(guard_paths()["script"]), "--" + mode, "--herdr", herdr] + \
+        (["--boot"] if opts["boot"] else []) + (["--always"] if opts["always"] else [])
+
+
+def systemd_quote(arg):
+    """One ExecStart word: % and $ doubled (specifiers, variables), quoted when not plain."""
+    text = arg.replace("%", "%%").replace("$", "$$")
+    if re.fullmatch(r"[A-Za-z0-9/._+:@=,-]+", text): return text
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def guard_unit_text(command):
+    return "\n".join([
+        GUARD_MARK + " (「Herdr 守护」). Turn it off in the app: 设备 → Herdr 守护 → 关闭守护.",
+        "# It only watches the Herdr server and starts it again after it was killed or crashed;",
+        "# it never stops, restarts or signals a running Herdr.",
+        "[Unit]",
+        "Description=Herdr Pocket guard: start the Herdr server again after it was killed",
+        "",
+        "[Service]",
+        "Type=simple",
+        "ExecStart=" + " ".join(systemd_quote(a) for a in command),
+        "Restart=on-failure",
+        "RestartSec=30",
+        "# Stopping or removing the guard stops only this watcher, never a Herdr server.",
+        "KillMode=process",
+        "",
+        "[Install]",
+        "WantedBy=default.target",
+        ""])
+
+
+def guard_cron_lines(herdr, opts):
+    """@reboot (with --boot) plus every minute; output dropped (the state file keeps what happened)."""
+    once = guard_command(herdr, "once", dict(opts, boot=False))
+    lines = ["* * * * * " + shlex.join(once) + " >/dev/null 2>&1 " + CRON_MARK]
+    if opts["boot"]: lines.insert(0, "@reboot " + shlex.join(guard_command(herdr, "once", opts)) + " >/dev/null 2>&1 " + CRON_MARK)
+    if any("%" in line or "\n" in line for line in lines): raise BridgeError("没开：路径里有 % 或换行，cron 没法用")
+    return lines
+
+
+def guard_digest(kind, files, cron):
+    return hashlib.sha256(json.dumps({"kind": kind, "files": [[f["path"], f["content"]] for f in files], "cron": cron},
+                                     sort_keys=True).encode()).hexdigest()
+
+
+def oom_values():
+    """(floor, default): the lowest oom_score_adj user units may ask for (what the system gave the
+    user's systemd instance) and what they get by default; None when unknown."""
+    g = guard_module()
+    code, out, _ = g["run"](["systemctl", "show", "user@%d.service" % os.getuid(), "--property=OOMScoreAdjust", "--value"], 5)
+    code2, out2, _ = g["run"](["systemctl", "--user", "show", "--property=DefaultOOMScoreAdjust", "--value"], 5)
+    try: return (int(out.strip()) if code == 0 else None), (int(out2.strip()) if code2 == 0 else None)
+    except ValueError: return None, None
+
+
+def kill_user_processes():
+    """logind KillUserProcesses: whether a logged-out user's processes are ended (None: unknown)."""
+    if not shutil.which("busctl"): return None
+    code, out, _ = guard_module()["run"](["busctl", "get-property", "org.freedesktop.login1", "/org/freedesktop/login1",
+                                          "org.freedesktop.login1.Manager", "KillUserProcesses"], 5)
+    return {"b true": True, "b false": False}.get(out.strip()) if code == 0 else None
+
+
+def read_crontab():
+    """The user's crontab lines ([] when there is none), or None when crontab cannot be read."""
+    code, out, err = guard_module()["run"](["crontab", "-l"], 10)
+    if code == 0: return out.splitlines()
+    if code == 1 and "no crontab" in (err or "").lower(): return []
+    return None
+
+
+def guard_status():
+    g = guard_module()
+    kind, why = guard_kind()
+    p = guard_paths()
+    result = {"supported": bool(kind), "kind": kind, "reason": why, "installed": False}
+    text = None
+    try:
+        if p["unit"].is_file() and not p["unit"].is_symlink(): text = p["unit"].read_text(errors="replace")[:20000]
+    except OSError: text = None
+    line = None
+    if text is not None and GUARD_MARK in text:
+        result.update(installed=True, kind="systemd", unit=str(p["unit"]))
+        line = next((x for x in text.splitlines() if x.startswith("ExecStart=")), "")
+        if kind == "systemd":
+            env = g["clean_env"]()
+            _, active, _ = g["run"](["systemctl", "--user", "is-active", g["UNIT"]], 5, env)
+            _, enabled, _ = g["run"](["systemctl", "--user", "is-enabled", g["UNIT"]], 5, env)
+            result.update(active=active.strip() == "active", state=active.strip()[:40], enabled=enabled.strip() == "enabled")
+    elif text is not None:
+        result["foreign"] = str(p["unit"])
+    if not result["installed"] and shutil.which("crontab"):
+        marked = [x for x in (read_crontab() or []) if x.rstrip().endswith(CRON_MARK)]
+        if marked:
+            result.update(installed=True, kind="cron", active=True, cron=marked)
+            line = next((x for x in marked if not x.startswith("@reboot")), marked[0])
+            result["boot"] = any(x.startswith("@reboot") for x in marked)
+    if result["installed"]:
+        words = line.split() if line else []
+        result.setdefault("boot", "--boot" in words)
+        result["always"] = "--always" in words
+        try: current = p["script"].read_bytes() if not p["script"].is_symlink() else b""
+        except OSError: current = b""
+        result["outdated"] = hashlib.sha256(current).hexdigest() != hashlib.sha256(GUARD_SCRIPT.encode()).hexdigest()
+        state = g["load_state"]()
+        result["events"] = [e for e in state.get("events", []) if isinstance(e, dict)][-6:]
+    return result
+
+
+def guard_plan(request):
+    """What 「开启守护」 would write and run, exactly; `digest` binds guardSet to it."""
+    opts = guard_options(request)
+    kind, why = guard_kind()
+    herdr = herdr_binary()
+    result = {"supported": bool(kind and herdr), "kind": kind, "reason": why if not kind else None if herdr else HERDR_MISSING, "options": opts}
+    if not result["supported"]: return result
+    herdr = os.path.abspath(herdr)
+    p = guard_paths()
+    files = [{"path": str(p["script"]), "content": GUARD_SCRIPT, "sha256": hashlib.sha256(GUARD_SCRIPT.encode()).hexdigest(), "what": "守护脚本"}]
+    cron = None
+    if kind == "systemd":
+        files.append({"path": str(p["unit"]), "content": guard_unit_text(guard_command(herdr, "watch", opts)), "what": "systemd 用户服务"})
+        commands = ["systemctl --user daemon-reload", "systemctl --user enable --now " + guard_module()["UNIT"]]
+        floor, default = oom_values()
+        result["oom"] = {"floor": floor, "default": default, "set": floor if floor is not None and default is not None and floor < default else None}
+        result["linger"] = guard_module()["linger"]()
+    else:
+        cron = guard_cron_lines(herdr, opts)
+        commands = ["crontab -l", "crontab -（原有的行不动，只在末尾加上这几行）"]
+        result["cron"] = cron
+    result.update(files=files, commands=commands, digest=guard_digest(kind, files, cron), herdr=herdr,
+                  remove=(["systemctl --user disable --now " + guard_module()["UNIT"] + "（只停守护自己）", "删除 " + str(p["unit"]), "systemctl --user daemon-reload", "删除 " + str(p["script"])]
+                          if kind == "systemd" else ["从 crontab 里删掉带 " + CRON_MARK + " 的行", "删除 " + str(p["script"])]))
+    return result
+
+
+def write_private(path, text, mode):
+    """Atomic write of our own file; a symlink at the path or in its folder is refused."""
+    folder = path.parent
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if folder.is_symlink() or path.is_symlink(): raise BridgeError("没开：" + str(path) + " 是个链接，没动它")
+    temp = folder / (".%s.%d.tmp" % (path.name, os.getpid()))
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    try:
+        with os.fdopen(fd, "w") as f: f.write(text); f.flush(); os.fsync(f.fileno())
+        os.chmod(temp, mode)
+        os.replace(temp, path)
+    except BaseException:
+        try: temp.unlink()
+        except OSError: pass
+        raise
+
+
+def guard_install(plan):
+    g = guard_module()
+    p = guard_paths()
+    env = g["clean_env"]()
+    status = guard_status()
+    if plan["kind"] == "systemd":
+        if status.get("foreign"): raise BridgeError("没开：" + status["foreign"] + " 已经有了，不是 Herdr Pocket 写的，没动它")
+        if status.get("installed") and status.get("kind") == "cron": guard_remove()
+        write_private(p["script"], GUARD_SCRIPT, 0o600)
+        write_private(p["unit"], plan["files"][1]["content"], 0o644)
+        steps = [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", g["UNIT"]],
+                 ["systemctl", "--user", "restart", g["UNIT"]]]
+        for step in steps:
+            code, out, err = g["run"](step, 10, env)
+            if code != 0:
+                # Back to how it was: the watcher stops (only it: KillMode=process), files go.
+                guard_remove()
+                raise BridgeError("没开：%s 失败：%s" % (" ".join(step[1:]), (err or out or "没有输出").strip()[:300]))
+        time.sleep(0.5)
+        _, active, _ = g["run"](["systemctl", "--user", "is-active", g["UNIT"]], 5, env)
+        return {"enabled": True, "kind": "systemd", "active": active.strip() == "active", "status": guard_status()}
+    lines = read_crontab()
+    if lines is None: raise BridgeError("没开：读不到 crontab（crontab -l 出错）")
+    if status.get("installed") and status.get("kind") == "systemd": guard_remove()
+    write_private(p["script"], GUARD_SCRIPT, 0o600)
+    keep = [x for x in lines if not x.rstrip().endswith(CRON_MARK)]
+    code, out, err = g["run"](["crontab", "-"], 10, env, "\n".join(keep + plan["cron"]) + "\n")
+    after = read_crontab() or []
+    if code != 0 or not all(x in after for x in plan["cron"]):
+        raise BridgeError("没开：写 crontab 失败：" + (err or out or "读回来对不上").strip()[:300])
+    return {"enabled": True, "kind": "cron", "active": True, "status": guard_status()}
+
+
+def guard_remove():
+    """Takes the guard away: the watcher (only it), its unit file or crontab lines, its script and
+    state. A Herdr server it started keeps running."""
+    g = guard_module()
+    p = guard_paths()
+    env = g["clean_env"]()
+    removed = []
+    try: text = p["unit"].read_text(errors="replace") if p["unit"].is_file() and not p["unit"].is_symlink() else None
+    except OSError: text = None
+    if text is not None and GUARD_MARK in text:
+        if shutil.which("systemctl"): g["run"](["systemctl", "--user", "disable", "--now", g["UNIT"]], 10, env)
+        try: p["unit"].unlink(); removed.append(str(p["unit"]))
+        except OSError as exc: raise BridgeError("没关干净：删不掉 " + str(p["unit"]) + "：" + str(exc)) from exc
+        if shutil.which("systemctl"): g["run"](["systemctl", "--user", "daemon-reload"], 10, env)
+    if shutil.which("crontab"):
+        lines = read_crontab()
+        if lines and any(x.rstrip().endswith(CRON_MARK) for x in lines):
+            keep = [x for x in lines if not x.rstrip().endswith(CRON_MARK)]
+            code, out, err = g["run"](["crontab", "-"], 10, env, "\n".join(keep) + ("\n" if keep else ""))
+            if code != 0: raise BridgeError("没关干净：改 crontab 失败：" + (err or out).strip()[:300])
+            removed.append("crontab")
+    for path in (p["script"], g["state_dir"]() / "guard-v1.json"):
+        try:
+            if path.is_file() or path.is_symlink(): path.unlink(); removed.append(str(path))
+        except OSError: pass
+    return {"enabled": False, "removed": removed}
+
+
+def guard_set(request, state_dir):
+    req_id = request.get("id")
+    if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
+    enable = request.get("enable")
+    if not isinstance(enable, bool): raise BridgeError("Invalid guard request")
+    plan = None
+    if enable:
+        plan = guard_plan(request)
+        if not plan["supported"]: raise BridgeError("没开：" + (plan.get("reason") or "这台电脑不支持"))
+        if request.get("digest") != plan["digest"]:
+            raise BridgeError("没开：要装的内容和你看到的不一样了（桥接程序或 Herdr 的位置变了），重新打开看一眼再开")
+    digest = hashlib.sha256(json.dumps({"op": "guardSet", "enable": enable, "plan": plan and plan["digest"]}, sort_keys=True).encode()).hexdigest()
+    db, previous = receipt_open(state_dir, req_id, digest, "上次开关守护的结果未知：先刷新看看，别直接再点")
+    if previous is not None: return previous
+    try:
+        try: result = guard_install(plan) if enable else guard_remove()
+        except BridgeError as exc:
+            receipt_save(db, req_id, {"failed": str(exc)[:500]})
+            raise
+        receipt_save(db, req_id, result)
+        return result
+    finally: db.close()
+
+
+def server_runs(status, want=2):
+    g = guard_module()
+    return g["log_runs"](g["log_path"](status), want=want) or []
+
+
+def ended_info(run, boot):
+    """How a server run ended: clean / crash / oom / boot (the computer restarted since)."""
+    g = guard_module()
+    end = run["ended"] if run["clean"] else run["last"]
+    info = {"pid": run["pid"], "started": run["started"], "at": end, "how": "clean" if run["clean"] else "crash"}
+    if boot and end and end < boot: info["boot"] = True
+    # The journal is only asked about the last few days (a memory kill explains a recent restart).
+    if not info.get("boot") and (run.get("started") or 0) > time.time() - 7 * 86400:
+        oom = g["memory_kill"](run)
+        if oom:
+            info.update(how="oom", oom=oom["source"], line=oom["line"])
+        elif oom is None and not run["clean"]: info["journal"] = False
+    return info
+
+
+def herdr_health():
+    """Read-only: is the default session's server up, how did its last run end, and the guard."""
+    herdr = herdr_binary()
+    result = {"installed": bool(herdr), "platform": sys.platform}
+    if not herdr: return result
+    g = guard_module()
+    try: data = call(["status", "--json"], timeout=10)
+    except BridgeError as exc:
+        data = None
+        result["error"] = str(exc)[:300]
+    server = (data or {}).get("server") if isinstance(data, dict) else None
+    client = (data or {}).get("client") if isinstance(data, dict) else None
+    if client: result["client"] = {k: client.get(k) for k in ("version", "protocol")}
+    out = {"state": "error"}
+    if isinstance(server, dict):
+        out = {k: server.get(k) for k in ("version", "protocol", "compatible", "restart_needed")}
+        if server.get("running"): out["state"] = "mismatch" if server.get("compatible") is False else "running"
+        elif isinstance(server.get("socket"), str) and g["listening"](server["socket"]): out["state"] = "busy"
+        else: out["state"] = "stopped"
+    runs = server_runs(server, 2) if isinstance(server, dict) else []
+    boot = g["boot_time"]()
+    if out["state"] in ("running", "mismatch") and runs:
+        out["pid"], out["started"] = runs[-1]["pid"], runs[-1]["started"]
+        # The run before this one: why it restarted (a memory kill, a crash, a clean stop, a reboot).
+        if len(runs) > 1: out["previous"] = ended_info(runs[-2], boot)
+    elif out["state"] == "stopped":
+        if runs: out["ended"] = ended_info(runs[-1], boot)
+        systemd = sys.platform.startswith("linux") and g["systemd_user"]()
+        lingering = g["linger"]() if systemd else None
+        result["start"] = {"method": "systemd" if systemd and lingering else "detached", "linger": lingering,
+                           "kill_user_processes": kill_user_processes() if not lingering else None}
+    result["server"] = out
+    result["guard"] = guard_status()
+    return result
+
+
+def herdr_start(request, state_dir):
+    """「启动 Herdr」: start the default session's server in the background, only when it is not
+    running. With systemd and lingering it is its own user service; otherwise a detached process."""
+    req_id = request.get("id")
+    if not isinstance(req_id, str) or not UUID_ID.fullmatch(req_id): raise BridgeError("Mutation requires a UUID request id")
+    digest = hashlib.sha256(b'{"op": "herdrStart"}').hexdigest()
+    # The same id again (a reply that got lost): what happened then, never a second start.
+    previous = receipt_peek(state_dir, req_id, digest)
+    if previous is not None: return previous
+    herdr = herdr_binary()
+    if not herdr: raise HerdrMissing(HERDR_MISSING)
+    g = guard_module()
+    herdr = os.path.abspath(herdr)
+    st = g["status"](herdr)
+    if st is None: raise BridgeError("没启动：读不到 Herdr 的状态（herdr status 没回应）")
+    if st.get("running"): raise BridgeError("没启动：Herdr 已经在运行了，刷新一下就好")
+    if isinstance(st.get("socket"), str) and g["listening"](st["socket"]):
+        raise BridgeError("没启动：Herdr 还占着它的连接（可能正在启动，也可能卡住了），过一会儿刷新；一直这样就在电脑上看看")
+    systemd = sys.platform.startswith("linux") and g["systemd_user"]()
+    method = "systemd" if systemd and g["linger"]() is True else "detached"
+    db, previous = receipt_open(state_dir, req_id, digest, "上次启动 Herdr 的结果未知：先刷新看看，别直接再点")
+    if previous is not None: return previous
+    try:
+        r = g["start"](herdr, method, wait=8.0, oom=g["oom_adjust"]() if method == "systemd" else None)
+        result = {"started": bool(r.get("started")), "already": bool(r.get("already")), "running": bool(r.get("running") or r.get("already")),
+                  "method": method, "unit": r.get("unit")}
+        if not r.get("started") and not r.get("already"):
+            result["failed"] = str(r.get("error") or ("另一个启动正在进行" if r.get("busy") else "没有回应"))[:300]
+        receipt_save(db, req_id, result)
+    finally: db.close()
+    if result.get("failed"): raise BridgeError("没启动：" + result["failed"])
+    return result
+
+
+def server_brief():
+    """For `sessions`: which run of the default server is up (pid and start time from its log), so
+    the phone can tell that Herdr restarted. Read-only, no subprocess."""
+    try:
+        g = guard_module()
+        runs = g["log_runs"](g["config_dir"]() / "herdr-server.log", want=1)
+    except Exception: return None
+    if not runs: return None
+    return {"pid": runs[-1]["pid"], "started": runs[-1]["started"], "clean": runs[-1]["clean"]}
+
+
 def ssh_info():
     import getpass
     import socket
@@ -5628,7 +6476,14 @@ def handle(request, state_dir=None):
         # No Herdr on this computer: an empty list and a flag, so the app shows tmux only.
         try: found = sessions()
         except HerdrMissing: return {"sessions": [], "herdr": False, "tmux": tmux_binary() is not None}
-        return {"herdr": True, "sessions": [{k: s.get(k) for k in ("name", "running", "default")} for s in found]}
+        result = {"herdr": True, "sessions": [{k: s.get(k) for k in ("name", "running", "default")} for s in found]}
+        brief = server_brief() if any(s.get("default") and s.get("running") for s in found) else None
+        if brief: result["server"] = brief
+        return result
+    if op == "herdrHealth": return herdr_health()
+    if op == "herdrStart": return herdr_start(request, state_dir or Path.home() / ".local/state/herdr-pocket")
+    if op == "guardPlan": return guard_plan(request)
+    if op == "guardSet": return guard_set(request, state_dir or Path.home() / ".local/state/herdr-pocket")
     if op in ("panes", "paneRead", "paneRun", "paneText", "paneKey"):
         prefix = select_session(request)
         if op == "panes": return {"panes": panes(prefix)}

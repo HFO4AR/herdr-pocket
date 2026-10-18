@@ -287,6 +287,8 @@ function switchSession(name){
 async function loadLive(){
  if(!S.device)return;const epoch=++S.epoch;S.liveLoading=S.agents.length?'agents':'sessions';S.liveError='';if(!S.agents.length)cacheShowLive();if(S.tab==='live'&&!S.chat)render();
  try{const r=await remote('sessions');if(epoch!==S.epoch)return;
+  // Herdr's server down or restarted since the last list (guard.js).
+  if(typeof guardSessions==='function')guardSessions(r);
   // No Herdr on this computer (bridge flag): no sessions, no agents, no error; tmux.js shows tmux only.
   S.herdr=r.herdr!==false;if(r.herdr===false){S.hostIssue=null;S.sessions=[];S.session='';S.agents=[];S.fromCache=false;if('tmux' in r)S.hostTmux=r.tmux;return;}
   S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];S.fromCache=false;return;}
