@@ -22,6 +22,11 @@ bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
 G = bridge.guard_module()
 
+# Boot time is the host's (/proc/stat btime); a CI runner may have booted a minute ago. Every Fake
+# pins it (OLD_BOOT by default, or boot=… to simulate a freshly booted computer), so log times like
+# "10 minutes ago" mean the same everywhere.
+OLD_BOOT = time.time() - 10 * 86400
+
 UUID = "12345678-1234-4234-8234-123456789abc"
 UUID2 = "12345678-1234-4234-8234-123456789abd"
 
@@ -116,7 +121,7 @@ def iso(epoch):
 
 class Fake:
     """A fake home with fake tools on PATH; HOME, XDG_CONFIG_HOME and PATH point at it."""
-    def __init__(self, systemd="running", linger="no", crontab=True, systemd_tools=True, system_path=True):
+    def __init__(self, systemd="running", linger="no", crontab=True, systemd_tools=True, system_path=True, boot=OLD_BOOT):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Path(self.tmp.name) / "home"
         self.bin = Path(self.tmp.name) / "bin"
@@ -130,6 +135,7 @@ class Fake:
                                            "PATH": str(self.bin) + (":/usr/bin:/bin" if system_path else "")}, clear=False)
         self.homepatch = patch.object(bridge.Path, "home", return_value=self.home)
         self.platform = patch.object(bridge.sys, "platform", "linux")
+        self.boot = patch.dict(G, {"boot_time": lambda: boot})
 
     def tool(self, name, text):
         path = self.bin / name
@@ -157,12 +163,12 @@ class Fake:
         return [r for r in rows if name is None or r[0] == name]
 
     def __enter__(self):
-        self.env.start(); self.homepatch.start(); self.platform.start()
+        self.env.start(); self.homepatch.start(); self.platform.start(); self.boot.start()
         G["_log_cache"].clear(); G["_oom_cache"].clear()
         return self
 
     def __exit__(self, *exc):
-        self.platform.stop(); self.homepatch.stop(); self.env.stop()
+        self.boot.stop(); self.platform.stop(); self.homepatch.stop(); self.env.stop()
         self.tmp.cleanup()
 
 
@@ -344,7 +350,8 @@ class GuardTickTests(unittest.TestCase):
     def test_script_runs_standalone_once(self):
         with Fake() as f:
             f.herdr_state(running=False)
-            f.log(startup(iso(time.time() - 600), 31))
+            # Its own process reads the real boot time: a crash logged a moment ago is after any boot.
+            f.log(startup(iso(time.time() - 1), 31))
             script = Path(f.tmp.name) / "herdr-guard.py"
             script.write_text(bridge.GUARD_SCRIPT)
             out = subprocess.run([sys.executable, "-I", str(script), "--once", "--herdr", str(f.bin / "herdr")],
@@ -356,6 +363,64 @@ class GuardTickTests(unittest.TestCase):
             self.assertEqual(oct((f.home / ".local/state/herdr-pocket/guard-v1.json").stat().st_mode & 0o777), "0o600")
             bad = subprocess.run([sys.executable, "-I", str(script), "--nope"], capture_output=True, text=True, timeout=10)
             self.assertNotEqual(bad.returncode, 0)
+
+
+class FreshBootTests(unittest.TestCase):
+    """A computer (or CI runner) that booted two minutes ago: a crash after the boot is a crash, a
+    run that ended before it was ended by the reboot."""
+    def cfg(self, f, **kw):
+        return dict({"herdr": str(f.bin / "herdr"), "boot": False, "always": False, "method": "detached", "since": time.time() - 100}, **kw)
+
+    def test_crash_after_boot_is_restarted(self):
+        now = time.time()
+        with Fake(boot=now - 120) as f:
+            f.herdr_state(running=False)
+            f.log(startup(iso(now - 90), 31) + "%s  INFO x\n" % iso(now - 60))
+            st = G["load_state"]()
+            self.assertEqual(G["tick"](self.cfg(f), st, first=True), "started")
+            self.assertEqual(st["events"][-1]["reason"], "crash")
+            h = bridge.handle({"v": 1, "op": "herdrHealth"})
+            self.assertEqual(h["server"]["state"], "running")
+
+    def test_crash_after_boot_reads_as_crash_in_health(self):
+        now = time.time()
+        with Fake(boot=now - 120) as f:
+            f.herdr_state(running=False)
+            f.log(startup(iso(now - 90), 31))
+            G["_oom_cache"].clear(); f.put("journal", "kernel: Out of memory: Killed process 31 (herdr) total-vm:1kB\n")
+            ended = bridge.handle({"v": 1, "op": "herdrHealth"})["server"]["ended"]
+            self.assertEqual(ended["how"], "oom")
+            self.assertNotIn("boot", ended)
+
+    def test_run_from_before_the_boot(self):
+        now = time.time()
+        with Fake(boot=now - 120) as f:
+            f.herdr_state(running=False)
+            f.log(startup(iso(now - 3600), 31) + "%s  INFO x\n" % iso(now - 1800))
+            self.assertTrue(bridge.handle({"v": 1, "op": "herdrHealth"})["server"]["ended"]["boot"])
+            # Without --boot it is not started and nothing is remembered; with --boot it is.
+            self.assertEqual(G["tick"](self.cfg(f), G["load_state"](), first=True), "left")
+            self.assertNotIn("handled", G["load_state"]())
+            st = G["load_state"]()
+            self.assertEqual(G["tick"](self.cfg(f, boot=True), st, first=True), "started")
+            self.assertEqual(st["events"][-1]["reason"], "before")
+
+    def test_clean_stop_after_boot_but_before_guard(self):
+        now = time.time()
+        with Fake(boot=now - 120) as f:
+            f.herdr_state(running=False)
+            f.log(startup(iso(now - 110), 31) + shutdown(iso(now - 105), 31))
+            self.assertEqual(G["tick"](self.cfg(f), G["load_state"](), first=True), "left")
+            self.assertEqual(G["tick"](self.cfg(f, boot=True), G["load_state"](), first=True), "started")
+
+    def test_previous_run_before_boot_is_named(self):
+        now = time.time()
+        with Fake(boot=now - 120) as f:
+            f.herdr_state(running=True)
+            f.log(startup(iso(now - 7200), 11) + startup(iso(now - 60), 22))
+            prev = bridge.handle({"v": 1, "op": "herdrHealth"})["server"]["previous"]
+            self.assertTrue(prev["boot"])
+            self.assertEqual(f.calls("journalctl"), [], "a run ended by the reboot needs no journal search")
 
 
 class PlanAndSetTests(unittest.TestCase):
