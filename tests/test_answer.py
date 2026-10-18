@@ -596,15 +596,24 @@ class AnswerTests(unittest.TestCase):
             self.status()
         self.assertEqual(self.looks(), 4)
 
-    def test_slash_picker_is_not_taken_for_a_question(self):
-        # /model opened by the person: no tabs, text row, chat row or checkboxes. Herdr's state stays.
+    def test_slash_picker_is_a_waiting_choice(self):
+        # /model opened by the person looks like any picker the agent puts up itself (no tabs, text
+        # row, chat row or checkboxes): the input box is gone either way, so it reads as waiting.
         self.agent["agent_status"] = "idle"
         self.fake = FakeMenu(["Default (recommended)", "Opus", "Haiku"])
-        self.assertEqual(self.status()["agent_status"], "idle")
+        self.fake.question = "Select model"
+        row = self.status()
+        self.assertEqual((row["agent_status"], row["screen"], row["herdr_status"], row["picker"]), ("blocked", "menu", "idle", True))
+        read = bridge.handle(dict(v=1, op="read", session="default", target="w1:p1", identity=bridge.identity(self.agent)), self.state)
+        self.assertEqual((read["picker"], read["menu"]["picker"], read["menu"]["question"], read["menu"]["esc"]["action"]),
+                         (True, True, "Select model", "cancel"))
         # A prompt is still never typed into it.
         with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它正停在一个提问或选择框上"):
             bridge.handle(dict(v=1, op="prompt", session="default", target="w1:p1", identity=bridge.identity(self.agent),
                                id="22345678-1234-4234-8234-123456789012", text="继续"), self.state)
+        self.assertEqual(self.writes, [])
+        result = self.answer(action="select", option=3, label="Haiku")
+        self.assertEqual((result["sent"], self.keys(), self.fake.submitted), (True, ["down", "down", "enter"], 3))
 
     def test_trust_dialog_is_answered_only_on_request(self):
         self.agent["agent_status"] = "blocked"

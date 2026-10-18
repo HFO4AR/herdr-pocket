@@ -174,6 +174,9 @@ function qaRefresh(){const a=S.chat?.agent;if(!a||S.chat.stale)return;
  if(a.agent_status==='blocked'){if(qaExpect(qaFresh(a))!==(S.qaShown||''))renderComposer();return;}
  const q=qaAsyncPending();if((q?.aside?q.key:'')!==(S.qaBar||''))renderComposer();}
 function qaFresh(a){const cur=S.qaMenu;const since=statusSince(a);return cur&&cur.key===agentKey(a)&&(!since||cur.at>=since)?cur.menu:null;}
+// Waiting on a picker drawn in place of its input box (bridge `picker`: Codex "Approaching rate
+// limits", /model…): 「等你选择」 rather than 「等你确认」. From the status row, or the open chat's read.
+function qaPicker(a){if(!a||a.agent_status!=='blocked')return false;if(a.picker)return true;const c=S.chat?.agent;return !!c&&agentKey(c)===agentKey(a)&&!!qaFresh(a)?.picker;}
 function qaCallSig(){const call=[...S.messages].reverse().find(m=>qaIsTool(m));return call?call.id+':'+qaOutcome(call,qaParse(call),S.messages).state:'';}
 function qaExpect(menu){return menu?(S.chat?.qaRaw?'raw:':'')+(qaHiddenNow()?'hidden:':'')+menu.fingerprint+'|'+qaCallSig():'';}
 // 「先收起」 holds for this wait only: the next time it stops on a question, the card shows again.
@@ -186,7 +189,7 @@ function qaLive(live,a){
  if(!menu&&S.qaAsked!==agentKey(a)+'@'+since){S.qaAsked=agentKey(a)+'@'+since;setTimeout(()=>fetchTerminal(true),0);}
  S.qaShown=qaExpect(menu);if(!menu)return false;
  if(S.chat.qaRaw){const bar=el('div','qa-raw-bar');bar.append(btn('用选项回答','link-btn',()=>{S.chat.qaRaw=false;renderComposer();},'chat'));live.append(bar);return false;}
- if(qaHiddenNow()){live.append(qaMini(menu.kind==='approval'?providerName(a.agent)+' 在等你确认 · 已收起':providerName(a.agent)+' 在等你回答 · 已收起',
+ if(qaHiddenNow()){live.append(qaMini(menu.kind==='approval'?providerName(a.agent)+' 在等你确认 · 已收起':providerName(a.agent)+(menu.picker?' 在等你选择 · 已收起':' 在等你回答 · 已收起'),
   queueItems().length?'它会一直等着，排队的消息在你回答后才发':'它会一直等着，没有替你回答',menu.kind==='approval'?'alert':'chat',()=>{S.qaHidden='';renderComposer();},menu.kind==='approval'?'approval':''));return true;}
  live.append(qaCard(qaMenuModel(menu,a)));return true;}
 // The collapsed card: one line above the input that says what still waits, and 展开.
@@ -209,21 +212,24 @@ function qaMenuModel(menu,a){
  let textRow=input?input.n:null;
  if(q&&a.agent==='claude'&&menu.kind==='question'){q.options.forEach((t,i)=>{if(!menu.options.some(o=>o.n===i+1))options.push({n:i+1,label:t.label,description:t.description,screen:t.label});});
   options.sort((x,y)=>x.n-y.n);if(textRow===null&&!menu.options.some(o=>o.n===q.options.length+1&&!o.input))textRow=q.options.length+1;}
- const title=menu.kind==='approval'?who+' 等你确认':menu.kind==='review'?'检查一下答案再提交':who+' 在问你';
+ // A picker: what the agent put up itself (Codex's rate-limit switch) or a /model the person opened;
+ // the screen cannot tell them apart. One the phone's own command card opened says which command.
+ const cmd=menu.picker&&typeof slashCards==='function'?slashCards().filter(c=>c.menu?.fingerprint===menu.fingerprint).at(-1):null;
+ const title=menu.kind==='approval'?who+' 等你确认':menu.kind==='review'?'检查一下答案再提交':menu.picker?(cmd?cmd.text+' · 选一项':who+' 等你选择'):who+' 在问你';
  const question=q?.question||(menu.kind==='approval'?'':menu.question);
  const context=menu.kind==='question'&&q?'':menu.kind==='review'?(menu.context||[]).join('\n'):menu.kind==='approval'?(menu.context||[]).join('\n'):'';
  // A new wait (even on an identical menu) starts with a clean selection.
  return {key:'menu:'+agentKey(a)+':'+(statusSince(a)||0)+':'+menu.fingerprint,fp:menu.fingerprint,kind:menu.kind,title,step,context,
   questions:[{header:q?.header||'',question:menu.kind==='approval'?'':question,multi:!!menu.multi,options,textRow}],
-  submitText:menu.kind==='approval'?'确认这个选择':menu.kind==='review'?'确定':'发送回答',closeText:'关闭',
+  submitText:menu.kind==='approval'?'确认这个选择':menu.kind==='review'?'确定':menu.picker?'就选这个':'发送回答',closeText:'关闭',
   onSubmit:st=>qaSendMenu(menu,st,options,textRow),onWrite:footWrite,onRaw:()=>{S.chat.qaRaw=true;renderComposer();},onClose:()=>qaCloseMenu(menu,a)};}
 // 关闭 on a menu: put it aside (nothing reaches the agent) or cancel it with Esc after a confirmation.
 function qaCloseMenu(menu,a){
- const who=providerName(a.agent),approval=menu.kind==='approval';
- const box=sheet(approval?'先不确认？':'先不回答？');
- box.append(el('p','muted qa-close-note',who+' 现在停在这个'+(approval?'确认框':'问题')+'上。收起只在手机上先不显示，不会替你选任何一项。'));
- menuItem(box,'先收起',()=>{S.qaHidden=qaWaitKey(a);renderComposer();paintTimeline();toast('收起了，'+who+' 还在等你');},'down','它继续等着，随时可以展开再'+(approval?'确认':'回答'));
- const esc=menuItem(box,approval?'拒绝并取消（按 Esc）':'取消这个问题（按 Esc）',()=>confirmAction('按 Esc 取消？',qaEscText(menu,a),'按 Esc',()=>qaEsc(menu,a),true),'x',qaEscText(menu,a));
+ const who=providerName(a.agent),approval=menu.kind==='approval',pick=!!menu.picker;
+ const box=sheet(approval?'先不确认？':pick?'先不选？':'先不回答？');
+ box.append(el('p','muted qa-close-note',who+' 现在停在这个'+(approval?'确认框':pick?'选择框':'问题')+'上。收起只在手机上先不显示，不会替你选任何一项。'));
+ menuItem(box,'先收起',()=>{S.qaHidden=qaWaitKey(a);renderComposer();paintTimeline();toast('收起了，'+who+' 还在等你');},'down','它继续等着，随时可以展开再'+(approval?'确认':pick?'选':'回答'));
+ const esc=menuItem(box,approval?'拒绝并取消（按 Esc）':pick?'关掉选择框（按 Esc）':'取消这个问题（按 Esc）',()=>confirmAction(pick?'按 Esc 关掉？':'按 Esc 取消？',qaEscText(menu,a),'按 Esc',()=>qaEsc(menu,a),true),'x',qaEscText(menu,a));
  esc.classList.add('danger');}
 // What Esc does here, from the screen's own hint (menu.esc), else from the kind of dialog.
 function qaEscText(menu,a){
@@ -234,6 +240,8 @@ function qaEscText(menu,a){
  // Claude's folder-trust dialog: Esc is its "No, exit", and Claude quits.
  if(row&&/^no\b.*\bexit\b/i.test(row.label))return as+who+' 会直接退出，不会在这个文件夹里干活。';
  if(approval)return (as||'等于拒绝：')+'这一步不会执行，'+who+' 停下来等你说怎么做。';
+ // A picker ("esc back", "Esc to exit"): Esc only closes it, nothing in it is chosen.
+ if(menu?.picker&&!row)return '只关掉这个选择框，一项都不选；'+who+' 回到输入框，等你发消息。';
  return as+who+' 会收到「没有回答」，这一轮停下，等你发新消息。';}
 // Esc goes out only if the same dialog is still on screen; never Enter, never a default option.
 async function qaEsc(menu,a){
@@ -241,7 +249,7 @@ async function qaEsc(menu,a){
  const cur=S.chat?.agent;if(!cur||cur.pane_id!==a.pane_id||cur.identity!==a.identity){toast('窗格变了，没有按 Esc');return;}
  try{const r=await remote('read',{session:S.session,target:a.pane_id,identity:a.identity});
   if(!r?.menu||r.menu.fingerprint!==menu.fingerprint){toast('问题已经变了，没有按 Esc');qaScreen(r);return;}
-  await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key:'esc',id:uuid()});toast('已按 Esc，问题取消了');S.qaHidden='';}
+  await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key:'esc',id:uuid()});toast(menu.picker?'已按 Esc，选择框关了':'已按 Esc，问题取消了');S.qaHidden='';}
  catch(e){toast('没按成：'+(e.message||e)+'。不会自动重试。');}
  finally{setTimeout(()=>{refreshStatus();fetchTerminal(true);fetchHistory();},600);}}
 async function qaSendMenu(menu,st,options,textRow){
@@ -253,7 +261,7 @@ async function qaSendMenu(menu,st,options,textRow){
  else if(text){args.action='text';args.option=textRow;args.text=text;}
  else{const row=options.find(o=>o.n===st.sel[0]);if(!row)return;args.action='select';args.option=row.n;args.label=row.screen;}
  st.busy=true;st.error='';renderComposer();
- try{await remote('answer',args);if(S.demo){toast('演示：没有真的回答');}else{st.sent=Date.now();toast(menu.kind==='approval'?'已选好':'已回答');setTimeout(()=>{if(S.chat?.agent?.agent_status==='blocked')renderComposer();},8200);}}
+ try{await remote('answer',args);if(S.demo){toast('演示：没有真的回答');}else{st.sent=Date.now();toast(menu.kind==='approval'||menu.picker?'已选好':'已回答');setTimeout(()=>{if(S.chat?.agent?.agent_status==='blocked')renderComposer();},8200);}}
  catch(e){st.error='没完成：'+e.message+'。不会自动重试。';}
  finally{st.busy=false;renderComposer();if(st.error)toastUnlessShown(st.error,'.qa-error');if(!S.demo)setTimeout(()=>{refreshStatus();fetchTerminal(true);fetchHistory();},700);}}
 

@@ -23,6 +23,13 @@ import importlib.util,json,sys
 spec=importlib.util.spec_from_file_location('b',sys.argv[1]);b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
 print(json.dumps({k:b.parse_menu(v,'claude') for k,v in json.loads(sys.argv[2]).items()},ensure_ascii=False))`,path.join(root,'bridge/pocket_bridge.py'),JSON.stringify(SCREENS)],{encoding:'utf8'}));
 for(const [k,m] of Object.entries(menus))assert(m&&m.cursor,'bridge parsed '+k);
+// Codex 0.163's own rate-limit picker (real capture, fixtures/codex_tmux.json), as the bridge reads it.
+const codexPick=JSON.parse(execFileSync('python3',['-c',`
+import importlib.util,json,sys
+spec=importlib.util.spec_from_file_location('b',sys.argv[1]);b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
+text=b.strip_sgr(json.load(open(sys.argv[2]))['model_menu'])
+print(json.dumps({'text':text,'menu':b.parse_menu(text,'codex')},ensure_ascii=False))`,path.join(root,'bridge/pocket_bridge.py'),path.join(root,'tests/fixtures/codex_tmux.json')],{encoding:'utf8'}));
+assert(codexPick.menu&&codexPick.menu.picker,'bridge parsed the Codex picker');
 
 (async()=>{
 const html=require('./ui_bundle.cjs')(root);
@@ -208,6 +215,36 @@ await trust.getByText('已确认，等它继续…',{exact:true}).waitFor();
 const tq=await page.evaluate(()=>fx.calls.filter(c=>c.op==='answer').at(-1).args);
 assert.deepEqual([tq.action,tq.option,tq.label,tq.fingerprint],['select',2,'Yes, I trust this folder',menus.trust.fingerprint]);
 console.log('PASS: folder-trust dialog is an approval card, answered only when the person confirms');
+
+// Codex's rate-limit picker after a turn (Herdr said done, the bridge says blocked + picker): a card
+// that says 等你选择 with the picker's title and question, nothing preselected, Esc only closes it.
+const beforePick=await page.evaluate(()=>fx.calls.filter(c=>c.op==='answer'||c.op==='key').length);
+await page.evaluate(async({text,menu})=>{fxScreens.codexPick=text;fxMenus.codexPick=menu;fx.screen='codexPick';fx.messages=[];
+ fx.agent={pane_id:'w1:p6',identity:'id-codex-p',agent:'codex',agent_status:'blocked',screen:'menu',herdr_status:'done',picker:true,cwd:'/home/demo/site',terminal_title:'改一下脚本',agent_session:{value:'cp'},
+  history_ref:{status:'matched',record:{id:'rec-codex-p',thread:'cp',provider:'codex',title:'改一下脚本',cwd:'/home/demo/site',modified:Date.now()/1000}}};
+ S.agents=[fx.agent];S.qaMenu=null;await openAgent(fx.agent);await fetchTerminal(true);},codexPick);
+const pick=page.getByRole('group',{name:'Agent 的提问',exact:true});await pick.waitFor();
+assert.match(await pick.locator('.qa-head').textContent(),/^Codex 等你选择/);
+await pick.getByText('Approaching rate limits — Switch to gpt-6-luna for lower credit usage?',{exact:true}).waitFor();
+assert.match(await page.locator('#chat-meta').textContent(),/等你选择/);
+assert.equal(await pick.getByRole('radio').count(),3);
+assert.equal(await pick.getByRole('radio',{checked:true}).count(),0,'no option is preselected');
+assert(await pick.getByRole('button',{name:'就选这个',exact:true}).isDisabled());
+assert.equal(await page.evaluate(()=>qaEscText(S.qaMenu.menu,S.chat.agent)),'只关掉这个选择框，一项都不选；Codex 回到输入框，等你发消息。');
+// Opened by the phone's own /model card: the card names the command.
+assert.equal(await page.evaluate(()=>{const key=draftKey();SL.cards.set(key,[{id:'sx',key,text:'/model',name:'model',state:'sent',menu:fxMenus.codexPick,panel:true,at:Date.now()}]);
+ const t=qaMenuModel(fxMenus.codexPick,S.chat.agent).title;SL.cards.delete(key);return t;}),'/model · 选一项');
+await page.waitForTimeout(600);
+assert.equal(await page.evaluate(()=>fx.calls.filter(c=>c.op==='answer'||c.op==='key').length),beforePick,'never answered on its own');
+await page.screenshot({path:path.join(folder,'answer-codex-picker.png')});
+await pick.getByRole('radio',{name:'Keep current model',exact:true}).click();
+await pick.getByRole('button',{name:'就选这个',exact:true}).click();
+await pick.getByText('已回答，等它继续…',{exact:true}).waitFor();
+await page.locator('#toast').getByText('已选好',{exact:true}).waitFor();
+const pq=await page.evaluate(()=>fx.calls.filter(c=>c.op==='answer').at(-1).args);
+assert.deepEqual([pq.action,pq.option,pq.label,pq.fingerprint,pq.target],['select',2,'Keep current model',codexPick.menu.fingerprint,'w1:p6']);
+await page.waitForTimeout(900);// its follow-up status/screen reads land before the next chat opens
+console.log('PASS: Codex rate-limit picker is a 等你选择 card, answered only when the person picks');
 
 // Codex async question: the agent is idle, the card sits in the timeline and replies as a prompt.
 await page.evaluate(()=>{

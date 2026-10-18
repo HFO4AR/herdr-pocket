@@ -499,6 +499,29 @@ class CodexTmuxTests(unittest.TestCase):
         self.answer(UUIDS[2], action="select", option=2, label="Keep current model")
         self.assertEqual((self.keys(), tui.picked), (["Down", "Enter"], 2))
 
+    def test_rate_limit_picker_waits_for_a_choice(self):
+        # Codex near its weekly limit puts "Approaching rate limits / Switch to …?" where its composer
+        # was. Every tmux view of the pane says it waits for a choice, and nothing is typed into it.
+        tui = self.tuis["%1"] = CodexPicker("model_menu")
+        a = self.agent()
+        self.assertEqual((a["agent_status"], a["picker"]), ("blocked", True))
+        row = self.h(op="status", target="%1", identity=a["identity"])["agents"][0]
+        self.assertEqual((row["agent_status"], row["picker"]), ("blocked", True))
+        self.assertEqual([(r["agent_status"], r.get("picker")) for r in bridge.tmux_status_rows() if r["pane_id"] == "%1"], [("blocked", True)])
+        read = self.h(op="read", target="%1", identity=a["identity"])
+        self.assertEqual((read["agent_status"], read["picker"], read["menu"]["picker"]), ("blocked", True, True))
+        self.assertEqual(read["menu"]["question"], "Approaching rate limits — Switch to gpt-6-luna for lower credit usage?")
+        self.assertEqual(read["menu"]["esc"], {"action": "back", "option": None})
+        # The phone queues; a prompt that still comes is refused with the wording its queue retries.
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：Agent 正停在一个提问或授权框上"):
+            self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[0], text="接着做")
+        self.assertEqual((self.sent(), tui.typed), ([], []))
+        r = self.answer(UUIDS[1], action="select", option=2, label="Keep current model")
+        self.assertEqual((r["sent"], self.keys(), tui.picked), (True, ["Down", "Enter"], 2))
+        a = self.agent()
+        self.assertEqual(a["agent_status"], "idle")
+        self.assertNotIn("picker", a)
+
     def test_shift_tab_and_send_now(self):
         a = self.agent()
         self.h(op="key", target="%1", identity=a["identity"], id=UUIDS[0], key="shift+tab")

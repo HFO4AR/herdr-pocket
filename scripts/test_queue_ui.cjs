@@ -191,6 +191,23 @@ await page.waitForFunction(()=>fx.prompts.at(-1)?.text==='第六条¾：等它�
 await status('working');await page.evaluate(()=>{fx.say('第六条¾：等它回答完');});await page.evaluate(()=>fetchHistory());
 console.log('PASS: a dialog Herdr calls idle holds the queue; the bridge refusal is retried once it clears');
 
+// 5d. A picker in place of the input box (Codex 0.163 "Approaching rate limits / Switch to …?" after a
+// turn; Herdr says done): the bridge reports it blocked with picker:true. The chat says 等你选择, not
+// 已完成, the queue holds (nothing typed into the picker) and goes on its own once it is answered.
+await page.evaluate(async()=>{fx.list=fx.list.map(a=>({...a,agent_status:'blocked',screen:'menu',herdr_status:'done',picker:true}));S.statusBusy=false;await refreshStatus();});
+await page.locator('#chat-meta .meta-state').getByText(/^等你选择/).waitFor();
+await send('第六条⅞：选完再发');
+await bubble('第六条⅞').getByText('排队中 · 选完再发',{exact:true}).waitFor();
+const b6b=await attempts();await page.waitForTimeout(3500);
+assert.equal(await attempts(),b6b,'held while the picker is up');
+await shot('picker-390');
+await page.evaluate(()=>{fx.list=fx.list.map(({screen,herdr_status,picker,...a})=>a);});
+await status('done');
+assert.doesNotMatch(await page.locator('#chat-meta').textContent(),/等你选择/);
+await page.waitForFunction(()=>fx.prompts.at(-1)?.text==='第六条⅞：选完再发',null,{timeout:20000});
+await status('working');await page.evaluate(()=>{fx.say('第六条⅞：选完再发');});await page.evaluate(()=>fetchHistory());
+console.log('PASS: a picker in place of the input box says 等你选择, holds the queue, then it goes');
+
 // 6. The pane's conversation changes (/clear): the queue pauses and only continues on request.
 await status('working');await page.evaluate(()=>{fx.say('第六条：直接发');});await page.evaluate(()=>fetchHistory());
 await send('第七条：发给原来的对话');
