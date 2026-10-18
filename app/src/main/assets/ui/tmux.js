@@ -58,14 +58,20 @@ async function tmuxLoad(resolve=false){
   if(!resolve&&agents.some(a=>!a.history_ref||a.history_ref.status==='pending')&&Date.now()-st.resolveAt>15000){st.resolveAt=Date.now();setTimeout(()=>tmuxLoad(true),0);}}
  // An older bridge does not know the op: stop asking until the next device. Other failures
  // (tmux hung, a slow link) keep the last list; tmux is a side dish here, never an error card.
- catch(e){if(/Unknown operation|不支持的操作|unexpected remote op/.test(e?.message||''))st.supported=false;else st.failed=String(e?.message||e).slice(0,120);
-  st.loaded=true;if(dev===tmuxDevice()&&(noHerdr()||!st.panes.length))tmuxRepaint();return;}
+ catch(e){const was=st.failed+'|'+st.supported+'|'+st.loaded;
+  if(/Unknown operation|不支持的操作|unexpected remote op/.test(e?.message||''))st.supported=false;else st.failed=String(e?.message||e).slice(0,120);
+  st.loaded=true;
+  // Repaint only when the failure is news: a failing poll every 4 s must not rebuild the list
+  // (that closed a swiped row and reset scroll under the person's finger).
+  if(was!==st.failed+'|'+st.supported+'|'+st.loaded&&dev===tmuxDevice()&&(noHerdr()||!st.panes.length))tmuxRepaint();return;}
  finally{st.loading=false;}
  if(dev!==tmuxDevice())return;
  const sig=tmuxSig(st.panes)+'|'+st.available+'|'+st.looked.join(':')+'|'+st.skipped.length+'|'+st.servers.map(x=>x.name+x.state).join(':');if(sig===st.sig)return;st.sig=sig;tmuxRepaint();}
 // Repaint the list only when nothing is in the way: a sheet, a chat, a terminal, or typing in search.
 function tmuxRepaint(){
  if(S.tab!=='live'||S.chat||(typeof T!=='undefined'&&T.view)||overlay.childElementCount)return;
+ // A row swiped open (关闭 / 更多 showing) stays as it is; the next change repaints.
+ if(app.querySelector('.swipe.open')){const st=tmuxState();if(st)st.sig='';return;}
  const a=document.activeElement;if(a&&/^(INPUT|TEXTAREA)$/.test(a.tagName)&&app.contains(a))return;
  const main=app.querySelector('.main'),top=main?main.scrollTop:0;render();
  const next=app.querySelector('.main');if(next){next.classList.remove('pane-enter');next.scrollTop=top;}}

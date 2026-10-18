@@ -72,6 +72,9 @@ const overflow=page=>page.evaluate(()=>document.documentElement.scrollWidth-inne
  const row=page.locator('.agent-row').nth(6);
  await swipe(page,row);
  assert.equal(await page.locator('.swipe.open').count(),1);
+ // Background polls (the tmux list every 4 s) never close the row under the finger.
+ await page.waitForTimeout(4600);
+ assert.equal(await page.locator('.swipe.open').count(),1,'a background poll does not close the swiped row');
  assert.equal(await page.evaluate(()=>!!S.chat),false,'a swipe never opens the chat');
  await page.locator('.swipe.open').getByRole('button',{name:'关闭',exact:true}).click();
  const sheet=page.getByRole('dialog',{name:'关闭会话'});await sheet.waitFor();
