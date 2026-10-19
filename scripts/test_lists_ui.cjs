@@ -161,7 +161,7 @@ const overflow=page=>page.evaluate(()=>document.documentElement.scrollWidth-inne
  await page.screenshot({path:path.join(folder,'lists-terminals-390.png')});
  await page.getByRole('button',{name:/npm run dev/}).click();
  await page.getByText('Herdr 窗格 · site · w4:p24',{exact:true}).waitFor();
- assert.equal(await page.getByRole('button',{name:'Ctrl',exact:true}).count(),0,'Ctrl latch is SSH only');
+ for(const k of ['Ctrl','Alt','Shift'])assert.equal(await page.getByRole('button',{name:k,exact:true}).count(),1,k+' latch on every terminal');
  for(const k of ['Esc','Tab','上','下','左','右','Enter','Ctrl+C','Ctrl+D','退格'])assert.equal(await page.getByRole('toolbar',{name:'终端按键'}).getByRole('button',{name:k,exact:true}).count(),1,k);
  await page.getByText(/VITE v5/).waitFor();
  await page.getByRole('button',{name:'复制屏幕内容',exact:true}).click();

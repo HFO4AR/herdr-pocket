@@ -38,21 +38,11 @@
 .terminal-status.off{background:var(--sunken);color:var(--ink-2)}
 .terminal-status svg{width:16px;height:16px}
 .terminal-status .link-btn{flex-shrink:0;font-weight:600}
-.terminal-keys{display:flex;gap:10px;overflow-x:auto;overscroll-behavior-x:contain;padding:0 12px;scrollbar-width:none;scroll-padding:0 12px}
-.terminal-keys::-webkit-scrollbar{display:none}
-.key-group{display:flex;gap:6px;flex-shrink:0}
-.key{flex-shrink:0;min-width:44px;min-height:44px;padding:0 12px;border-radius:var(--radius-control);background:var(--sunken);color:var(--ink);box-shadow:inset 0 -1px 0 var(--line-strong);font:500 var(--fs-sm)/1 var(--term-font);display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}
+.key{position:relative;flex-shrink:0;min-width:44px;min-height:44px;padding:0 12px;border-radius:var(--radius-control);background:var(--sunken);color:var(--ink);box-shadow:inset 0 -1px 0 var(--line-strong);font:500 var(--fs-sm)/1 var(--term-font);display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 .key:active{background:var(--line-strong);transform:translateY(1px) scale(.97)}
 .key svg{width:20px;height:20px}
-.key.arrow-key,.key.char-key{padding:0;font-size:var(--fs-base)}
-.key-arrows{gap:0;border-radius:var(--radius-control);background:var(--sunken);box-shadow:inset 0 -1px 0 var(--line-strong)}
-.key-arrows .key{background:none;box-shadow:none;border-radius:0;min-width:46px}
-.key-arrows .key:first-child{border-radius:var(--radius-control) 0 0 var(--radius-control)}
-.key-arrows .key:last-child{border-radius:0 var(--radius-control) var(--radius-control) 0}
-.key-arrows .key:active{background:var(--line-strong)}
+.key.char-key{padding:0;font-size:var(--fs-base)}
 .key.enter-key{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1px var(--soft-line);font-weight:600}
-.key.ctrl-key.on{background:var(--accent);color:var(--on-accent);box-shadow:none}
-.key.kbd-key{color:var(--ink-2)}
 .term-compose{margin:0 auto!important;width:calc(100% - 24px)!important;max-width:756px!important;padding:3px 3px 3px 3px;gap:4px;border-radius:var(--radius-card);align-items:flex-end}
 .term-compose textarea{font:var(--fs-md)/1.45 var(--term-font);padding:10px 0;min-height:42px;max-height:96px}
 .term-compose textarea::placeholder{font-family:inherit}

@@ -133,7 +133,7 @@ class TmuxTests(unittest.TestCase):
             self.send(action="key", key=key, id="3234567%d-1234-4234-8234-123456789012" % i)
             self.assertEqual(self.argvs()[-1], ["-u", "send-keys", "-t", "%0", name])
         p = self.pane("%0")
-        for bad in ({"action": "key", "key": "C-c"}, {"action": "key", "key": "ctrl+z"}, {"action": "key", "key": "enter", "text": "x"},
+        for bad in ({"action": "key", "key": "C-c"}, {"action": "key", "key": "ctrl+1"}, {"action": "key", "key": "enter", "text": "x"},
                     {"action": "run", "text": ""}, {"action": "run", "text": "a\x00b"}, {"action": "run", "text": "x" * 16001},
                     {"action": "shell", "text": "ls"}, {"action": "run", "text": "ls", "session": "x"}):
             self.log.unlink(missing_ok=True)

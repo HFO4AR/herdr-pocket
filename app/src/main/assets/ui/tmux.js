@@ -21,7 +21,12 @@
 // Local panes only: tmux on another computer is not listed (add that computer as a device). An
 // empty list says where the bridge looked (`looked`), what it refused (`skipped`) and which
 // server did not answer (`servers`), and the list follows new sessions within a few seconds.
-const TX={by:new Map()};
+const TX={by:new Map(),live:'',liveSet:false,liveLoaded:false,liveDev:null};
+// 快照 / 实时 as last chosen on this phone and computer (tmuxModeSheet); another computer reloads its own.
+function tmuxLivePref(){if(S.demo)return;const dev=tmuxDevice();if(TX.liveLoaded&&TX.liveDev===dev)return;
+ TX.liveLoaded=true;TX.liveDev=dev;TX.liveSet=false;TX.live='';
+ if(!dev)return;
+ cacheGet('term:tmuxLive',dev).then(v=>{if(TX.liveDev===dev&&!TX.liveSet&&v&&['','rw','ro'].includes(v.mode))TX.live=v.mode;}).catch(()=>{});}
 function tmuxDevice(){return S.device&&!S.demo?S.device.id:'';}
 // Per computer (several can be connected): the last list, whether the bridge knows tmux, transcript refs.
 function tmuxState(dev=tmuxDevice()){if(!dev)return null;let st=TX.by.get(dev);
@@ -41,6 +46,7 @@ function tmuxAgent(p){if(!p?.agent)return null;const st=tmuxState();const ref=p.
  const pane={...p};delete pane.agent;return {...p.agent,...(ref?{history_ref:ref}:{}),tmux_pane:pane};}
 function tmuxAgents(){return tmuxPanes().map(tmuxAgent).filter(Boolean);}
 async function tmuxLoad(resolve=false){
+ tmuxLivePref();
  const dev=tmuxDevice(),st=tmuxState(dev);if(!st||!st.supported||st.loading)return;st.loading=true;
  try{const r=await remote('tmux',resolve?{resolve:true}:{});
   st.available=r?.available!==false;
@@ -134,31 +140,45 @@ function tmuxOnlyPage(main){
  closeHint(main,'左滑或长按一行：关闭、更多操作');
  pullRefresh(main,loadLive);}
 function tmuxOpen(p){termPrefs();termFontVar();
- T.view={kind:'tmux',pane:p,title:tmuxTitle(p),text:'正在读取 tmux 窗格…',ansi:'',draft:'',paused:false,busy:false,demo:false,stick:true,readAt:0};
+ // 实时 is for plain panes: an agent's pane keeps the checked input path (chat, receipts, dialogs).
+ if(TX.live&&!S.demo&&!p.agent&&typeof attachOpen==='function'){attachOpen(p,TX.live==='ro');return;}
+ T.view={kind:'tmux',pane:p,title:tmuxTitle(p),text:'正在读取 tmux 窗格…',ansi:'',draft:'',paused:false,busy:false,demo:false,stick:true};
  renderTerminal();pollTerminal();}
 function tmuxSub(entry){const p=entry.pane;return 'tmux · '+[p.command,tmuxWhere(p)].filter(Boolean).join(' · ');}
-// Read the pane (called from pollTerminal, which runs every 500 ms): about once a second.
+// One read of the pane (terminals.js snapLoop decides how often). The bridge answers {same: true}
+// when the screen is what the phone already has (`known`: a short hash of the last screen).
 async function tmuxPoll(entry){
- if(Date.now()-entry.readAt<900)return;entry.readAt=Date.now();
- let r;try{r=await remote('tmuxRead',{target:entry.pane.pane_id,identity:entry.pane.identity});}
- catch(e){if(/关了或换了/.test(e.message)&&T.view===entry){entry.ended=true;terminalStatus(entry,'这个 tmux 窗格已经关了，回到列表看看');tmuxLoad();return;}throw e;}
- if(T.view!==entry)return;
+ let r;try{r=await remote('tmuxRead',{target:entry.pane.pane_id,identity:entry.pane.identity,...(entry.known?{known:entry.known}:{})});}
+ catch(e){if(/关了或换了/.test(e.message)&&T.view===entry){entry.ended=true;terminalStatus(entry,'这个 tmux 窗格已经关了，回到列表看看');tmuxLoad();return false;}throw e;}
+ if(T.view!==entry)return false;
  // The window is renamed (tmux names a fresh window "tmux" for a moment, then after its command):
  // the header follows the pane.
  if(r.pane){entry.pane={...entry.pane,...r.pane};const title=tmuxTitle(entry.pane);
   if(title!==entry.title){entry.title=title;const h=document.getElementById('term-title');if(h)h.textContent=title;}
   const w=document.querySelector('.term-head .term-where');if(w&&w.textContent!==tmuxSub(entry))w.textContent=tmuxSub(entry);}
- if(r.text===entry.text&&(r.ansi||'')===entry.ansi)return;entry.text=r.text;entry.ansi=r.ansi||'';
- const n=document.getElementById('pane-screen');if(!n)return;screenPaint(n,paneText(entry.text),entry.ansi);
- if(entry.stick!==false)n.scrollTop=n.scrollHeight;termJump(entry,true);}
+ if(typeof r.known==='string')entry.known=r.known;
+ if(r.same||r.text===entry.text&&(r.ansi||'')===entry.ansi)return false;entry.text=r.text;entry.ansi=r.ansi||'';
+ const n=document.getElementById('pane-screen');if(n)screenUpdate(n,entry);return true;}
 // sendPane's ops, as tmuxSend actions: paneRun = text + Enter, paneText = text, paneKey = a key.
 async function tmuxSend(entry,op,args){
  const action=op==='paneKey'?'key':op==='paneRun'?'run':'text';
- const r=await remote('tmuxSend',{target:entry.pane.pane_id,identity:entry.pane.identity,id:uuid(),action,...(action==='key'?{key:args.key}:{text:args.text})});
- entry.readAt=0;return r;}
+ return remote('tmuxSend',{target:entry.pane.pane_id,identity:entry.pane.identity,id:uuid(),action,...(action==='key'?{key:args.key}:{text:args.text})});}
+// 快照 ⇄ 实时 in the terminal header. The choice is remembered per phone (per-device cache):
+// TX.live '' (snapshot), 'rw' (attach) or 'ro' (read-only attach).
+function tmuxLiveButton(entry){
+ if(S.demo||entry.pane?.agent)return null;const live=entry.kind==='attach';
+ const b=btn(live?'实时':'快照','term-mode'+(live?' on':''),()=>tmuxModeSheet(entry),live?'terminal':'refresh');
+ b.setAttribute('aria-label',live?'实时连接中，切换显示方式':'快照显示，切换到实时连接');b.title=live?'实时连接（tmux attach）':'快照：每隔一会儿读一次屏幕';return b;}
+function tmuxModeSheet(entry){const p=entry.pane;const box=sheet('tmux 显示方式');
+ box.append(el('p','fine','快照：每隔一会儿读一次屏幕，最省事，电脑上什么都不变。实时：手机开一个真正的 tmux 客户端（tmux attach），字一出来就看到，按键也直接到 tmux。'));
+ const pick=v=>{TX.live=v;TX.liveSet=true;cachePut('term:tmuxLive',{mode:v});if(v){attachOpen(p,v==='ro');}else{leaveTerminal();tmuxOpen(p);}};
+ menuItem(box,'快照',()=>pick(''),'refresh',entry.kind==='tmux'?'正在用':'每隔一会儿读一次屏幕');
+ menuItem(box,'实时连接',()=>pick('rw'),'terminal',(entry.kind==='attach'&&!entry.readOnly?'正在用 · ':'')+'窗口大小可能跟着手机变（看电脑上 tmux 的 window-size 设置）');
+ menuItem(box,'实时 · 只读',()=>pick('ro'),'lock',(entry.kind==='attach'&&entry.readOnly?'正在用 · ':'')+'只看不按，也不改窗口大小（tmux attach -r）');}
 // 终端选项 extra: wrap or keep the desktop width (the same per-phone choice as the agent screens).
-function tmuxMenu(box){
- menuItem(box,ANSI.raw?'自动换行':'原始宽度',()=>{ANSI.raw=!ANSI.raw;ANSI.set=true;cachePut('term:raw',{raw:ANSI.raw});const n=document.getElementById('pane-screen');if(n)n.classList.toggle('raw',ANSI.raw);toast(ANSI.raw?'原始宽度：左右滑动查看':'自动换行');},'terminal',ANSI.raw?'长行折到屏幕宽度':'按电脑上的宽度显示，左右滑动');
+function tmuxMenu(box){const e=T.view;
+ if(e&&!S.demo&&!e.pane?.agent)menuItem(box,'显示方式…',()=>tmuxModeSheet(e),'terminal',e.kind==='attach'?(e.readOnly?'实时 · 只读':'实时连接'):'快照');
+ if(e?.kind==='tmux')menuItem(box,ANSI.raw?'自动换行':'原始宽度',()=>{ANSI.raw=!ANSI.raw;ANSI.set=true;cachePut('term:raw',{raw:ANSI.raw});const n=document.getElementById('pane-screen');if(n)n.classList.toggle('raw',ANSI.raw);toast(ANSI.raw?'原始宽度：左右滑动查看':'自动换行');},'terminal',ANSI.raw?'长行折到屏幕宽度':'按电脑上的宽度显示，左右滑动');
  const p=T.view?.pane;if(p&&!T.view.ended)menuItem(box,'关闭…',()=>tmuxClose(p),'x','关掉这个窗格，或者结束整个会话');}
 
 // ─── Long press / 更多 ───────────────────────────────────────────────────────
@@ -167,6 +187,7 @@ function tmuxActions(p,a=tmuxAgent(p)){
  box.append(el('p','fine close-sub',[a?stateLabel(a):'',a?providerName(a.agent):p.command||'shell',tmuxPlace(p),tmuxWhere(p)].filter(Boolean).join(' · ')));
  if(a){menuItem(box,'打开对话',()=>openAgent(a),'chat');if(a.history_ref?.record)menuItem(box,'只读查看历史',()=>openRecord(a.history_ref.record),'history','只看记录');}
  menuItem(box,a?'只看终端':'打开终端',()=>tmuxOpen(p),'terminal');
+ if(!a&&!S.demo&&typeof attachOpen==='function')menuItem(box,'实时连接',()=>attachOpen(p,false),'terminal','开一个真正的 tmux 客户端，字一出来就看到');
  menuItem(box,'复制位置',()=>copyText(p.session+':'+p.window_index+'.'+p.pane_index),'copy',p.session+':'+p.window_index+'.'+p.pane_index+' · '+tmuxRawId(p)+(tmuxServer(p)?' · 服务器 '+tmuxServer(p):''));
  menuItem(box,'关闭…',()=>tmuxClose(p),'x','关掉这个窗格，或者结束整个会话');}
 

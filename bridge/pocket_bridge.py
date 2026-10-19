@@ -895,9 +895,10 @@ def mutate(request, prefix, agent, state_dir):
             if agent.get("agent"):
                 raise BridgeError("Pane now contains an Agent; reload before sending input")
             if op == "paneKey":
-                if key not in ("up", "down", "left", "right", "enter", "esc", "ctrl+c", "ctrl+d", "tab", "backspace"):
-                    raise BridgeError("Unsupported key")
-                args = ["pane", "send-keys", agent["pane_id"], key]
+                if not term_key(key): raise BridgeError("Unsupported key")
+                keyed = herdr_key_args(key)
+                if keyed is None: raise BridgeError(TERM_KEY_REFUSED)
+                args = ["pane", keyed[0], agent["pane_id"], keyed[1]]
             else:
                 if not isinstance(text, str) or not text or len(text.encode()) > 16000 or "\x00" in text:
                     raise BridgeError("Terminal input must contain 1–16000 UTF-8 bytes without NUL")
@@ -5535,9 +5536,106 @@ TMUX_FORMAT = TMUX_SEP.join("#{%s}" % f for f in TMUX_FIELDS)
 TMUX_MAX = 64
 TMUX_SCROLL = 200
 TMUX_TEXT = 16000
-TMUX_KEYS = {"up": "Up", "down": "Down", "left": "Left", "right": "Right", "enter": "Enter", "esc": "Escape",
-             "ctrl+c": "C-c", "ctrl+d": "C-d", "tab": "Tab", "backspace": "BSpace", "shift+tab": "BTab"}
 TMUX_SEND_KEYS = {"v", "op", "id", "target", "identity", "action", "text", "key"}
+
+# ─── Terminal keys: the phone's key bar and direct keyboard (paneKey, tmuxSend key) ──────────
+# One key name: optional modifiers in the order ctrl+, alt+, shift+, then a named key or one
+# printable ASCII character ("ctrl+shift+left", "alt+x", "shift+tab", "f5", "|"). The phone
+# (termkeys.js) uses the same table to grey out what cannot be sent; tests/fixtures/term_keys.json
+# pins both. Bytes follow xterm: CSI 1;m X for modified cursor / F1–F4 keys, CSI n;m ~ for the
+# tilde keys, CSI 27;m;k ~ (modifyOtherKeys) for modified Enter / Tab / Esc, Esc prefix for Alt,
+# C0 codes for Ctrl. Seen live (Herdr 0.8.2, tmux 3.7c, `od -c` in the pane): Herdr's own key
+# names give these bytes for the cursor, F, Enter, Tab, Esc, Backspace and Space keys and follow the
+# pane's cursor-key mode (↑ is ESC O A after DECCKM), but it has no Home / End / PgUp / PgDn /
+# Insert / Delete and sends plain Tab for ctrl+tab and "?" for ctrl+?; tmux names its keys (Up,
+# S-Home, C-PPage, BTab…) but sends plain Enter for S-Enter / C-Enter and plain Tab for C-Tab,
+# types an unknown key name as text, and takes an argument ending in ";" as a command separator.
+# Where a name would be wrong the bytes go in as literal text instead; NUL (ctrl+space, ctrl+@)
+# only ever as a key name (it cannot be an argument).
+TERM_KEY_BASES = ("esc", "tab", "enter", "backspace", "space", "up", "down", "left", "right", "home", "end",
+                  "insert", "delete", "pageup", "pagedown") + tuple("f%d" % i for i in range(12, 0, -1))
+TERM_KEY = re.compile(r"(ctrl\+)?(alt\+)?(shift\+)?(%s|[!-~])" % "|".join(TERM_KEY_BASES))
+TERM_CSI_LETTER = {"up": "A", "down": "B", "right": "C", "left": "D", "home": "H", "end": "F"}
+TERM_SS3 = {"f1": "P", "f2": "Q", "f3": "R", "f4": "S"}
+TERM_TILDE = {"insert": 2, "delete": 3, "pageup": 5, "pagedown": 6, "f5": 15, "f6": 17, "f7": 18, "f8": 19,
+              "f9": 20, "f10": 21, "f11": 23, "f12": 24}
+TERM_CTRL = {"@": "\x00", "[": "\x1b", "\\": "\x1c", "]": "\x1d", "^": "\x1e", "_": "\x1f", "/": "\x1f", "?": "\x7f"}
+TERM_TMUX = {"up": "Up", "down": "Down", "left": "Left", "right": "Right", "home": "Home", "end": "End",
+             "insert": "IC", "delete": "DC", "pageup": "PPage", "pagedown": "NPage", **{"f%d" % i: "F%d" % i for i in range(1, 13)}}
+TERM_KEY_REFUSED = "没发出去：这个组合键在终端里没有对应的按键码"
+
+
+def term_key(name):
+    """(ctrl, alt, shift, base) of a key name, None when it is not one."""
+    m = TERM_KEY.fullmatch(name) if isinstance(name, str) else None
+    return (bool(m.group(1)), bool(m.group(2)), bool(m.group(3)), m.group(4)) if m else None
+
+
+def term_key_bytes(name, app_cursor=False):
+    """The bytes a key sends (xterm; app_cursor: DECCKM is on). None: no encoding exists."""
+    parsed = term_key(name)
+    if not parsed: return None
+    ctrl, alt, shift, base = parsed
+    m = 1 + shift + 2 * alt + 4 * ctrl
+    if base in TERM_CSI_LETTER:
+        x = TERM_CSI_LETTER[base]
+        return ("\x1bO" if app_cursor else "\x1b[") + x if m == 1 else "\x1b[1;%d%s" % (m, x)
+    if base in TERM_SS3: return "\x1bO" + TERM_SS3[base] if m == 1 else "\x1b[1;%d%s" % (m, TERM_SS3[base])
+    if base in TERM_TILDE: return "\x1b[%d~" % TERM_TILDE[base] if m == 1 else "\x1b[%d;%d~" % (TERM_TILDE[base], m)
+    if base in ("enter", "tab", "esc"):
+        plain, code = {"enter": ("\r", 13), "tab": ("\t", 9), "esc": ("\x1b", 27)}[base]
+        if m == 1: return plain
+        if m == 3: return "\x1b" + plain
+        if base == "tab" and m == 2: return "\x1b[Z"
+        return "\x1b[27;%d;%d~" % (m, code)
+    esc = "\x1b" if alt else ""
+    if base == "backspace": return esc + ("\x08" if ctrl else "\x7f")
+    if base == "space": return esc + ("\x00" if ctrl else " ")
+    c = base.upper() if shift and base.isalpha() else base
+    if ctrl:
+        if c.isalpha(): c = chr(ord(c.upper()) - 64)
+        elif c in TERM_CTRL: c = TERM_CTRL[c]
+        else: return None
+    return esc + c
+
+
+def herdr_key_args(name):
+    """`pane send-keys` / `pane send-text` arguments (after the pane id) for one key, None if none."""
+    data = term_key_bytes(name)
+    if data is None: return None
+    ctrl, alt, shift, base = term_key(name)
+    # Herdr's names, which follow the pane's cursor-key mode. Not where Herdr differs from xterm: it has
+    # no ctrl+tab (plain Tab), drops the modifiers of ctrl+alt+shift+backspace and sends modified F3 as
+    # CSI 13;m ~ (seen live); those go in as bytes.
+    if base in ("up", "down", "left", "right") or base[:1] == "f" and base[1:].isdigit() and not (base == "f3" and (ctrl or alt or shift)) \
+            or base in ("enter", "esc", "space") or base == "backspace" and not (ctrl and alt and shift) \
+            or base == "tab" and not (ctrl and not shift):
+        return ["send-keys", name]
+    if data in ("\x00", "\x1b\x00"): return ["send-keys", ("ctrl+alt+" if alt else "ctrl+") + "space"]
+    return ["send-text", data]
+
+
+def tmux_literal(text):
+    # tmux reads an argument that ends in ";" as the end of a command: escape that last ";".
+    return text[:-1] + "\\;" if text.endswith(";") else text
+
+
+def tmux_key_args(name):
+    """`send-keys -t <pane>` arguments for one key, None if none."""
+    data = term_key_bytes(name)
+    if data is None: return None
+    ctrl, alt, shift, base = term_key(name)
+    mods = ("C-" if ctrl else "") + ("M-" if alt else "")
+    if base in TERM_TMUX: return [mods + ("S-" if shift else "") + TERM_TMUX[base]]
+    plain = {"enter": "Enter", "esc": "Escape", "space": "Space"}
+    if base in plain and not shift and not ctrl: return [mods + plain[base]]
+    if base == "space" and ctrl: return [mods + "Space"]
+    if base == "tab" and not ctrl: return [("M-" if alt else "") + ("BTab" if shift else "Tab")] if not (alt and shift) else ["-l", "--", data]
+    if base == "backspace": return [mods + ("h" if ctrl else "BSpace")] if ctrl or alt else ["BSpace"]
+    if len(base) == 1 and base.isalpha() and (ctrl or alt): return [mods + (base.lower() if ctrl else base.upper() if shift else base)]
+    if base in ("@", "[", "\\", "]", "^", "_", "/", "?") and ctrl and not alt: return ["C-" + base]
+    if "\x00" in data: return None
+    return ["-l", "--", tmux_literal(data)]
 TMUX_SKIP = ("herdr",)
 TMUX_NO_SERVER = re.compile(r"(?i)no server running|error connecting to|no such file or directory|server exited")
 # Foreground commands that cannot be an agent: no process walk for these panes.
@@ -5976,7 +6074,10 @@ def screen_pair(raw):
 def tmux_read(request):
     pane = tmux_target(request)
     text, screen = tmux_capture(pane)
-    return {"text": text, "ansi": screen, "pane": tmux_public(pane)}
+    # `known`: a short hash of the screen the phone has; the same screen comes back as {same: true}.
+    known = hashlib.sha256(screen.encode("utf-8", "replace")).hexdigest()[:16]
+    if request.get("known") == known: return {"same": True, "known": known, "pane": tmux_public(pane)}
+    return {"text": text, "ansi": screen, "known": known, "pane": tmux_public(pane)}
 
 
 def tmux_send(request, state_dir):
@@ -5986,7 +6087,8 @@ def tmux_send(request, state_dir):
         raise BridgeError("Mutation requires a UUID request id")
     action, text, key = request.get("action"), request.get("text"), request.get("key")
     if action == "key":
-        if key not in TMUX_KEYS or text is not None: raise BridgeError("Unsupported key")
+        if text is not None or not term_key(key): raise BridgeError("Unsupported key")
+        if tmux_key_args(key) is None: raise BridgeError(TERM_KEY_REFUSED)
     elif action in ("run", "text"):
         if key is not None or not isinstance(text, str) or not text or len(text.encode()) > TMUX_TEXT or "\x00" in text:
             raise BridgeError("Terminal input must contain 1–16000 UTF-8 bytes without NUL")
@@ -5997,14 +6099,14 @@ def tmux_send(request, state_dir):
     db, previous = receipt_open(state_dir, req_id, digest, "上次的输入结果未知：先看一眼终端，别直接重发")
     if previous is not None: return previous
     target, sock = pane["_tid"], pane["_sock"]
-    if action == "key": steps = [(["send-keys", "-t", target, TMUX_KEYS[key]], None)]
+    if action == "key": steps = [(["send-keys", "-t", target, *tmux_key_args(key)], None)]
     elif "\n" in text or "\r" in text:
         # Several lines: one paste (bracketed when the program asked for it), so a shell or an
         # editor gets the lines as typed text instead of running each one. -d drops the buffer.
         name = "herdr-pocket-" + req_id[:8]
         steps = [(["load-buffer", "-b", name, "-"], text.replace("\r\n", "\n")),
                  (["paste-buffer", "-p", "-d", "-b", name, "-t", target], None)]
-    else: steps = [(["send-keys", "-t", target, "-l", "--", text], None)]
+    else: steps = [(["send-keys", "-t", target, "-l", "--", tmux_literal(text)], None)]
     if action == "run": steps.append((["send-keys", "-t", target, "Enter"], None))
     try:
         for index, (args, data) in enumerate(steps):
@@ -7365,7 +7467,19 @@ def handle(request, state_dir=None):
         if pane.get("pane_id") != target or not pane.get("terminal_id") or pane.get("agent") or identity(pane) != request.get("identity"):
             raise BridgeError("Pane changed or now contains an Agent; reload terminals")
         if op == "paneRead":
-            return call(prefix + ["pane", "read", target, "--source", "recent-unwrapped", "--lines", "400"])
+            # `revision`: the pane's revision the phone last read. Herdr bumps it when the pane changes, so
+            # an unchanged pane answers {same: true} without the read (and its 400 lines over the network).
+            revision = pane.get("revision")
+            known = request.get("revision")
+            if isinstance(revision, int) and isinstance(known, int) and not isinstance(known, bool) and known == revision:
+                return {"same": True, "revision": revision}
+            # ANSI: the phone paints the same colours for a Herdr pane as for a tmux one (SGR only,
+            # exactly like tmux_capture; cursor moves and every other escape are removed).
+            raw = call(prefix + ["pane", "read", target, "--source", "recent-unwrapped", "--lines", "400", "--format", "ansi"])["text"]
+            text, screen = screen_pair(clean_ansi(raw))
+            result = {"text": text, "ansi": screen}
+            if isinstance(revision, int): result["revision"] = revision
+            return result
         return mutate(request, prefix, pane, state_dir or Path.home() / ".local/state/herdr-pocket")
     if op in ("createInfo", "create"):
         try: prefix = select_session(request)
@@ -7430,7 +7544,30 @@ def handle(request, state_dir=None):
     return mutate(request, prefix, agent, state_dir or Path.home() / ".local/state/herdr-pocket")
 
 
+def tmux_attach_main(argv):
+    """`python3 <bridge> --tmux-attach <pane id> <identity> [--read-only]` on a PTY of the app's own
+    (native shellOpen with `attach`): the live 实时 view of a tmux pane. Re-checks the pane against its
+    live server exactly like every tmux op (tmux_target), then replaces this process with a tmux client
+    attached to that pane's session (-r: read-only, which also leaves the window size alone). Nothing is
+    typed or changed; detaching (closing the channel) leaves the session running."""
+    os.umask(0o077)
+    def refuse(text):
+        sys.stdout.write("\r\n没连上：" + text + "\r\n"); sys.stdout.flush(); sys.exit(2)
+    read_only = argv[2:] == ["--read-only"]
+    if len(argv) not in (2, 3) or len(argv) == 3 and not read_only: refuse("参数不对")
+    try: pane = tmux_target({"target": argv[0], "identity": argv[1]})
+    except BridgeError as exc: refuse(str(exc))
+    binary = tmux_binary()
+    if not binary or not pane.get("_sid"): refuse("找不到这个 tmux 会话")
+    env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
+    env.setdefault("TERM", "xterm-256color")
+    args = [binary, "-u", *(["-S", pane["_sock"]] if pane["_sock"] else []), "attach-session", *(["-r"] if read_only else []), "-t", pane["_sid"]]
+    try: os.execve(binary, args, env)
+    except OSError as exc: refuse(str(exc)[:200])
+
+
 def main():
+    if sys.argv[1:2] == ["--tmux-attach"]: return tmux_attach_main(sys.argv[2:])
     # The app maps this stderr line to "Python 太旧" (ConnectErrors.kt); keep the wording.
     if sys.version_info < (3, 9):
         sys.exit("Herdr Pocket needs Python 3.9 or newer; this is %d.%d" % sys.version_info[:2])

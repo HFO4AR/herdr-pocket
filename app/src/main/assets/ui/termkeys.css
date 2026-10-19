@@ -1,0 +1,51 @@
+/* Terminal key bar (termkeys.js): Ctrl / Alt / Shift pinned at the start, then pages of keys that
+ * fill the width (swipe sideways), two rows when the screen is tall, one with the keyboard up. */
+.tk-bar{position:relative;display:flex;gap:6px;padding:0 12px 9px;min-width:0}
+.tk-mods{display:grid;grid-auto-flow:column;grid-template-rows:44px;grid-auto-columns:44px;gap:4px;flex-shrink:0}
+.tk-bar.two-rows .tk-mods{grid-auto-flow:row;grid-template-rows:repeat(2,44px);grid-template-columns:repeat(2,44px)}
+.tk-bar:not(.two-rows) .tk-edit{display:none}
+.tk-mods .key{padding:0;font-size:var(--fs-xs);font-weight:650;letter-spacing:.2px}
+.tk-mods #tk-shift{font-size:var(--fs-lg)}
+.mod-key.on{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.mod-key.locked{background:var(--accent);color:var(--on-accent);box-shadow:none}
+/* Locked: a bar under the label, so the two states differ by more than colour. */
+.mod-key.locked:after{content:'';position:absolute;left:50%;bottom:6px;width:16px;height:2px;margin-left:-8px;border-radius:1px;background:currentColor}
+.tk-edit{color:var(--ink-2);padding:0}
+.tk-edit svg{width:18px;height:18px}
+.tk-pager{flex:1;min-width:0;display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;overscroll-behavior-x:contain;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.tk-pager::-webkit-scrollbar{display:none}
+.tk-page{flex:0 0 100%;min-width:0;display:grid;gap:4px 6px;scroll-snap-align:start;scroll-snap-stop:always;padding-right:6px;box-sizing:border-box}
+.tk-page .key{min-width:0;padding:0 2px;font-size:var(--fs-xs)}
+.tk-page .key.char-key{font-size:var(--fs-base)}
+.tk-page .key.combo-key{font-size:var(--fs-sm);font-weight:600}
+/* Cannot be sent with the modifiers as they are: dimmed, the tap says why. */
+.key.off{opacity:.36;box-shadow:none}
+.key.off:active{transform:none}
+.tk-dots{position:absolute;left:0;right:0;bottom:1px;display:flex;justify-content:center;gap:5px;pointer-events:none}
+.tk-dots i{width:5px;height:5px;border-radius:50%;background:var(--line-strong);transition:background-color .15s var(--ease),width .15s var(--ease)}
+.tk-dots i.on{background:var(--accent);width:12px;border-radius:3px}
+
+/* 直接键盘 at the start of the line input, and the pane's hidden keyboard field. */
+.term-kbd{flex-shrink:0;width:44px;height:44px;border-radius:var(--radius-control);display:inline-flex;align-items:center;justify-content:center;color:var(--faint);transition:background-color .15s var(--ease),color .15s var(--ease)}
+.term-kbd svg{width:20px;height:20px}
+.term-kbd.on{color:var(--accent);background:var(--soft)}
+.tk-catch{position:absolute;left:8px;bottom:8px;width:2px;height:2px;margin:0;padding:0;border:0;opacity:0;resize:none;overflow:hidden;font-size:16px;pointer-events:none;caret-color:transparent}
+.term-surface.catching{box-shadow:0 0 0 2px var(--accent-raw),var(--shadow)}
+
+/* tmux 快照 / 实时 in the terminal header. */
+.term-mode{position:relative;isolation:isolate;flex-shrink:0;min-height:44px;padding:0 11px;display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-xs);font-weight:650;color:var(--ink-2);background:none}
+.term-mode svg{width:15px;height:15px}
+.term-mode:before{content:'';position:absolute;inset:7px 0;border-radius:15px;background:var(--sunken);z-index:-1}
+.term-mode.on{color:var(--success)}
+.term-mode.on:before{background:var(--success-soft)}
+
+/* 自定义按键 */
+.tk-edit-list{max-height:min(56vh,520px);overflow:auto;overscroll-behavior:contain;margin:4px -4px 0;padding:0 4px}
+.tk-edit-row{display:flex;align-items:center;gap:6px;min-height:50px;border-bottom:1px solid var(--line)}
+.tk-edit-row:last-child{border-bottom:0}
+.tk-edit-row.hidden-key .tk-edit-cap,.tk-edit-row.hidden-key .tk-edit-name{opacity:.45}
+.tk-edit-cap{min-width:54px;height:36px;padding:0 8px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;background:var(--sunken);box-shadow:inset 0 -1px 0 var(--line-strong);font:500 var(--fs-sm)/1 var(--term-font)}
+.tk-edit-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2);font-size:var(--fs-sm)}
+.tk-edit-show{width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.tk-edit-show input{width:20px;height:20px;accent-color:var(--accent)}
+.tk-edit-row .icon-btn:disabled{opacity:.3}

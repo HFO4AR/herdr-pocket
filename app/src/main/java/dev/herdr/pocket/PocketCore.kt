@@ -471,9 +471,12 @@ object PocketCore {
     /** (id, name) of the computer a request names, or of the active one. */
     fun linkInfo(deviceId: String?): Pair<String, String> = linkFor(deviceId).let { it.id to it.name }
 
+    /** Set by the activity on screen: tells its page that a terminal has new output (ptyWake). */
+    @Volatile var shellWake: ((String) -> Unit)? = null
     fun terminal(deviceId: String?, op: String, req: JSONObject): JSONObject {
         val link = linkFor(deviceId)
         ensureConnected(link)
+        link.transport.onShellData = { id -> shellWake?.invoke(id) }
         return link.transport.terminal(op, req)
     }
 

@@ -73,7 +73,7 @@ class SshTransport : AutoCloseable {
             previous
         }
         // An interactive shell belongs to the session it was opened on; it is never moved.
-        shell?.close(); shell = null
+        shells.values.forEach { it.close() }; shells.clear(); plainShell = null
         if (old != null) retire(old, graceful = keepOld)
     }
 
@@ -382,7 +382,7 @@ class SshTransport : AutoCloseable {
         } catch (_: Exception) { return false } finally { release(ssh) }
     }
     /** True while an interactive shell is open; it would not survive a reconnect. */
-    fun hasShell() = shell != null
+    fun hasShell() = shells.isNotEmpty()
     /** Instrumented tests only: drop the TCP session as a network loss would. */
     internal fun simulateDrop() { session?.disconnect() }
 
@@ -451,29 +451,56 @@ class SshTransport : AutoCloseable {
             return result.getJSONObject("data")
         } finally { channel.disconnect() }
     }
-    @Volatile private var shell: ShellTerminal? = null
+    // Open PTYs by id: at most one plain shell (the 终端 tab's SSH shell) and a few live tmux attaches.
+    private val shells = java.util.concurrent.ConcurrentHashMap<String, ShellTerminal>()
+    @Volatile private var plainShell: String? = null
+    /** Called with a terminal id when its output arrives after an armed read (ShellTerminal.read). */
+    @Volatile var onShellData: ((String) -> Unit)? = null
     fun terminal(op: String, req: JSONObject): JSONObject {
         val ssh = session ?: error("尚未连接")
         check(ssh.isConnected) { "SSH 已断开，请重新连接；未重发输入" }
         if (op == "shellOpen") {
-            check(shell == null) { "已有 SSH 终端，请先关闭或返回原终端" }
-            val opened = ShellTerminal(ssh.openChannel("shell") as ChannelShell, req.optInt("cols", 80), req.optInt("rows", 24))
-            shell = opened
+            val attach = req.optJSONObject("attach")
+            val wake: (String) -> Unit = { id -> onShellData?.invoke(id) }
+            if (attach == null) {
+                check(plainShell?.let { shells.containsKey(it) } != true) { "已有 SSH 终端，请先关闭或返回原终端" }
+                val opened = ShellTerminal(ssh.openChannel("shell") as ChannelShell, req.optInt("cols", 80), req.optInt("rows", 24), wake)
+                shells[opened.id] = opened; plainShell = opened.id
+                return JSONObject().put("id", opened.id)
+            }
+            check(shells.size < MAX_TERMINALS) { "手机上开着的终端太多了，先关掉几个" }
+            val channel = ssh.openChannel("exec") as ChannelExec
+            channel.setCommand(attachCommand(attach))
+            val opened = ShellTerminal(channel, req.optInt("cols", 80), req.optInt("rows", 24), wake)
+            shells[opened.id] = opened
             return JSONObject().put("id", opened.id)
         }
-        val current = shell ?: error("SSH 终端已结束（连接断开后会重建连接，但不会恢复旧 shell），请重新打开")
-        check(req.getString("terminalId") == current.id) { "终端已更换，拒绝旧页面输入" }
+        val id = req.getString("terminalId")
+        val current = shells[id] ?: error(if (id == plainShell) "SSH 终端已结束（连接断开后会重建连接，但不会恢复旧 shell），请重新打开" else "终端已更换或已关闭，拒绝旧页面输入")
         when (op) {
-            "shellRead" -> return current.read(req.getLong("cursor"))
+            "shellRead" -> return current.read(req.getLong("cursor"), req.optBoolean("wait", false))
             "shellWrite" -> current.write(req.getLong("sequence"), req.getString("text"))
             "shellResize" -> current.resize(req.getInt("cols"), req.getInt("rows"))
-            "shellClose" -> { current.close(); shell = null }
+            "shellClose" -> { current.close(); shells.remove(id); if (plainShell == id) plainShell = null }
             else -> error("不支持的终端操作")
         }
         return JSONObject()
     }
+    /**
+     * The one command a live tmux attach runs: the installed bridge, which re-checks the pane's identity
+     * against its live tmux server and only then execs `tmux attach-session` (pocket_bridge.tmux_attach_main).
+     * Target and identity are checked here too (pane id `%N` or `%N@<12 hex>`, 64-hex identity) and quoted.
+     */
+    private fun attachCommand(attach: JSONObject): String {
+        val target = attach.optString("target"); val identity = attach.optString("identity")
+        require(Regex("%\\d{1,9}(@[0-9a-f]{12})?").matches(target)) { "tmux 窗格编号不对" }
+        require(Regex("[0-9a-f]{64}").matches(identity)) { "tmux 窗格标识不对" }
+        check(bridgePath.isNotEmpty()) { "桥接程序还没装好" }
+        return "python3 " + quote(bridgePath) + " --tmux-attach " + quote(target) + " " + quote(identity) +
+            if (attach.optBoolean("readOnly", false)) " --read-only" else ""
+    }
     override fun close() {
-        shell?.close(); shell = null
+        shells.values.forEach { it.close() }; shells.clear(); plainShell = null
         val all = synchronized(this) {
             val list = retiring.toMutableList().also { list -> session?.let { list.add(it) } }
             retiring.clear(); session = null
@@ -489,5 +516,7 @@ class SshTransport : AutoCloseable {
         const val KEEPALIVE_MISSES = 4
         // One round trip on a healthy link; longer means the session is most likely dead.
         const val OPEN_TIMEOUT_MS = 8_000
+        // The SSH shell plus a few live tmux attaches; every one is a channel on the same session.
+        const val MAX_TERMINALS = 4
     }
 }
