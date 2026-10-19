@@ -34,12 +34,18 @@ function filesOpen(opts={}){
  if(S.demo){toast('演示模式不连电脑，不能传文件');return;}
  const dev=opts.device||S.device;if(!dev){toast('先连上电脑');return;}
  filesPrefs(dev.id);
+ const backChat=S.chat,backTerminal=(typeof T!=='undefined'&&T.view)?T.view:null;
  if(typeof leaveTerminal==='function')leaveTerminal();closeSheet();S.chat=null;
- FX.view={device:dev.id,name:dev.name||dev.host||'电脑',path:opts.path||'~',back:[],list:null,loading:true,error:'',select:null,epoch:0,
+ FX.view={device:dev.id,name:dev.name||dev.host||'电脑',path:opts.path||'~',back:[],list:null,loading:true,error:'',select:null,epoch:0,backChat,backTerminal,
   target:'',nav:'',navDone:'',first:true,everLoaded:false,selectNew:false};
  filesHintSeen(dev.id);
  renderFiles();filesLoad(FX.view.path);filesPoll();}
 function filesLeave(){fxClosePreview();FX.view=null;}
+// One tap out of 文件, back to the conversation/terminal it was opened from (or the tab).
+function filesReturn(){const v=FX.view;if(!v)return false;const chat=v.backChat,term=v.backTerminal;FX.view=null;fxClosePreview();
+ if(chat){S.chat=chat;S.epoch++;renderChat();return true;}
+ if(term&&typeof T!=='undefined'){if(term.kind==='attach'&&typeof attachOpen==='function'){attachOpen(term.pane,term.readOnly);return true;}if(!term.disposed){T.view=term;renderTerminal();if(typeof pollTerminal==='function')pollTerminal();return true;}}
+ render();return true;}
 // Back: out of a preview, then selection, then up the folders you came through, then out of 文件.
 function filesBack(){const v=FX.view;if(!v)return false;if(FX.pv){fxClosePreview();renderFiles();return true;}
  if(v.select){v.select=null;paintFiles();return true;}
@@ -87,7 +93,7 @@ function renderFiles(){
  filesWideSolo();
  if(FX.pv)return renderPreviewView();
  const root=shell();root.classList.add('files-shell');
- const head=el('header','chat-head files-head');head.append(ib('back','返回',()=>filesBack()));
+ const head=el('header','chat-head files-head');const backLabel=v.backChat?'返回会话':v.backTerminal?'返回终端':'返回';head.append(ib('back',backLabel,()=>filesReturn()),ib('fHome','回到主目录',()=>filesGo('~')));
  const av=el('div','avatar files-av');av.append(icon('folder'));head.append(av);
  const id=el('div','grow chat-id');id.append(el('h2','','文件'),el('small','files-sub',v.name+' · 通过 SSH 传文件'));head.append(id);
  head.append(ib('fUpload','上传到这里',filesUpload),ib('more','文件选项',filesMenu));root.append(head);

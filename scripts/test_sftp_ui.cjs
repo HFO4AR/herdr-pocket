@@ -155,6 +155,19 @@ assert.equal(backs,4,'one back per folder visited, then out');
 assert.equal(await page.evaluate(()=>FX.view),null,'back past the first folder leaves 文件');
 assert.equal(await page.locator('.files-head').count(),0);
 console.log('PASS: folders open, crumbs jump, back walks the folders you came through, then leaves');
+// Home button jumps straight to ~ from any depth.
+await page.evaluate(()=>filesOpen());await row('src').waitFor();
+await row('src').locator('.file-row').click();await row('app').waitFor();
+await page.getByRole('button',{name:'回到主目录',exact:true}).click();await row('report.pdf').waitFor();
+assert.equal(await page.locator('.files-crumb.here').innerText(),'主目录');
+console.log('PASS: home button jumps straight to ~');
+// One tap back to the conversation 文件 was opened from.
+await page.evaluate(()=>{S.chat={record:{id:'r1',thread:'t1',title:'测试会话',provider:'claude',parent:null,cwd:'/home/u',modified:Date.now()/1000},agent:null,title:'测试会话',provider:'claude'};filesOpen();});
+await page.getByRole('heading',{name:'文件',exact:true}).waitFor();
+assert.equal(await page.getByRole('button',{name:'返回会话',exact:true}).count(),1,'the header names the conversation it returns to');
+await page.getByRole('button',{name:'返回会话',exact:true}).click();
+await page.getByText('Claude · 历史只读',{exact:true}).waitFor();
+console.log('PASS: 返回会话 leaves 文件 in one tap');
 
 // ── Errors: a start folder that is gone falls back to home; a failed read shows 重试 ──
 await page.evaluate(()=>filesOpen({path:'/gone/away'}));
