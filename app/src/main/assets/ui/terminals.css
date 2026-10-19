@@ -55,6 +55,11 @@
 .term-run{min-height:44px;padding:0 18px;border-radius:12px;flex-shrink:0}
 :root:has(.terminal-shell) #toast{bottom:calc(var(--term-dock-h,150px) + 10px)}
 
+/* A tablet with a physical keyboard: the key bar and line input are redundant. The terminal menu
+ * can show them again if needed; the status line stays. */
+.terminal-shell.hw-kb .terminal-keys,.terminal-shell.hw-kb .term-compose{display:none}
+.terminal-shell.hw-kb .term-dock{padding-top:0;padding-bottom:0;gap:0}
+
 /* Keyboard open (adjustResize) and landscape: give the screen the room. */
 @media(max-height:560px){
  .term-head{min-height:48px;padding-top:2px;padding-bottom:2px}

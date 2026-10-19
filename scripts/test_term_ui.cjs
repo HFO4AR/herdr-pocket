@@ -15,6 +15,7 @@ async function fresh(width,height,theme){
  const page=await context.newPage();
  page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});
  await page.addInitScript(()=>{window.PocketNative={request(id,op,raw){
+  if(op==='inputInfo'){setTimeout(()=>nativeResult(id,{ok:true,data:{physicalKeyboard:!!window.__hwKeyboard}}),0);return;}
   if(!['devices','demo','disconnect','protect','watchState','settings','cacheGet','cachePut'].includes(op))throw Error('Forbidden native call in offline UI test: '+op);
   setTimeout(()=>nativeResult(id,{ok:true,data:op==='devices'?{devices:[]}:op==='cacheGet'?{value:null}:{}}),0);}};});
  await page.goto(require('./ui_bundle.cjs').url(html));
@@ -148,6 +149,21 @@ for(const theme of ['light','dark'])for(const [width,height] of [[390,844],[320,
  assert.ok(await overflow(page)<=0);
  await page.context().close();
  console.log('PASS: '+tag+': SSH theme/keys/keyboard/jump/touch/ended, pane, chat 终端 card, confirm screen');}
+
+// 5. A tablet with a physical keyboard hides the on-screen dock; the menu can bring it back.
+{const page=await fresh(1024,768,'light');await page.evaluate(()=>{window.__hwKeyboard=true;});
+ await page.locator('.bottom-nav').getByRole('button',{name:'终端',exact:true}).click();
+ await page.getByRole('button',{name:'打开 SSH 终端',exact:true}).click();
+ await page.locator('.xterm-screen').waitFor();await page.waitForTimeout(500);
+ assert.equal(await page.locator('.terminal-keys').isVisible(),false,'key bar hidden with a hardware keyboard');
+ assert.equal(await page.locator('.term-compose').isVisible(),false,'line input hidden with a hardware keyboard');
+ await page.getByRole('button',{name:'终端选项',exact:true}).click();
+ await page.getByRole('button',{name:/显示快捷栏/}).click();await page.waitForTimeout(300);
+ assert.equal(await page.locator('.term-compose').isVisible(),true,'the menu can show the dock again');
+ await page.getByRole('button',{name:'终端选项',exact:true}).click();
+ await page.getByRole('button',{name:/隐藏快捷栏/}).click();await page.waitForTimeout(300);
+ assert.equal(await page.locator('.term-compose').isVisible(),false,'the menu can hide it again');
+ await page.context().close();console.log('PASS: tablet hardware keyboard hides the quick-send dock');}
 
 assert.deepEqual(errors,[]);
 await browser.close();

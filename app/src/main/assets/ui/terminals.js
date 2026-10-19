@@ -5,6 +5,11 @@
 const T={view:null,shell:null,panes:[],loading:false,generation:0};
 // The key bar, modifiers and direct keyboard: termkeys.js.
 const TERM_FONTS=[11,12,13,15,17];
+// A tablet keyboard case / Bluetooth keyboard makes the on-screen dock redundant. The native
+// layer reports the state and changes (inputInfo / a `keyboard` event); the menu can override it.
+const HWKB=window.HWKB={physical:false,forceShow:false,asked:false};
+function hwKeyboardHide(){return HWKB.physical&&!HWKB.forceShow&&innerWidth>=600;}
+function hwKeyboardProbe(){if(HWKB.asked)return;HWKB.asked=true;try{rpc('inputInfo').then(r=>{const p=!!r?.physicalKeyboard;if(p!==HWKB.physical){HWKB.physical=p;if(T.view)renderTerminal();}}).catch(()=>{});}catch(_){}}
 Object.assign(paths,{keyboard:'M3 7a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zM7 10h.01M11 10h.01M15 10h.01M8 14h8',enterKey:'M19 6v5a3 3 0 0 1-3 3H6M9 10l-4 4 4 4',textCursor:'M9 4h6M9 20h6M12 4v16M7 9H4v6h3M17 9h3v6h-3'});
 function leaveTerminal(){const v=T.view;T.view=null;T.generation++;v?.stopGlide?.();if(v?.kind==='attach')attachClose(v);}
 function clearTerminals(){leaveTerminal();if(T.shell){T.shell.observer?.disconnect();T.shell.term.dispose();}T.shell=null;T.panes=[];}
@@ -132,7 +137,7 @@ function termWhere(entry){
  if(entry.kind==='tmux'||entry.kind==='attach')return tmuxSub(entry);
  return 'Herdr 窗格 · '+(entry.pane.workspace_label?entry.pane.workspace_label+' · ':'')+entry.pane.pane_id;}
 function renderTerminal(){
- const entry=T.view;if(!entry)return;S.chat=null;termFontVar();const root=shell();root.classList.add('terminal-shell');
+ const entry=T.view;if(!entry)return;S.chat=null;termFontVar();hwKeyboardProbe();const root=shell();root.classList.add('terminal-shell');root.classList.toggle('hw-kb',hwKeyboardHide());
  const head=el('header','chat-head term-head');head.append(ib('back',entry.kind==='tmux'||entry.kind==='attach'||S.tab==='live'?'返回列表':'返回终端列表',()=>{leaveTerminal();render();}));
  const [st,stLabel]=termState(entry);
  const av=el('div','avatar term-av'+(entry.kind==='ssh'?' ssh':''));av.append(icon(entry.kind==='ssh'?'globe':'terminal'),el('span','status-dot '+(st==='ok'?'ok':st==='warn'?'work':'')));head.append(av);
@@ -145,10 +150,11 @@ function renderTerminal(){
  head.append(ib('copy','复制屏幕内容',()=>terminalCopy(entry)),ib('more','终端选项',terminalMenu));root.append(head);
  // The screen: a dark card on the warm page in light theme, a deeper well in dark theme.
  const stage=el('div','term-stage');const surface=el('div','term-surface');surface.id='term-surface';surface.classList.toggle('is-off',!!entry.ended);
- if(isPty(entry)){surface.append(entry.host);requestAnimationFrame(()=>{if(!entry.disposed){entry.fit.fit();termJump(entry);}});}
+ if(isPty(entry)){surface.append(entry.host);requestAnimationFrame(()=>{if(!entry.disposed){entry.fit.fit();termJump(entry);if(hwKeyboardHide())entry.term.focus();}});}
  else{const output=el('pre','pane-screen');output.id='pane-screen';output.tabIndex=0;output.setAttribute('aria-label',entry.kind==='tmux'?'tmux 窗格输出':'Herdr 窗格输出');screenUpdate(output,entry);
   output.addEventListener('scroll',()=>{entry.stick=output.scrollHeight-output.scrollTop-output.clientHeight<24;termJump(entry);},{passive:true});
   surface.append(output,tkCatcher(entry,surface));requestAnimationFrame(()=>{output.scrollTop=output.scrollHeight;});
+  if(hwKeyboardHide()){output.addEventListener('keydown',e=>{if(e.isComposing||e.keyCode===229)return;const name=tkFromEvent(e,tkMods(entry));if(!name)return;e.preventDefault();tkPress(entry,name,{latched:false});tkUsed(entry);});requestAnimationFrame(()=>output.focus());}
   // The screen changes size (keyboard, the key bar's rows, rotation): stay at the latest line if you were.
   let lastH=0;new ResizeObserver(()=>{const h=output.clientHeight;if(h!==lastH){lastH=h;if(entry.stick!==false)output.scrollTop=output.scrollHeight;termJump(entry);}}).observe(output);}
  const jump=btn('','jump-btn term-jump',()=>termBottom(entry),'down');jump.id='term-jump';jump.setAttribute('aria-label','跳到最新输出');jump.hidden=true;surface.append(jump);
@@ -338,6 +344,7 @@ function terminalMenu(){const entry=T.view;const box=sheet('终端选项');
  menuItem(box,'自定义按键…',()=>tkEditSheet(),'edit','选哪些键显示、怎么排');
  menuItem(box,'刷新 / 恢复读取',()=>{if(!isPty(entry)){entry.paused=false;entry.notice='';paintStatus(entry);pollSoon(entry);}else if(entry.paused){toast('输入异常后需关闭并重新打开；不自动恢复输入');return;}else pollTerminal();},'refresh');
  menuItem(box,'回到底部',()=>termBottom(entry),'down');
+ if(innerWidth>=600&&HWKB.physical)menuItem(box,HWKB.forceShow?'隐藏快捷栏':'显示快捷栏',()=>{HWKB.forceShow=!HWKB.forceShow;closeSheet();renderTerminal();},'keyboard','接实体键盘时自动收起；这里可以手动开关');
  if(typeof filesTermItem==='function'&&entry.kind!=='attach')filesTermItem(box,entry);
  if(entry.kind==='tmux'||entry.kind==='attach')tmuxMenu(box);
  if(entry.kind==='pane'&&!entry.demo&&typeof hpMenu==='function')hpMenu(box,entry);

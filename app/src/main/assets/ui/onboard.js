@@ -380,7 +380,8 @@ function netEvent(e){
  if(e.type==='reconnecting'){S.reconnecting=true;netBanner('reconnecting');}
  else if(e.type==='reconnected'){S.reconnecting=false;netBanner('ok');if(typeof termReconnected==='function')termReconnected();}
  else if(e.type==='reconnect_failed'){S.reconnecting=false;netBanner('failed',e.detail);}
- else if(e.type==='hostkey_changed'){S.reconnecting=false;netBanner('hostkey',e.detail);}}
+ else if(e.type==='hostkey_changed'){S.reconnecting=false;netBanner('hostkey',e.detail);}
+ else if(e.type==='keyboard'){if(window.HWKB){const p=e.detail==='1';if(HWKB.physical!==p){HWKB.physical=p;if(typeof T!=='undefined'&&T.view)renderTerminal();}}}}
 // Back from the background: a failed reconnect gets one quiet retry.
 function netForeground(){if(S.net==='failed')netRetry();}
 

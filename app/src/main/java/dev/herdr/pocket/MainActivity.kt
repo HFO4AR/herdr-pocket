@@ -9,11 +9,15 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
+import android.hardware.input.InputManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.ext.SdkExtensions
 import android.provider.MediaStore
 import android.provider.Settings
+import android.view.InputDevice
 import android.view.View
 import android.view.WindowInsetsController
 import android.view.WindowManager
@@ -70,6 +74,13 @@ class MainActivity : Activity() {
     private var shot: File? = null
     // Paints the strips behind the status and navigation bars (edge-to-edge, see SystemBars).
     private val bars = BarsBackground()
+    // A tablet keyboard case / Bluetooth keyboard: the on-screen dock is redundant. Virtual
+    // (soft) keyboards never count. The listener only reports the state to the page.
+    private val inputListener = object : InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) { sendKeyboardState() }
+        override fun onInputDeviceRemoved(deviceId: Int) { sendKeyboardState() }
+        override fun onInputDeviceChanged(deviceId: Int) { sendKeyboardState() }
+    }
     // Something shared from another app, waiting for the page to be ready (see ShareIn).
     private var pendingShare: String? = null
 
@@ -101,6 +112,7 @@ class MainActivity : Activity() {
                 WebResourceResponse("text/plain", "UTF-8", "".byteInputStream())
             override fun onPageFinished(view: WebView, url: String) {
                 started = true
+                sendKeyboardState()
                 val reduced = Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
                 web.evaluateJavascript("document.documentElement.classList.toggle('reduce-motion', $reduced)", null)
                 pendingShare?.let { pendingShare = null; deliverShare(it) }
@@ -113,6 +125,7 @@ class MainActivity : Activity() {
         }
         SystemBars.pad(container, bars)
         setContentView(container)
+        try { getSystemService(InputManager::class.java).registerInputDeviceListener(inputListener, Handler(Looper.getMainLooper())) } catch (_: Exception) { }
         // After setContentView: window.insetsController on Android 12 needs the decor view to exist.
         applyBars()
         intent?.let { if (ShareIn.isShare(it)) receiveShare(it) }
@@ -160,6 +173,20 @@ class MainActivity : Activity() {
     private fun reply(id: String, result: JSONObject) = js("window.nativeResult(${JSONObject.quote(id)}, ${result});")
     private fun progress(id: String, stage: String) = js("window.nativeProgress(${JSONObject.quote(id)}, ${JSONObject.quote(stage)});")
     private fun event(value: JSONObject) = js("window.nativeEvent && window.nativeEvent($value);")
+
+    private fun physicalKeyboard(): Boolean = try {
+        val manager = getSystemService(InputManager::class.java)
+        manager.inputDeviceIds.any { id ->
+            val device = manager.getInputDevice(id) ?: return@any false
+            !device.isVirtual && device.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC &&
+                (device.sources and InputDevice.SOURCE_KEYBOARD) == InputDevice.SOURCE_KEYBOARD
+        }
+    } catch (_: Exception) { false }
+
+    private fun sendKeyboardState() {
+        if (!::web.isInitialized) return
+        event(JSONObject().put("type", "keyboard").put("detail", if (physicalKeyboard()) "1" else "0"))
+    }
     private fun success(id: String, value: JSONObject) = reply(id, JSONObject().put("ok", true).put("data", value))
     private fun failure(id: String, error: Exception) = reply(id, JSONObject().put("ok", false).put("error", error.message ?: "操作失败").apply {
         if (error is Friendly) { put("code", error.code); error.info?.let { put("info", it) } }
@@ -297,6 +324,7 @@ class MainActivity : Activity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         applyBars()
+        sendKeyboardState()
     }
 
     private fun askNotificationPermission() {
@@ -465,6 +493,7 @@ class MainActivity : Activity() {
                             success(id, JSONObject().put("saved", device != null && value != null && core.cache.put(device, cacheKey(req), value.toString())))
                         }
                         "cacheInfo" -> core.cache.info().let { (bytes, entries) -> success(id, JSONObject().put("bytes", bytes).put("entries", entries)) }
+                        "inputInfo" -> success(id, JSONObject().put("physicalKeyboard", physicalKeyboard()))
                         "cacheClear" -> { core.cache.clear(); Previews.clear(this@MainActivity); success(id, JSONObject()) }
                         "pickImages" -> runOnUiThread { pick(id, req.optString("source"), req.optInt("max", 4).coerceIn(1, 4)) }
                         "dropImages" -> {
@@ -765,6 +794,7 @@ class MainActivity : Activity() {
         // Swiped away from recents (back never finishes the activity): the connections stay while the
         // service keeps them (same time limit as in the background); otherwise they end here.
         if (isFinishing && !(watched && core.hasLinks)) { WatchService.stop(this); core.disconnect() }
+        try { getSystemService(InputManager::class.java).unregisterInputDeviceListener(inputListener) } catch (_: Exception) { }
         executor.shutdownNow(); pictures.shutdownNow(); web.removeJavascriptInterface("PocketNative"); web.destroy(); super.onDestroy()
     }
 }

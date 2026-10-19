@@ -468,7 +468,7 @@ function renderChat(){
 // Composer, live state (question card / confirmation) and the footer rail (foot.js). The input itself survives
 // status changes so typing (and the keyboard) is never interrupted.
 function renderComposer(){
- const footer=document.getElementById('composer');if(!footer||!S.chat)return;const a=S.chat.agent;
+ const footer=document.getElementById('composer');if(!footer||!S.chat)return;const a=S.chat.agent;if(typeof hwKeyboardProbe==='function')hwKeyboardProbe();
  // Connecting with a cached chat: the composer stays (drafts can be written) but nothing is sent.
  const offline=!S.device&&!S.demo;if(offline&&(!a||S.chat.stale)&&cacheOffline(footer))return;
  if(!a||S.chat.stale){if(followFooter(footer))return;footer.replaceChildren(el('div','readonly',S.chat.stale?'这个窗格的 Agent 已变化，回到列表重新打开':S.chat.record?.parent?'子 Agent 的历史记录 · 只读，不会向父会话发送':'历史只读 · 在「会话」里打开在线 Agent 才能继续对话'));return;}
@@ -486,9 +486,13 @@ function buildComposer(key){
  const compose=el('div','composer');compose.dataset.key=key;const input=el('textarea');input.rows=1;input.setAttribute('aria-label','消息输入框');input.setAttribute('enterkeyhint','enter');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-expanded','false');input.value=S.drafts.get(key)||'';
  const send=btn('','send',()=>sendMessage(input),'send');send.setAttribute('aria-label','发送消息');send.append(el('span','send-label'));
  const grow=()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,innerHeight<560?96:140)+'px';};compose.grow=grow;
- // Enter is a newline on phones; Ctrl/⌘+Enter sends with a hardware keyboard.
- // While the slash list is open, arrows/Enter/Tab/Esc drive it (slash.js).
- input.onkeydown=e=>{if(slashKeydown(e,compose,input))return;if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMessage(input);}};
+ // Enter is a newline on phones. With a physical keyboard it sends, and Shift+Enter keeps the
+ // newline; Ctrl/⌘+Enter sends either way. While the slash list is open, keys drive it (slash.js).
+ input.onkeydown=e=>{
+  if(slashKeydown(e,compose,input))return;
+  if(e.key!=='Enter'||e.isComposing||e.keyCode===229)return;
+  if(e.ctrlKey||e.metaKey){e.preventDefault();sendMessage(input);return;}
+  if(window.HWKB&&HWKB.physical&&!e.shiftKey&&!e.altKey){e.preventDefault();sendMessage(input);}};
  input.oninput=()=>{if(input.value)S.drafts.set(key,input.value);else S.drafts.delete(key);send.disabled=compose.classList.contains('offline')||!input.value.trim()&&!attCount(key);grow();slashSuggest(compose,input);};
  input.onblur=()=>setTimeout(()=>{if(document.activeElement!==input)slashClose(compose);},150);input.onfocus=()=>slashSuggest(compose,input);
  const attach=ib('plus','添加附件',imgMenu);attach.classList.add('attach');

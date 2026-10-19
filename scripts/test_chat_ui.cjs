@@ -41,6 +41,7 @@ await page.addInitScript(()=>{
    else if(a.op==='status'){const {history_ref,...rest}=fx.A1;data={agents:[rest]};}
    else if(a.op==='history'){fx.history++;data=a.before===undefined?{record:r1,messages:fx.newer,before:5,has_more:true,children:[]}:{record:r1,messages:fx.older,before:0,has_more:false,children:[]};}
    else if(a.op==='read')data={text:'$ '};
+   else if(a.op==='prompt'){fx.prompt=(fx.prompt||[]);fx.prompt.push(a);data={sent:true,receipt:'r'};}
    else if(a.op==='catalog')data={records:[],total:0,next:null};
    else if(a.op==='account')data={ssh_user:'u',hostname:'fx'};
    else throw Error('blocked remote op '+a.op);}
@@ -177,5 +178,16 @@ for(const [w,h,theme] of [[320,640,'dark'],[390,844,'dark'],[320,640,'light']]){
  await page.evaluate(()=>{S.stick=true;scrollBottom();});await shot(theme+'-'+w);}
 assert.deepEqual(errors,[]);
 assert(!(await page.evaluate(()=>fx.calls)).some(op=>['prompt','key','answer','paneRun','paneText','paneKey'].includes(op)),'nothing was sent');
+
+// 10. A hardware keyboard's Enter sends in the chat; Shift+Enter keeps a newline.
+await page.setViewportSize({width:390,height:844});
+await page.evaluate(()=>{window.HWKB=Object.assign(window.HWKB||{},{physical:true});S.chat.agent={...S.chat.agent,agent_status:'idle'};renderComposer();});
+await box().fill('键盘回车发送');await box().press('Enter');
+await page.waitForFunction(()=>window.fx.prompt&&fx.prompt.length===1);
+assert.equal(await page.evaluate(()=>fx.prompt[0].text),'键盘回车发送');
+await box().fill('第一行');await box().press('Shift+Enter');await box().type('第二行');
+assert.equal(await box().inputValue(),'第一行\n第二行');
+assert.equal(await page.evaluate(()=>fx.prompt.length),1,'Shift+Enter sends nothing');
+console.log('PASS: hardware keyboard Enter sends; Shift+Enter keeps a newline');
 await browser.close();
 })().catch(e=>{console.error(e);process.exit(1);});
