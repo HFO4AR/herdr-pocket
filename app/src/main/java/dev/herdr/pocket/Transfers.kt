@@ -27,6 +27,8 @@ import java.util.concurrent.Executors
 class Transfer(val id: String, val device: String, val deviceName: String, val kind: String, @Volatile var name: String, val remote: String, @Volatile var size: Long) {
     @Volatile var state = "queued" // queued, running, done, failed, cancelled
     @Volatile var done = 0L
+    /** While running: "copy" until every byte moved, then "verify" (size check, moving into place). */
+    @Volatile var phase = "copy"
     @Volatile var error = ""
     @Volatile var cancelled = false
     /** Download: the finished document (MediaStore row or the picked document). Upload: the final remote path. */
@@ -37,7 +39,7 @@ class Transfer(val id: String, val device: String, val deviceName: String, val k
     val at = System.currentTimeMillis()
     @Volatile var ended = 0L
     fun json(): JSONObject = JSONObject().put("id", id).put("device", device).put("deviceName", deviceName).put("kind", kind)
-        .put("name", name).put("remote", remote).put("size", size).put("done", done).put("state", state).put("error", error)
+        .put("name", name).put("remote", remote).put("size", size).put("done", done).put("state", state).put("phase", phase).put("error", error)
         .put("at", at).put("ended", ended).put("where", where).put("saved", savedPath).put("canOpen", kind == "down" && state == "done" && uri != null)
 }
 
@@ -130,6 +132,7 @@ object Transfers {
                 val input = resolver.openInputStream(pick.uri) ?: throw Friendly("sftp_source", "手机上的「${pick.name}」读不到了")
                 val counted = input.use { raw -> Counting(raw, t).also { sftp.put(it, SftpPath.q(temp), ChannelSftp.OVERWRITE) } }.count
                 if (t.cancelled) throw Cancelled()
+                t.phase = "verify"
                 val written = sftp.lstat(SftpPath.q(temp)).size
                 if (written != counted) throw Friendly("sftp_short", "上传不完整（电脑上 $written / 手机读出 $counted 字节），没有放进去")
                 if (pick.size >= 0 && counted != pick.size) throw Friendly("sftp_short", "手机上读出的大小（$counted）和文件大小（${pick.size}）不一样，没有放进去")
@@ -240,6 +243,7 @@ object Transfers {
                         }
                     }
                 }
+                t.phase = "verify"
                 if (count != expected) throw Friendly("sftp_short", "只收到 ${count} / ${expected} 字节，已删掉没下完的文件")
             }
             val doc = target!!

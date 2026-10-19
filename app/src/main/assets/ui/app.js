@@ -52,7 +52,7 @@ const app=document.getElementById('app'),overlay=document.getElementById('overla
 
 // ─── Feedback ───────────────────────────────────────────────────────────────
 let toastTimer;
-function toast(text){const n=document.getElementById('toast');toastSpot(n);n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>{n.classList.remove('show');
+function toast(text){const n=document.getElementById('toast');toastSpot(n);n.classList.remove('with-actions');n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>{n.classList.remove('show');
  // Empty once faded so screen readers never find an old message (aria-hidden toggling made Android WebView drop the next one).
  toastTimer=setTimeout(()=>{n.textContent='';},400);},4200);}
 function error(e){toast(e.message||String(e));}
@@ -155,6 +155,9 @@ function setTab(tab){if(tab==='history'&&noHerdr())tab='live';leaveTerminal();if
 function shell(){app.replaceChildren();const root=el('div','shell');app.append(root);if(S.demo)root.append(el('div','demo-banner','离线演示 · 示例数据，不连接电脑'));return root;}
 function header(root){
  const bar=el('header','topbar');const title=(TABS.find(t=>t[0]===S.tab)||[])[2]||'Herdr Pocket';bar.append(el('h1','',title));
+ // 文件 entry: one tap from every tab, scoped to the device on screen (sftp.js). Not a sixth bottom
+ // tab: at 320 px the five tabs already leave ~53 px each, and transfers belong to the current computer.
+ if(typeof filesEntryButton==='function')bar.append(filesEntryButton());
  const many=!S.demo&&LINKS.ids.length>1;const chip=btn('','device-chip',()=>many&&!S.loading?deviceSheet():setTab('devices'));chip.setAttribute('aria-label',many?'当前设备，共连着 '+LINKS.ids.length+' 台':'当前设备');chip.append(el('span',S.loading?'spinner':S.device?'dot':'dot offline'),el('span','truncate',S.loading?'连接中':S.device?S.device.name:'未连接'));
  if(many){const n=el('span','chip-links',String(LINKS.ids.length));n.setAttribute('aria-hidden','true');chip.append(n);}bar.append(chip);root.append(bar);deviceSwitcher(root);
  connectionBanner(root);

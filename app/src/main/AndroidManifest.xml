@@ -41,6 +41,8 @@
         </activity>
         <!-- Target file for a photo taken with the system camera app; reachable only via a one-off URI grant. -->
         <provider android:name=".CameraFiles" android:authorities="dev.herdr.pocket.camera" android:exported="false" android:grantUriPermissions="true" />
+        <!-- 文件 → 预览 → 用其他应用打开 / 分享: one cached preview copy, read-only, only via a per-intent grant. -->
+        <provider android:name=".PreviewFiles" android:authorities="dev.herdr.pocket.preview" android:exported="false" android:grantUriPermissions="true" />
         <provider android:name=".UpdateFiles" android:authorities="dev.herdr.pocket.update" android:exported="false" android:grantUriPermissions="true" />
         <service android:name=".WatchService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

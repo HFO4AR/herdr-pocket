@@ -476,7 +476,7 @@ class MainActivity : Activity() {
                             success(id, JSONObject().put("saved", device != null && value != null && core.cache.put(device, cacheKey(req), value.toString())))
                         }
                         "cacheInfo" -> core.cache.info().let { (bytes, entries) -> success(id, JSONObject().put("bytes", bytes).put("entries", entries)) }
-                        "cacheClear" -> { core.cache.clear(); success(id, JSONObject()) }
+                        "cacheClear" -> { core.cache.clear(); Previews.clear(this@MainActivity); success(id, JSONObject()) }
                         "pickImages" -> runOnUiThread { pick(id, req.optString("source"), req.optInt("max", 4).coerceIn(1, 4)) }
                         "dropImages" -> {
                             val ids = req.optJSONArray("ids") ?: JSONArray()
@@ -518,6 +518,14 @@ class MainActivity : Activity() {
                         "sftpForget" -> success(id, Transfers.forget())
                         "sftpOpen" -> {
                             val intent = Transfers.intent(req.getString("transfer"), req.optBoolean("share"))
+                            runOnUiThread { try { startActivity(intent); success(id, JSONObject()) } catch (e: ActivityNotFoundException) { failure(id, IllegalStateException("手机上没有能打开这种文件的应用")) } }
+                        }
+                        // 文件 → 预览 (Previews): read into the app's private cache with real progress; nothing lands in 下载.
+                        "sftpPreview" -> success(id, try { Previews.fetch(this@MainActivity, dev(req), req) { n -> progress(id, n.toString()) } } catch (e: Exception) { throw RemoteFiles.friendly(e) })
+                        "sftpPreviewPage" -> success(id, Previews.page(this@MainActivity, req))
+                        "sftpPreviewCancel" -> { Previews.cancel(req.optString("token")); success(id, JSONObject()) }
+                        "sftpPreviewOpen" -> {
+                            val intent = Previews.intent(req.getString("key"), req.optBoolean("share"))
                             runOnUiThread { try { startActivity(intent); success(id, JSONObject()) } catch (e: ActivityNotFoundException) { failure(id, IllegalStateException("手机上没有能打开这种文件的应用")) } }
                         }
                         "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> success(id, core.terminal(dev(req), op, req))
