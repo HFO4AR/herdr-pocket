@@ -241,7 +241,7 @@ function tkEditSheet(){
 // characters so a soft keyboard's Backspace on "empty" still arrives as an edit.
 const TK_PAD='\u200b\u200b';
 function tkCatcher(entry,surface){
- const c=el('textarea','tk-catch');c.setAttribute('aria-label','直接键盘输入');c.setAttribute('autocapitalize','off');c.setAttribute('autocomplete','off');c.setAttribute('autocorrect','off');c.spellcheck=false;c.value=TK_PAD;
+ const c=el('textarea','tk-catch');c.setAttribute('aria-label','直接键盘输入');c.setAttribute('aria-hidden','true');c.tabIndex=-1;c.setAttribute('autocapitalize','off');c.setAttribute('autocomplete','off');c.setAttribute('autocorrect','off');c.spellcheck=false;c.value=TK_PAD;
  const reset=()=>{c.value=TK_PAD;c.setSelectionRange(TK_PAD.length,TK_PAD.length);};
  const text=t=>{if(!t)return;if(tkLatched(entry)&&[...t].length===1&&/^[!-~ ]$/.test(t)){tkPress(entry,t===' '?'space':tkAlpha(t)&&t!==t.toLowerCase()?'shift+'+t.toLowerCase():t);return;}
   if(entry.ended||entry.paused){toast('终端不可输入，请查看状态或刷新');return;}tkQueue(entry,{text:t});};

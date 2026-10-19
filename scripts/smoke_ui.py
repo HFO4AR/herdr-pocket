@@ -63,7 +63,13 @@ def find(text, editable=False):
             if text == node.get('text',''):
                 for following in nodes[i+1:]:
                     if 'EditText' in following.get('class',''): return following
-        if text in ('消息输入框', '终端输入') and len(candidates)==1: return candidates[0]
+        if text in ('消息输入框', '终端输入') and candidates:
+            # A pane terminal also has a hidden keyboard-catcher field; the real input is the
+            # largest exposed EditText, not whichever happens to come first.
+            def area(node):
+                b=[int(n) for n in re.findall(r'\d+',node.attrib.get('bounds',''))]
+                return (b[2]-b[0])*(b[3]-b[1]) if len(b)==4 else 0
+            return max(candidates,key=area)
     return None
 
 
