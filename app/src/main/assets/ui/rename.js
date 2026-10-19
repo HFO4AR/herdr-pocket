@@ -16,7 +16,7 @@
 const RN_KINDS=['claude','codex'];
 const RN_MAX=80,RN_DONE=3000;
 // agentKey → {name, prev, chat, state:'sending'|'queued'|'sent'|'unknown'|'done', at, sentAt, item}
-const RN={pending:new Map(),wait:25000,statusAt:0,hint:(()=>{try{return localStorage.getItem('hp.hint.rename')!=='1';}catch(_){return true;}})()};
+const RN={pending:new Map(),wait:25000,grace:8000,statusAt:0,hint:(()=>{try{return localStorage.getItem('hp.hint.rename')!=='1';}catch(_){return true;}})()};
 
 function renameKind(c){const a=c?.agent;return !!a&&!S.demo&&!c.record?.parent&&RN_KINDS.includes(a.agent)&&slashList(a).some(x=>x.name==='rename');}
 // Why a rename cannot go out right now ('' = it can). The title stays a button; a tap says this.
@@ -113,16 +113,28 @@ function renameTick(){
  if(!S.active||gap>3000)for(const p of RN.pending.values())if(p.sentAt)p.sentAt+=gap;
  for(const [key,p] of [...RN.pending]){
   if(p.state==='done'){if(now-p.doneAt>RN_DONE){RN.pending.delete(key);renamePaint();}continue;}
+  const here=!!S.chat?.agent&&draftKey()===key;const at=here?S.chat.agent.agent_status:'';
+  // The agent may already show the new name while the send or its queue entry has not settled.
+  if((p.state==='queued'||p.state==='sending')&&renameSeen(key,p)){renameDone(key,p);continue;}
   if(p.state==='queued'){const it=p.item;
    if(it.state==='sent'){p.state='sent';p.sentAt=now;renamePaint();}
    else if(it.state==='unknown'){p.state='unknown';p.sentAt=now;renamePaint();}
    else if(![...Q.values()].some(q=>q.items.includes(it))){renameBack(key,p,'改名那条没发，标题还是原来的');continue;}
-   else continue;}
-  if(p.state!=='sent'&&p.state!=='unknown')continue;
+   else{
+    if(here&&['idle','done'].includes(at)){
+     p.idleAt=p.idleAt||now;
+     if(it.state==='queued'&&now-p.idleAt>RN.grace){const why=Q.get(key)?.paused;try{queueDrop(key,it.qid);}catch(_){}
+      renameBack(key,p,'改名一直没发出去'+(why?'（队列暂停：'+why+'）':'')+'，标题先改回；处理好再改一次');continue;}
+     if((it.state==='sending'||it.state==='checking')&&now-p.idleAt>RN.wait){p.state='unknown';p.sentAt=now;renamePaint();}
+    }else p.idleAt=0;
+    poll=here;continue;}
+   if(p.state!=='sent'&&p.state!=='unknown'){poll=here;continue;}}
+  if(p.state==='sending'&&now-p.at>RN.wait){renameBack(key,p,'改名发送还没确认，标题先改回；看一下终端');continue;}
+  if(p.state!=='sent'&&p.state!=='unknown'){if(here)poll=true;continue;}
   if(renameSeen(key,p)){renameDone(key,p);continue;}
   if(p.state==='sent'&&renameRefused(key,p)){renameBack(key,p,'没改成：Codex 说现在还没有可改名的对话，先跟它说句话再改');continue;}
   if(now-p.sentAt>RN.wait){renameBack(key,p,p.state==='unknown'?'改名发送结果未知，也没看到标题变成「'+p.name+'」。不会自动重发，看一眼终端':'等了一会儿没看到标题变成「'+p.name+'」，先改回原来的。可能没改成，看一眼终端');continue;}
-  if(S.chat?.agent&&draftKey()===key)poll=true;}
+  if(here)poll=true;}
  // Herdr's status (or the tmux pane's) carries the terminal title: read it while a rename is out.
  if(poll&&now-RN.statusAt>2500&&!S.demo){RN.statusAt=now;refreshStatus();}}
 setInterval(renameTick,1000);

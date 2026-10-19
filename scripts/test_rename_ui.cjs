@@ -162,6 +162,17 @@ await metaSays('改名已发出');
 await setTitle('w1:p1','✳ 排队里的名字','排队里的名字');
 await metaSays('已改名');
 console.log('PASS: busy agent → queued, sent when it stops, then confirmed');
+// 5b. The agent already shows the new title while the queue entry is still held: settle it at once.
+await status('working');await page.waitForFunction(()=>S.chat.agent.agent_status==='working');
+await rename('已经改好的名字');await metaSays('改名排队中');
+const heldPrompts=(await prompts()).length;
+await page.evaluate(()=>{const q=Q.get(draftKey());if(q)queuePause(q,'测试暂停',true);});
+await setTitle('w1:p1','✳ 已经改好的名字','已经改好的名字');
+await metaSays('已改名');
+assert.equal((await prompts()).length,heldPrompts,'the held queue entry never had to send');
+await page.evaluate(()=>{RN.pending.clear();Q.clear();renamePaint();});
+await status('idle');
+console.log('PASS: a queued rename settles when the agent already has the new title');
 
 // 6. A question or menu on screen: the bridge refuses before typing; it waits in the queue and goes later.
 await metaGone('已改名');
@@ -175,6 +186,17 @@ await metaSays('改名已发出');
 await setTitle('w1:p1','✳ 等菜单关掉','等菜单关掉');
 await metaSays('已改名');await metaGone('已改名');
 console.log('PASS: refused on a menu → queued, sent once it clears');
+// 6b. A queued rename that cannot go (queue paused, agent stopped) does not stay stuck.
+await status('working');await page.waitForFunction(()=>S.chat.agent.agent_status==='working');
+await page.evaluate(()=>{RN.wait=1500;RN.grace=1500;});
+await rename('超时没发');await metaSays('改名排队中');
+await page.evaluate(()=>{const q=Q.get(draftKey());if(q)queuePause(q,'测试暂停',true);});
+await status('idle');
+await page.waitForFunction(()=>document.querySelector('#chat-head h2').textContent!=='超时没发',null,{timeout:9000});
+await toastSaid(/改名一直没发出去/);
+assert.equal((await prompts()).includes('/rename 超时没发'),false,'the stuck entry was dropped, not sent late');
+await page.evaluate(()=>{RN.wait=10000;RN.grace=8000;RN.pending.clear();Q.clear();renamePaint();});
+console.log('PASS: a queued rename that cannot go reverts instead of waiting forever');
 
 // 7. Unknown outcome: said so, watched, never sent again; back when nothing confirms it.
 await page.evaluate(()=>{RN.wait=2500;fx.promptError='连接超时';});

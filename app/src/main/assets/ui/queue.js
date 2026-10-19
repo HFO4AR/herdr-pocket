@@ -124,7 +124,10 @@ function queueBlock(c,key,q,force){
  if(c.exited){queuePause(q,providerName(c.agent.agent)+' 已退出，排队的消息不会再发',false);return 'paused';}
  if(c.stale||c.following||c.unsure)return 'hold';
  // The last slash command left a panel or picker open (slash.js): wait until it is closed.
- if(slashPanelOpen(key))return 'hold';
+ if(slashPanelOpen(key)){
+  // A panel that is gone from the screen must not hold the queue forever: re-read it now and then.
+  const card=slashPanelCard(key);if(card&&!card.capturing&&Date.now()-(card.readAt||0)>3000)slashCapture(card,{quick:true});
+  return 'hold';}
  const switched=c.switched&&c.switched.at>Math.max(head.at,q.ackAt);
  if(switched||(head.record&&c.record&&head.record!==c.record.id)){queuePause(q,'窗格里换了一段对话，排队的先不发。看一眼再点继续',true);return 'paused';}
  if(c.switched&&Date.now()-c.switched.at<FOLLOW_SETTLE)return 'hold';

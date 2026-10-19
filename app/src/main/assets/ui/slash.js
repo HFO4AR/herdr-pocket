@@ -148,7 +148,7 @@ async function slashCapture(card,opts={}){
    let r;try{r=await remote('read',{session:S.session,target:a.pane_id,identity:a.identity,menu:true});}catch(e){card.error='读屏失败：'+(e.message||e);break;}
    if(S.chat!==c)break;
    // Closing a panel (Claude /status) leaves nothing of it on screen: keep what it showed.
-   const cut=slashCut(r.text,card.text),panel=slashPanel(r.text,r.menu);
+   const cut=slashCut(r.text,card.text),panel=card.name==='rename'?false:slashPanel(r.text,r.menu);
    if(!panel&&!cut.found&&(card.panel||card.closed)&&card.screen){card.closed=true;}else{card.screen=cut.text;card.closed=false;}
    card.menu=r.menu||null;card.panel=panel;card.status=r.agent_status||'';card.readAt=Date.now();
    if(typeof applyReadStatus==='function')applyReadStatus(r.agent_status);slashPaint(card);

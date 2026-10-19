@@ -47,7 +47,8 @@ async function open(viewport={width:390,height:844}){
     else throw Error('unexpected remote op '+a.op);}
    else if(['watchState','protect','setAlerts','settings','cachePut','dropImages'].includes(op))data={};
    else if(op==='cacheGet')data={value:null};
-   else{fx.unexpected.push(op);data={};}
+   else if(op==='inputInfo')data={physicalKeyboard:false};
+  else{fx.unexpected.push(op);data={};}
    }catch(e){setTimeout(()=>nativeResult(id,{ok:false,error:e.message}),10);return;}
    setTimeout(()=>nativeResult(id,{ok:true,data}),10);}};
  });
