@@ -15,8 +15,6 @@ import android.os.ext.SdkExtensions
 import android.provider.MediaStore
 import android.provider.Settings
 import android.view.View
-import android.window.OnBackInvokedCallback
-import android.window.OnBackInvokedDispatcher
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
@@ -74,7 +72,6 @@ class MainActivity : Activity() {
     private val bars = BarsBackground()
     // Something shared from another app, waiting for the page to be ready (see ShareIn).
     private var pendingShare: String? = null
-    private var backCallback: Any? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -98,7 +95,6 @@ class MainActivity : Activity() {
             builtInZoomControls = false
             textZoom = core.settings.getInt("textZoom", 100)
         }
-        applyBars()
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse =
@@ -117,7 +113,8 @@ class MainActivity : Activity() {
         }
         SystemBars.pad(container, bars)
         setContentView(container)
-        registerBack()
+        // After setContentView: window.insetsController on Android 12 needs the decor view to exist.
+        applyBars()
         intent?.let { if (ShareIn.isShare(it)) receiveShare(it) }
         val html = assets.open("ui/index.html").bufferedReader().use { it.readText() }
             .replace("<html lang=\"zh-CN\">", "<html lang=\"zh-CN\" data-theme=\"${if (dark()) "dark" else "light"}\">")
@@ -155,14 +152,6 @@ class MainActivity : Activity() {
         }
     }
     private fun deliverShare(payload: String) { if (!destroyed) web.evaluateJavascript("window.pocketShare && window.pocketShare($payload)", null) }
-
-    /** Android 13+ back (predictive back on 14+): the page decides, exactly like the legacy key. */
-    private fun registerBack() {
-        if (Build.VERSION.SDK_INT < 33) return
-        val callback = OnBackInvokedCallback { if (started) web.evaluateJavascript("window.pocketBack()", null) else finish() }
-        onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
-        backCallback = callback
-    }
 
     private fun notificationsAllowed(): Boolean = getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
 
@@ -776,7 +765,6 @@ class MainActivity : Activity() {
         // Swiped away from recents (back never finishes the activity): the connections stay while the
         // service keeps them (same time limit as in the background); otherwise they end here.
         if (isFinishing && !(watched && core.hasLinks)) { WatchService.stop(this); core.disconnect() }
-        if (Build.VERSION.SDK_INT >= 33) (backCallback as? OnBackInvokedCallback)?.let { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it) }
         executor.shutdownNow(); pictures.shutdownNow(); web.removeJavascriptInterface("PocketNative"); web.destroy(); super.onDestroy()
     }
 }
