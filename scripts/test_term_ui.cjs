@@ -105,7 +105,7 @@ for(const theme of ['light','dark'])for(const [width,height] of [[390,844],[320,
  assert.equal(await page.$eval('#pane-screen',n=>n.textContent.endsWith('$ step 149')),true,'trailing blank lines trimmed');
  assert.equal(await page.locator('#pane-screen').evaluate(n=>getComputedStyle(n).backgroundColor),'rgba(0, 0, 0, 0)','pane text sits on the card');
  await keyTargets(page);
- assert.equal(await page.getByRole('button',{name:'Ctrl',exact:true}).count(),0,'Ctrl latch is SSH only');
+ for(const k of ['Ctrl','Alt','Shift'])assert.equal(await page.getByRole('button',{name:k,exact:true}).count(),1,k+' latch on a pane too');
  await page.$eval('#pane-screen',n=>{n.scrollTop=0;n.dispatchEvent(new Event('scroll'));});await page.locator('#term-jump').waitFor();
  await page.getByRole('button',{name:'跳到最新输出',exact:true}).click();await page.waitForTimeout(500);assert.ok(await atBottom());
  const fs0=await page.$eval('#pane-screen',n=>parseFloat(getComputedStyle(n).fontSize));

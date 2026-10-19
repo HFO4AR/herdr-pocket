@@ -378,7 +378,7 @@ async function netRetry(){if(!S.device||S.demo||S.net==='reconnecting'){netBanne
 function netEvent(e){
  if(e.device&&S.device&&!S.demo&&e.device!==S.device.id){linkEvent(e);return;}
  if(e.type==='reconnecting'){S.reconnecting=true;netBanner('reconnecting');}
- else if(e.type==='reconnected'){S.reconnecting=false;netBanner('ok');if(typeof T!=='undefined'&&T.shell&&!T.shell.ended){T.shell.ended=true;terminalStatus(T.shell,'连接中断过，这个 SSH 终端已结束；返回列表重新打开');}}
+ else if(e.type==='reconnected'){S.reconnecting=false;netBanner('ok');if(typeof termReconnected==='function')termReconnected();}
  else if(e.type==='reconnect_failed'){S.reconnecting=false;netBanner('failed',e.detail);}
  else if(e.type==='hostkey_changed'){S.reconnecting=false;netBanner('hostkey',e.detail);}}
 // Back from the background: a failed reconnect gets one quiet retry.

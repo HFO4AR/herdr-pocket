@@ -93,6 +93,12 @@ The Android WebView only runs UI assets packaged in the APK, with network loads,
 
 The SSH terminal opens a PTY only on explicit user action. It supports arbitrary shell input as a user terminal, including destructive commands; commands are never synthesized or automatically replayed. Output uses a bounded in-memory ring. xterm.js and its styles are bundled offline, with OSC 52 clipboard access suppressed. Closing the independent shell may terminate programs in it; returning to the list does not close it. Herdr pane input targets are revalidated and require durable UUID receipts.
 
+## Live tmux attach (实时)
+
+- 实时 opens a **real tmux client**, only for a plain pane the person taps or chooses in the header. It is a PTY running the installed bridge with `--tmux-attach <pane id> <identity> [--read-only]`; before `exec` the bridge re-lists exactly that pane on its live tmux server and requires the same identity (server pid, pane id, pane pid). A stale or mismatched pane prints `没连上：…` and starts no client. Only that SSH user's own servers are reachable, as for every tmux operation.
+- 实时 · 只读 uses `tmux attach -r`: tmux discards input from a read-only client, and the page refuses to write to it as well. A read-write client is a real tmux client like `tmux attach` on a laptop: keys typed on the phone go straight to the session, are **not** receipt-backed mutations, and are not buffered, retried or replayed; `^B` is tmux's own prefix. It shows the session's current window, which is not always the tapped pane (the app says so). Leaving the screen, or losing the SSH connection, detaches the client only; the session and the programs in it keep running. Nothing is killed or reconfigured automatically from this view.
+- Terminal keys from the key bar and a hardware keyboard are mapped to xterm bytes on the phone, or to Herdr/tmux key names by the bridge (see PROTOCOL.md). A combination with no key code is refused with `没发出去：…`; it is never approximated by another key.
+
 The connection password dialog can now persist the supplied password after successful authentication. Failed authentication does not overwrite the saved secret. Passwords remain absent from device list responses and UI output.
 
 
