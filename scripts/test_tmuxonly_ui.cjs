@@ -1,5 +1,5 @@
 // Computers without Herdr (tmux.js): connect normally, 会话 is the tmux list with a quiet note (no
-// error banner, no 历史 tab, no Herdr polling), a Claude inside a tmux pane opens as a chat with its
+// error banner; 历史 stays available from local transcripts; no Herdr polling), a Claude inside a tmux pane opens as a chat with its
 // transcript, 新建 tmux 会话 and 关闭 (with a confirmation sheet), the "neither installed" empty state,
 // and a second computer with Herdr next to it (every request names its computer, the tmux list
 // follows the computer on screen). Native SSH is a strict offline fake; nothing leaves the page.
@@ -43,6 +43,8 @@ await page.addInitScript(()=>{
     else if(a.op==='tmuxRead'){const p=fx.tmux.A.concat(fx.tmux.B).find(x=>x.pane_id===a.target);if(!p)throw Error('这个 tmux 窗格已经关了或换了，回到列表刷新一下');data={text:'pi@pi:~$ ',ansi:'pi@pi:~$ ',pane:p};}
     else if(a.op==='history')data={record:rec,messages:fx.history,before:0,has_more:false,children:[]};
     else if(a.op==='catalog')data={records:[rec],total:1,next:null};
+    else if(a.op==='hidden')data={ids:[]};
+    else if(a.op==='native')data={sessions:[]};
     else if(a.op==='read'){if(a.target!=='%1'||a.identity!=='ag-1')throw Error('Agent changed or disappeared; reload the agent list');data={text:'✻ Working… (esc to interrupt)',agent_status:fx.status,modes:null,bg:null};}
     // The open tmux chat's own status read (pane as target); Herdr's status never goes to A.
     else if(a.op==='status'&&a.target){if(!A)throw Error('tmux status on B');data={tmux:true,agents:a.target==='%1'?[claude()]:[]};}
@@ -76,7 +78,8 @@ await page.locator('.tmux-only-note').waitFor();
 await page.locator('.tmux-row').first().waitFor();
 assert.equal(await page.locator('.tmux-only-note').textContent(),'这台电脑没装 Herdr，只显示 tmux');
 assert.equal(await page.locator('.connection-status').count(),0,'no warning banner for a missing Herdr');
-assert.equal(await role('button','历史').count(),0,'no 历史 tab without Herdr');
+assert.equal(await role('button','历史').count(),1,'历史 stays available without Herdr');
+await role('button','历史').click();await page.getByText('整理日志轮转',{exact:true}).waitFor();await role('button','会话').click();
 for(const t of ['会话','终端','设备','设置'])assert.equal(await role('button',t).count(),1);
 // The Claude in pane %1 is listed as an agent (with its transcript found), the rest as terminals.
 const agent=page.locator('.tmux-agents .agent-row');
@@ -87,7 +90,8 @@ assert.match(await agent.locator('.card-meta').textContent(),/tmux/);
 assert.equal(await page.locator('.tmux-row').count(),2);
 assert.equal(await page.locator('.tmux-label').textContent().then(t=>t.replace(/\s+/g,'')),'tmux会话3');
 assert.ok((await calls('tmux','A')).some(c=>c.resolve),'transcripts are looked up for agents in panes');
-for(const op of ['agents','status','createInfo','panes','catalog'])assert.equal((await calls(op,'A')).filter(c=>!c.target).length,0,'no Herdr op on a computer without Herdr: '+op);
+for(const op of ['agents','status','createInfo','panes'])assert.equal((await calls(op,'A')).filter(c=>!c.target).length,0,'no Herdr op on a computer without Herdr: '+op);
+assert.ok((await calls('catalog','A')).length>=1,'历史 reads local transcripts without Herdr');
 assert.equal(await page.locator('#toast.show').count(),0,'no error toast');
 assert.equal(await overflow(),false);
 await shot('list');await dark('list');

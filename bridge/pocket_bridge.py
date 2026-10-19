@@ -4904,6 +4904,50 @@ def resume_running(spec):
     return None
 
 
+def active_agent_threads():
+    """Conversation ids of this user's running Claude/Codex processes (read-only)."""
+    threads = set()
+    for pid, argv in user_processes():
+        kind = next((k for k in TRANSCRIPT_PROVIDERS if is_agent_process(argv, k)), None)
+        if not kind: continue
+        snapshot = process_snapshot(pid)
+        if not snapshot: continue
+        threads.update(snapshot.get("active_threads", []))
+        threads.update(explicit_session_ids(argv, kind))
+        if kind == "codex":
+            threads.update(p.stem for p in snapshot.get("paths", []) if p.suffix == ".jsonl")
+    return threads
+
+
+def native_sessions():
+    """Plain Claude/Codex processes outside a Herdr pane, with the catalog record they are writing.
+    No environment and no transcript content: argv, cwd, open FD links and catalog metadata only."""
+    catalog = transcript_catalog()
+    by_thread = {}
+    for record in catalog:
+        if record.get("parent"): continue
+        by_thread.setdefault((record["provider"], record["thread"]), record)
+    rows, seen = [], set()
+    for pid, argv in user_processes():
+        kind = next((k for k in TRANSCRIPT_PROVIDERS if is_agent_process(argv, k)), None)
+        if not kind: continue
+        snapshot = process_snapshot(pid)
+        if not snapshot: continue
+        ids = set(snapshot.get("active_threads", [])) | explicit_session_ids(argv, kind)
+        if kind == "codex":
+            ids |= {p.stem for p in snapshot.get("paths", []) if p.suffix == ".jsonl"}
+        for thread in ids:
+            key = (kind, thread)
+            record = by_thread.get(key)
+            if key in seen or record is None: continue
+            seen.add(key)
+            rows.append({"pid": pid, "provider": kind, "thread": thread,
+                         "cwd": snapshot.get("cwd") or record.get("cwd", ""),
+                         "record": public_record(record)})
+    rows.sort(key=lambda x: x["record"].get("modified", 0), reverse=True)
+    return {"sessions": rows}
+
+
 def resume_checks(spec):
     """Read-only, before any receipt: the conversation is here and not open somewhere already."""
     record = resume_record(spec)
@@ -7443,7 +7487,11 @@ def handle(request, state_dir=None):
         if query: catalog = [x for x in catalog if query.lower() in (x["title"] + " " + x["cwd"] + " " + str(x["thread"])).lower()]
         thread = request.get("thread")
         if thread: catalog = [x for x in catalog if x["thread"] == thread]
-        return {"records": [public_record(x) for x in catalog[offset:offset+100]], "total": len(catalog), "next": offset+100 if len(catalog)>offset+100 else None}
+        running = active_agent_threads()
+        page = [dict(x, running=x["thread"] in running) for x in catalog[offset:offset+100]]
+        return {"records": [public_record(x) for x in page], "total": len(catalog), "next": offset+100 if len(catalog)>offset+100 else None}
+    if op == "native":
+        return native_sessions()
     if op == "sessions":
         # No Herdr on this computer: an empty list and a flag, so the app shows tmux only.
         try: found = sessions()

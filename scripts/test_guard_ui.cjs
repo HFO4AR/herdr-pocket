@@ -50,6 +50,7 @@ await page.addInitScript(()=>{
     else if(a.op==='account')data={ssh_user:'yuki',hostname:'box'};
     else if(a.op==='catalog')data={records:[],total:0,next:null};
     else if(a.op==='hidden')data={ids:[]};
+    else if(a.op==='native')data={sessions:[]};
     else if(a.op==='hello')data={version:'0.6.0',protocol:1,python:'3.12'};
     else{fx.unexpected.push(a.op);throw Error('unexpected remote op '+a.op);}}
    else if(op==='cacheGet')data={value:a.key==='herdr'?fx.snapshot:null};

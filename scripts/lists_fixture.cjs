@@ -37,9 +37,11 @@ module.exports.install=async function install(page,opts={}){
    {pane_id:'w2:p22',terminal_id:'t3',identity:'pc',workspace_label:'herdr-pocket',tab_id:'w2:t1',cwd:'/home/me/project/herdr-pocket',terminal_title:'herdr-pocket: ./gradlew assembleDebug'},
    {pane_id:'w3:p23',terminal_id:'t4',identity:'pd',workspace_label:'~',tab_id:'w3:t1',cwd:'/home/me',terminal_title:'htop'},
    {pane_id:'w4:p24',terminal_id:'t5',identity:'pe',workspace_label:'site',tab_id:'w4:t2',cwd:'/home/me/site',terminal_title:'site: npm run dev'}].slice(0,opts.panes??5);
-  window.fx={calls:[],agents,recs,panes,looks:opts.glance===false?{}:looks,sessions:opts.sessions||[{name:'default',running:true}]};
+  if(opts.native)for(const n of opts.native)recs.unshift({...n.record,running:true});
+  window.fx={calls:[],agents,recs,panes,native:opts.native||[],looks:opts.glance===false?{}:looks,sessions:opts.sessions||[{name:'default',running:true}]};
   remote=async(op,args={})=>{fx.calls.push({op,args});await new Promise(r=>setTimeout(r,30));
    if(op==='sessions')return{sessions:fx.sessions};
+   if(op==='native')return{sessions:fx.native};
    if(op==='agents'||op==='status')return{agents:fx.agents};
    if(op==='panes')return{panes:fx.panes};
    if(op==='paneRead')return{text:'$ npm run dev\n\n  VITE v5.4.2  ready in 312 ms\n\n  ➜  Local:   http://localhost:5173/\n'};

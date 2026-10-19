@@ -54,6 +54,7 @@
 
 /* Small tags inside a row's meta line */
 .card-meta .tag{flex-shrink:0;font-size:10.5px;font-weight:600;line-height:16px;padding:0 6px;border-radius:6px;background:var(--sunken);color:var(--ink-2)}
+.card-meta .tag.live-tag{background:var(--success-soft);color:var(--success)}
 .card-meta .remote-tag{background:var(--soft);color:var(--accent)}
 .card-meta .project{min-width:0}
 

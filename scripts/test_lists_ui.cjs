@@ -114,6 +114,17 @@ const overflow=page=>page.evaluate(()=>document.documentElement.scrollWidth-inne
  assert.equal(await page.locator('.empty').getByRole('button',{name:'新建会话',exact:true}).count(),1);
  await page.context().close();console.log('PASS: empty 会话 offers 新建会话');}
 
+// 4b. Plain Claude Code processes outside Herdr are listed, read-only.
+{const page=await fresh(390,844,{native:[{pid:123,provider:'claude',thread:'tnative',cwd:'/home/me/IterxAI/stm32_host',record:{id:'rnative',thread:'tnative',title:'你当前的这个会话',provider:'claude',parent:null,cwd:'/home/me/IterxAI/stm32_host',modified:Math.floor(Date.now()/1000)-60}}]});
+ await page.getByText('普通 Claude Code',{exact:true}).waitFor();
+ await page.getByText('你当前的这个会话',{exact:true}).click();
+ await page.getByText('Claude · 历史只读',{exact:true}).waitFor();
+ await page.evaluate(()=>setTab('history'));
+ const row=page.locator('.history-row').filter({hasText:'你当前的这个会话'});
+ await row.waitFor();
+ assert.equal(await row.locator('.live-tag').count(),1,'a running plain session is marked');
+ await page.context().close();console.log('PASS: plain Claude Code sessions are listed and open read-only');}
+
 // 5. 历史: chips with counts, endless scroll, debounced search, swipe to hide.
 {const page=await fresh();
  await page.evaluate(()=>setTab('history'));

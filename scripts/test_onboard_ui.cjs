@@ -122,7 +122,7 @@ await page.getByRole('button',{name:'更新并进入',exact:true}).click();
 await page.getByText('这台电脑没装 Herdr，只显示 tmux',{exact:true}).waitFor();
 assert.equal(await page.evaluate(()=>S.tab),'live');
 assert.equal(await page.locator('.connection-status').count(),0,'no banner for a missing Herdr');
-assert.equal(await page.getByRole('button',{name:'历史',exact:true}).count(),0);
+assert.equal(await page.getByRole('button',{name:'历史',exact:true}).count(),1,'历史 stays available without Herdr');
 await page.evaluate(()=>{fx.noHerdr=false;});
 await page.getByRole('button',{name:'刷新会话',exact:true}).click();
 await page.getByText('暂时没有会话',{exact:true}).waitFor();

@@ -43,7 +43,7 @@ function liveAgents(){return typeof tmuxAgents==='function'?S.agents.concat(tmux
 let remote=(op,args={})=>S.demo?demoRequest(op,args):rpc('remote',{op,...args});
 
 // ─── State ──────────────────────────────────────────────────────────────────
-const S={tab:'devices',devices:[],device:null,demo:false,version:'',agents:[],session:'',sessions:[],records:[],next:null,total:0,
+const S={tab:'devices',devices:[],device:null,demo:false,version:'',agents:[],native:[],nativeAt:0,nativeSig:'',nativeUnsupported:false,session:'',sessions:[],records:[],next:null,total:0,
  chat:null,chatMode:'conversation',messages:[],children:[],before:0,more:false,drafts:new Map(),bindings:new Map(),outbox:[],
  epoch:0,active:true,polling:false,paused:false,loading:false,connecting:null,connectStage:'',connectError:'',liveLoading:false,liveError:'',
  chatStack:[],search:'',filter:'all',account:null,activity:'',statusBusy:false,statusSupported:true,
@@ -151,7 +151,7 @@ setInterval(()=>{if(!S.active)return;document.querySelectorAll('[data-since]').f
 
 // ─── App shell & navigation ─────────────────────────────────────────────────
 const TABS=[['live','chat','会话'],['history','history','历史'],['terminals','terminal','终端'],['devices','device','设备'],['settings','settings','设置']];
-function setTab(tab){if(tab==='history'&&noHerdr())tab='live';leaveTerminal();if(typeof filesLeave==='function')filesLeave();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();if(tab==='settings')settingsLoad().then(()=>{if(S.tab==='settings'&&!S.chat&&!overlay.childElementCount)paintSettings();});}
+function setTab(tab){leaveTerminal();if(typeof filesLeave==='function')filesLeave();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();if(tab==='settings')settingsLoad().then(()=>{if(S.tab==='settings'&&!S.chat&&!overlay.childElementCount)paintSettings();});}
 function shell(){app.replaceChildren();const root=el('div','shell');app.append(root);if(S.demo)root.append(el('div','demo-banner','离线演示 · 示例数据，不连接电脑'));return root;}
 function header(root){
  const bar=el('header','topbar');const title=(TABS.find(t=>t[0]===S.tab)||[])[2]||'Herdr Pocket';bar.append(el('h1','',title));
@@ -172,8 +172,8 @@ function render(){
  if(S.tab==='live')livePage(main);else if(S.tab==='history')historyPage(main);else if(S.tab==='terminals')terminalsPage(main);else if(S.tab==='settings')settingsPage(main);else devicesPage(main);
  const nav=el('nav','bottom-nav');nav.setAttribute('aria-label','主导航');
  const waiting=S.agents.filter(a=>a.agent_status==='blocked'||glanceAsks(a)).length;
- // Without Herdr there are no transcripts to browse here: 历史 is left out.
- TABS.filter(([tab])=>tab!=='history'||!noHerdr()).forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waiting){const badge=el('span','nav-badge',String(waiting));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waiting+' 个 Agent 等你确认';}if(tab==='settings'&&settingsBadge()){n.append(el('span','nav-dot'));n.title='有新版本';}nav.append(n);});
+ // 历史 reads the computer's own Claude/Codex transcripts; it does not need Herdr.
+ TABS.forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waiting){const badge=el('span','nav-badge',String(waiting));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waiting+' 个 Agent 等你确认';}if(tab==='settings'&&settingsBadge()){n.append(el('span','nav-dot'));n.title='有新版本';}nav.append(n);});
  root.append(nav);}
 function requireDevice(main){if(S.device||cacheBrowsing())return true;if(S.loading){loadingCard(main,'连接正在进行','连接成功后会自动读取会话，请稍候。');return false;}empty(main,'先连接你的电脑','连接后，在线会话、历史记录和终端会出现在这里。',btn('选择设备','primary',()=>setTab('devices')));return false;}
 function searchBox(placeholder,change,value=''){const box=el('div','search');const input=el('input');input.type='search';input.placeholder=placeholder;input.value=value;input.setAttribute('aria-label',placeholder);input.setAttribute('enterkeyhint','search');
@@ -241,6 +241,19 @@ function liveStatus(){
  else if(S.liveLoading)box.append(el('span','list-fresh','正在刷新…'));
  else if(S.liveAt){const f=el('span','list-fresh');f.append(since(S.liveAt,'upd'));box.append(f);}
  return box;}
+async function loadNative(repaint=false){
+ if(!S.device||S.demo||S.nativeUnsupported)return;
+ S.nativeAt=Date.now();
+ try{const r=await remote('native');const next=Array.isArray(r.sessions)?r.sessions:[];
+  const sig=next.map(n=>n.pid+':'+n.thread+':'+(n.record?.title||'')).join('|');
+  if(sig!==S.nativeSig){S.nativeSig=sig;S.native=next;if(repaint&&S.tab==='live'&&!S.chat)render();}else S.native=next;
+ }catch(e){if(/Unknown operation|不支持的操作|Invalid operation/i.test(e.message||''))S.nativeUnsupported=true;
+  if(S.native.length||S.nativeSig){S.native=[];S.nativeSig='';if(repaint&&S.tab==='live'&&!S.chat)render();}}
+}
+function nativeTaken(){const taken=new Set();for(const a of S.agents){const t=a.history_ref?.record?.thread;if(t)taken.add(t);}if(typeof tmuxPanes==='function')for(const p of tmuxPanes()){const t=p.history_ref?.record?.thread;if(t)taken.add(t);}return taken;}
+function nativeVisible(){const taken=nativeTaken();return S.native.filter(n=>n.record&&n.thread&&!taken.has(n.thread));}
+function nativeRow(n){const r=n.record;const b=btn('','card-button native-row',()=>openRecord(r));const text=el('div','grow');text.append(el('div','card-title',r.title||('对话 · '+(r.thread||'').slice(0,8))));const meta=el('div','card-meta');const project=(r.cwd||n.cwd||'').split('/').filter(Boolean).pop();meta.append(el('span','project',project||providerName(r.provider)),el('span','tag live-tag','运行中'),el('span','sep','只读'));text.append(meta);const side=el('div','row-side');side.append(el('span','row-time',clock(r.modified)));b.append(avatar(r.provider),text,side);return b;}
+function nativeSection(main){const list=nativeVisible();if(!list.length)return;const by={};for(const n of list)(by[n.provider]??=[]).push(n);for(const provider of Object.keys(by)){const items=by[provider];const label=el('div','section-label group-label native-label');label.append(el('span','','普通 '+(provider==='claude'?'Claude Code':providerName(provider))),el('span','group-count',String(items.length)));main.append(label);const card=el('div','card list-card');items.forEach(n=>card.append(nativeRow(n)));main.append(card);}}
 function livePage(main){
  if(!requireDevice(main))return;
  const actions=el('div','row list-actions');
@@ -269,14 +282,14 @@ function livePage(main){
    if(q||S.liveProject)empty(list,'没有匹配的 Agent','换个关键词，或者看看全部会话。',btn('清除筛选','secondary',()=>{S.search='';S.liveProject='';render();}));
    // tmux sessions and Herdr terminals listed below (tmux.js, hpanes.js) are sessions too: only Herdr has no agent yet.
    else if(typeof tmuxPanes==='function'&&tmuxPanes().length||typeof hpVisible==='function'&&hpVisible().length){const n=el('div','herdr-none');n.setAttribute('role','note');const t=el('div','grow');t.append(el('strong','','Herdr 里还没有 Agent'),el('span','fine','新建一个，或者在 Herdr 里启动。'));n.append(t);if(S.device&&S.session)n.append(createButton());list.append(n);}
-   else if(!starting)empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&(S.session||tmuxCan())?createButton():undefined);
+   else if(!starting&&!nativeVisible().length)empty(list,'暂时没有会话','新建一个 Codex 或 Claude，或者在电脑的 Herdr 里启动任意 Agent，这里会自动出现。',S.device&&(S.session||tmuxCan())?createButton():undefined);
    return;}
   // 子 Agent 运行中 (kids.js) sits with 执行中: the agent is not done while its sub-agents work.
   // An idle Codex with an unanswered question (glance.js) waits for you too.
   const needs=a=>agentState(a)==='blocked'||!!glanceAsks(a);GL.askSig=glanceAskSig();
   const groups=[[matches.some(a=>glanceAsks(a))?'等你处理':'等你确认',needs,'alert'],['执行中',a=>!needs(a)&&['working','kids'].includes(agentState(a)),'work'],['空闲',a=>!needs(a)&&!['blocked','working','kids'].includes(agentState(a)),'']];
   for(const [label,test,tone] of groups){const items=sortAgents(matches.filter(test));if(!items.length)continue;const h=el('div','section-label group-label'+(tone?' g-'+tone:''));h.append(el('span','',label),el('span','group-count',String(items.length)));list.append(h);const g=el('div','card list-card');items.forEach(a=>{g.append(agentRow(a));const kids=kidsStrip(a);if(kids)g.append(kids);});list.append(g);}}
- draw();
+ draw();nativeSection(main);
  // The row-gesture hint goes once, under everything (tmux.js moves it below its section too).
  if(S.agents.length)closeHint(main);
  pullRefresh(main,loadLive);}
@@ -293,12 +306,12 @@ async function loadLive(){
   // Herdr's server down or restarted since the last list (guard.js).
   if(typeof guardSessions==='function')guardSessions(r);
   // No Herdr on this computer (bridge flag): no sessions, no agents, no error; tmux.js shows tmux only.
-  S.herdr=r.herdr!==false;if(r.herdr===false){S.hostIssue=null;S.sessions=[];S.session='';S.agents=[];S.fromCache=false;if('tmux' in r)S.hostTmux=r.tmux;return;}
-  S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];S.fromCache=false;return;}
+  S.herdr=r.herdr!==false;if(r.herdr===false){S.hostIssue=null;S.sessions=[];S.session='';S.agents=[];S.fromCache=false;if('tmux' in r)S.hostTmux=r.tmux;loadNative(true);return;}
+  S.sessions=r.sessions.filter(x=>x.running).map(x=>x.name);if(!S.sessions.includes(S.session))S.session=S.sessions[0]||'';if(!S.session){S.agents=[];S.fromCache=false;loadNative(true);return;}
   S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
   // Herdr's plain terminals come along while 会话 is on screen (hpanes.js), no extra round trip.
   const dev=S.device?.id||'',session=S.session,panes=typeof hpWant==='function'&&hpWant();
-  const a=await remote('agents',{session:S.session,...(panes?{panes:true}:{})});if(epoch!==S.epoch)return;S.agents=a.agents;if(panes)hpTake(a.panes,dev,session);S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();glanceRefresh(true);if(S.pendingPane){S.liveLoading=false;openPending();return;}}
+  const a=await remote('agents',{session:S.session,...(panes?{panes:true}:{})});if(epoch!==S.epoch)return;S.agents=a.agents;if(panes)hpTake(a.panes,dev,session);S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();glanceRefresh(true);loadNative(true);if(S.pendingPane){S.liveLoading=false;openPending();return;}}
  catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
  finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
 // Lightweight status refresh: Herdr state only, keeps resolved history refs.
@@ -673,7 +686,7 @@ function historySummary(){
  if(S.catalogQuery)n.append(el('span','grow list-facts','「'+S.catalogQuery+'」找到 '+S.total+' 条'));}
 function historyRow(r,hidden){
  const b=btn('','card-button history-row',()=>openRecord(r));const text=el('div','grow');text.append(el('div','card-title',r.title));
- const meta=el('div','card-meta');const project=(r.cwd||'').split('/').filter(Boolean).pop();meta.append(el('span','project',project||providerName(r.provider)));if(r.parent)meta.append(el('span','tag child-tag','子 Agent'));text.append(meta);
+ const meta=el('div','card-meta');const project=(r.cwd||'').split('/').filter(Boolean).pop();meta.append(el('span','project',project||providerName(r.provider)));if(r.running)meta.append(el('span','tag live-tag','运行中'));if(r.parent)meta.append(el('span','tag child-tag','子 Agent'));text.append(meta);
  const side=el('div','row-side');side.append(el('span','row-time',clock(r.modified)));
  b.append(avatar(r.provider),text,side);closeHold(b,()=>historyActions(r));
  return closeSwipe(b,[[hidden?'放回':'移除',hidden?'history':'x',hidden?'':'danger',()=>closeSetHidden(r,!hidden)],['更多','more','',()=>historyActions(r)]]);}
@@ -730,7 +743,7 @@ document.addEventListener('focusin',()=>setTimeout(sheetFieldClear,60));
 document.addEventListener('input',e=>{if(e.target?.closest?.('.sheet'))sheetFieldClear();});
 addEventListener('resize',()=>{setTimeout(sheetFieldClear,80);setTimeout(sheetFieldClear,350);});
 addEventListener('resize',()=>{const c=document.getElementById('confirm-screen');if(c)c.scrollTop=c.scrollHeight;});
-window.setForeground=v=>{S.active=v;if(v){netForeground();refreshStatus();if(S.chat?.record&&!S.paused)fetchHistory();}};
+window.setForeground=v=>{S.active=v;if(v){netForeground();refreshStatus();loadNative(true);if(S.chat?.record&&!S.paused)fetchHistory();}};
 // Busy agents refresh faster; nothing polls in the background or in demo mode.
 // A ch pane's history is read over SSH on the other computer (~1 s a read), so it is polled
 // half as often: every 5 s while the agent works, every 10 s when idle. Reads never overlap.
@@ -761,7 +774,7 @@ function pollBeat(){
  if(S.chat){const reply=awaitingReply();if(reply){if(!S.paused&&!S.polling&&S.chatMode!=='terminal')fetchHistory();updateChatMeta();}
   if(beat){if(!reply&&!S.paused&&!S.polling&&S.chatMode!=='terminal'&&historyDue(busy,n))fetchHistory();if((busy||S.chat.noTranscript&&S.chatMode==='terminal'&&(pollHot()||n%4===0))&&S.chatMode!=='commands')fetchTerminal(true);}
   if(beat||pollHot())refreshStatus();}
- else if(S.tab==='live'&&tick%(listHot()?2:6)===0)refreshStatus().then(()=>glanceRefresh());}
+ else if(S.tab==='live'&&tick%(listHot()?2:6)===0){refreshStatus().then(()=>glanceRefresh());if(Date.now()-S.nativeAt>5000)loadNative(true);}}
 setInterval(pollBeat,POLL_BEAT);
 
 async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;settingsLoad().then(updateAutoCheck);linkBoot(r);if(r.connected&&!S.device){S.device=r.connected;setTab('live');resumeBoot(r);return;}render();resumeBoot(r);}catch(e){error(e);}}
