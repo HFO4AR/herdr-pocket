@@ -86,9 +86,10 @@ object PreviewTests {
 
     fun pdf(context: Context): String {
         val key = "d".repeat(40)
-        val file = File(Previews.folder(context), key)
         try {
             Previews.clear(context)
+            // clear() deletes the folder itself; resolve the path after it recreates the folder.
+            val file = File(Previews.folder(context), key)
             val doc = PdfDocument()
             val page = doc.startPage(PdfDocument.PageInfo.Builder(600, 800, 1).create())
             page.canvas.drawColor(Color.WHITE)
