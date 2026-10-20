@@ -28,8 +28,12 @@ android {
     packaging { resources.excludes += "META-INF/versions/**/OSGI-INF/MANIFEST.MF" }
     sourceSets["main"].assets.srcDir("../bridge")
     androidResources { ignoreAssetsPattern = ".*:__pycache__:*.pyc" }
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 dependencies {
     implementation("com.github.mwiede:jsch:2.27.5")
     implementation("org.bouncycastle:bcprov-jdk18on:1.80")
+    // JVM parser tests: JUnit and kxml2 only (the app itself uses Android's built-in pull parser).
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
 }

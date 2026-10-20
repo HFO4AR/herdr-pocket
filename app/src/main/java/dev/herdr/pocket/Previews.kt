@@ -56,6 +56,10 @@ object Previews {
     const val HARD_MAX = 300_000_000L
     const val IMAGE_MAX_EDGE = 4096
     const val PDF_MAX_WIDTH = 4096
+    /** One extracted Office image may become a derived preview asset. */
+    const val DERIVED_MAX = 16 * 1024 * 1024
+    /** Passive image types only; SVG/EMF/WMF/HTML are never registered as preview assets. */
+    val DERIVED_MIME = setOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp")
     internal const val IMAGE_MAX_PIXELS = 12_000_000L
     internal const val PDF_MAX_PIXELS = 10_000_000L
     private const val CACHE_CAP = 250_000_000L
@@ -78,6 +82,7 @@ object Previews {
     private val derived = ConcurrentHashMap<String, Derived>()
     private val stops = ConcurrentHashMap<String, AtomicBoolean>()
     private val pdfLock = Any()
+    private val derivedLock = Any()
 
     fun folder(context: Context) = File(context.cacheDir, "sftp-preview").apply { mkdirs() }
     private fun derivedFolder(context: Context) = File(context.cacheDir, "sftp-preview-derived").apply { mkdirs() }
@@ -416,6 +421,25 @@ object Previews {
         else Intent(Intent.ACTION_VIEW).setDataAndType(uri, m.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 
+    /**
+     * Registers bytes derived from another preview (an Office image) under their SHA-1 and writes
+     * them into the Office derived folder. [PreviewServer] then serves the 40-hex key as
+     * `/preview/office/<key>` through [assetFor] without re-reading the document. Only passive image
+     * MIME types are accepted; the caller must already hold the extracted bytes, never a remote URL.
+     */
+    fun putDerived(context: Context, bytes: ByteArray, mime: String, name: String): String {
+        require(bytes.isNotEmpty() && bytes.size <= DERIVED_MAX) { "图片太大" }
+        require(mime in DERIVED_MIME) { "不支持的图片类型" }
+        synchronized(derivedLock) {
+            val key = MessageDigest.getInstance("SHA-1").digest(bytes).joinToString("") { "%02x".format(it) }
+            val file = File(derivedDir(context, AssetKind.OFFICE), key)
+            if (!(file.isFile && file.length() == bytes.size.toLong())) writeAtomic(file, bytes)
+            derived[key] = Derived(AssetKind.OFFICE, file, mime, name.take(120).ifEmpty { "image" })
+            pruneDerived(context, file)
+            return key
+        }
+    }
+
     internal fun fileFor(context: Context, key: String): File? = if (KEY.matches(key)) File(folder(context), key).takeIf { it.isFile } else null
     internal fun nameOf(key: String): String = meta[key]?.name ?: derived[key]?.name ?: key
     internal fun mimeOf(key: String): String = meta[key]?.mime ?: derived[key]?.mime ?: "application/octet-stream"
@@ -485,17 +509,27 @@ class PreviewFiles : ContentProvider() {
         if (uri.pathSegments.size != 1) throw SecurityException("bad uri")
         return uri.lastPathSegment ?: throw SecurityException("bad uri")
     }
-    private fun fileFor(context: Context, key: String): File? = Previews.fileFor(context, key) ?: MediaPreview.fileFor(context, key)
+    /** Office images are derived assets; they resolve by capability key only, like PDF pages. */
+    private fun officeImage(context: Context, key: String) = Previews.assetFor(context, key, Previews.AssetKind.OFFICE)
+    private fun fileFor(context: Context, key: String): File? =
+        Previews.fileFor(context, key) ?: officeImage(context, key)?.file ?: MediaPreview.fileFor(context, key)
     private fun fileFor(uri: Uri): File = fileFor(context!!, keyOf(uri)) ?: throw SecurityException("gone")
-    private fun displayName(context: Context, key: String): String =
-        if (Previews.fileFor(context, key) != null) Previews.nameOf(key) else MediaPreview.nameOf(context, key)
+    private fun displayName(context: Context, key: String): String = when {
+        Previews.fileFor(context, key) != null -> Previews.nameOf(key)
+        officeImage(context, key) != null -> Previews.nameOf(key)
+        else -> MediaPreview.nameOf(context, key)
+    }
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         if (mode != "r") throw SecurityException("read only")
         return ParcelFileDescriptor.open(fileFor(uri), ParcelFileDescriptor.MODE_READ_ONLY)
     }
     override fun getType(uri: Uri): String {
         val key = keyOf(uri)
-        return if (Previews.fileFor(context!!, key) != null) Previews.mimeOf(key) else MediaPreview.mimeOf(context!!, key)
+        return when {
+            Previews.fileFor(context!!, key) != null -> Previews.mimeOf(key)
+            officeImage(context!!, key) != null -> Previews.mimeOf(key)
+            else -> MediaPreview.mimeOf(context!!, key)
+        }
     }
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, args: Array<out String>?, sort: String?): Cursor {
         val file = fileFor(uri)
