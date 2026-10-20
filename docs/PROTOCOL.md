@@ -177,6 +177,36 @@ A `prompt` to a Claude Code / Codex agent whose input box is on screen (Herdr: `
 - Result: `tabs` (`[{tab, text, more}]` in the panel's own order; `text` is the rows between the tab row and the footer with the edge marks removed, scrolled rows merged; `more`: rows remain off screen, or Config's "↓ N more below"), `order`, `start`, `closed` (the panel is gone from the screen), `steps` (the keys pressed), `stopped` (why it stopped early, if it did), `sent`, `receipt`. As with every mutation the same id answers from its receipt and an unknown outcome (a key may have gone in) is never replayed.
 - The phone calls it only right after the person's own `/status` or `/usage` went out from the phone (typed or picked from the list, also from the queue), once, when the command card's first read finds the panel with Claude idle and no picker. It never calls it for /config, a command with arguments, a panel the person opened on the computer, or a card's later refresh. The card shows every tab as rows ("Key: value" with wrapped values joined, two-column settings, usage bars with their reset time, headings), the terminal text behind 「终端原文」, and one 「复制」 for all tabs. When the walk fails or stops with the panel still up, the card re-reads the screen and offers its keys as before. Codex /status is one screen: the card shows its rows (between the echoed `/status` and the composer) without pressing anything.
 
+## CC Switch: providers and model switching (protocol remains v1)
+
+The desktop CC Switch app (v3.20.2) stores providers in `~/.cc-switch/cc-switch.db` (SQLite: `providers`, `settings`) and the selected ids in `~/.cc-switch/settings.json`. That desktop build has no reliable CLI while its GUI runs (`--help`, `provider list` and `provider current` print nothing), so these ops use a guarded direct-config path in the bridge. No shell is involved; target paths are fixed under the SSH user's `$HOME`.
+
+- `ccswitch` (alias `providers`) — read-only, no fields. Opens the DB as `file:…?mode=ro` with a timeout and reads only `providers` and the two `common_config_*` settings rows. Returns:
+
+  ```json
+  {
+    "available": true,
+    "apps": ["claude", "codex"],
+    "current": {"claude": "<provider id or null>", "codex": "<provider id or null>"},
+    "providers": [{
+      "id": "<id>", "app_type": "claude|codex", "name": "<name>",
+      "is_current": true, "official": false, "switchable": true,
+      "models": [{"slot": "默认", "model": "<model>", "name": "<display name, optional>"}],
+      "model_provider": "<Codex model_provider, optional>",
+      "reason": "<why it cannot be switched, optional>"
+    }],
+    "note": "密钥只留在电脑上。"
+  }
+  ```
+
+  Claude model slots come only from `settings_config.env`: `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_FABLE_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`, plus the matching `*_MODEL_NAME`. Codex returns only `config`'s `model` and `model_provider`. **Tokens, API keys, base URLs, `settings_config` and arbitrary file paths are never returned.** Official rows (`claude-official`, `codex-official`, `default`) and providers with no writable config are listed with `switchable: false` and a human reason. A missing or unreadable CC Switch answers `{"available": false, "reason": "电脑上没有 CC Switch" | "CC Switch 的数据库读不出来（可能版本不兼容）", "providers": []}` rather than an error.
+
+- `ccswitchSwitch {app, provider}` — `app` must be `claude` or `codex`; `provider` must be an id present in the DB for that app (it is never a path or free-form config). Official/no-config providers are refused before anything is written. The bridge:
+  - **Claude**: merges `settings` → `common_config_claude` (env defaults, hooks, model, …) with the provider's `settings_config` and writes `~/.claude/settings.json`. The `env` object is replaced (another provider's token/model slots never survive); the current `statusLine` and user tables such as `modelSettings` are kept; hooks are unioned.
+  - **Codex**: merges `common_config_codex` (projects/trust) and the provider's `config` TOML over `~/.codex/config.toml`. User `projects`/trust, `tui`, `plugins`, `mcp_servers`, hooks and other tables are kept; provider-managed top-level keys (`model`, `model_provider`, `model_reasoning_effort`, `disable_response_storage`, `model_providers`) replace stale values. The provider's `auth` is written to `~/.codex/auth.json` when present (an `env_key` provider keeps the current auth file).
+  - Every replaced file is copied first to `<file>.ccswitch-backup-<YYYYmmdd_HHMMSS>` (0600, collision-suffixed). New files are written to a temp file in the same folder, `fsync`ed, atomically replaced and chmodded 0600. `~/.cc-switch/settings.json` gets `currentProviderClaude`/`currentProviderCodex`; `providers.is_current` is updated in one SQLite transaction (a locked GUI DB yields a warning, not a config rollback).
+  - Result: `{"switched": true, "app", "provider", "name", "new_sessions_only": true, "backup_count", "message", "warning"?}`. No secret or filesystem path is included. Only new sessions read the new config; a running Agent is never restarted or messaged. Model slots of the *current* provider can still be changed inside a running Claude session with `/model <slot>`.
+
 ## 文件: SFTP browsing and transfers (native, not bridge ops)
 
 These requests never reach the bridge; they run on an SFTP channel of the named computer's own SSH session (`device` is required by the page for each of them), with that SSH user's permissions. A channel that fails to open is "not sent" and retried once after a reconnect, like a bridge request; nothing else is retried.
