@@ -15,7 +15,6 @@ import android.media.ExifInterface
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
-import android.util.Base64
 import com.jcraft.jsch.SftpProgressMonitor
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -30,6 +29,9 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
  * 文件 → 预览: reads one remote file over the computer's own SFTP session into the app's private
@@ -37,30 +39,52 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  *  · text: decoded natively (UTF-8, else GB18030), at most [TEXT_MAX] bytes from the start, or the
  *    last [TAIL_MAX] bytes in tail mode (logs). Binary content is reported, never sent.
- *  · image: decoded and re-encoded natively (JPEG/PNG, long edge ≤ [EDGE]); a small GIF goes as
- *    is so it still moves. SVG is never rasterized here: the page shows it as source text.
- *  · pdf: [PdfRenderer] draws one page at a time to a bitmap; the page never parses the PDF.
+ *  · image: a complete browser-decodable original is served as-is through [PreviewServer]; anything
+ *    else is decoded with EXIF-aware orientation, downsampled to a clear 4096 px long edge (and a
+ *    per-device pixel cap), and written as a derived asset. GIFs stay animated when passed through.
+ *  · pdf: [PdfRenderer] draws one page at a time to a high-resolution JPEG. Pages are derived files
+ *    keyed by source + page + width + renderer version and served through [PreviewServer].
  *
- * The cache is keyed by computer + path + mtime + size (+ the byte range), so a changed file is
- * read again. Bytes are counted for the page's progress bar; a request can be cancelled by token.
- * Images and PDFs above [MEDIA_MAX] need allowLarge (the page asks first); nothing above [HARD_MAX].
+ * Source copies and derived files live in separate folders with separate caps. Bytes are counted for
+ * the page's progress bar; a request can be cancelled by token. Images and PDFs above [MEDIA_MAX]
+ * need allowLarge (the page asks first); nothing above [HARD_MAX].
  */
 object Previews {
     const val TEXT_MAX = 5_000_000L
     const val TAIL_MAX = 512L * 1024
     const val MEDIA_MAX = 20_000_000L
     const val HARD_MAX = 300_000_000L
+    const val IMAGE_MAX_EDGE = 4096
+    const val PDF_MAX_WIDTH = 4096
+    internal const val IMAGE_MAX_PIXELS = 12_000_000L
+    internal const val PDF_MAX_PIXELS = 10_000_000L
     private const val CACHE_CAP = 250_000_000L
-    private const val EDGE = 2048
-    private const val GIF_RAW = 6_000_000L
+    private const val DERIVED_CAP = 120_000_000L
+    private const val PASS_BYTES = 36_000_000L
+    private const val PASS_PIXELS = 14_000_000L
+    private const val LOW_MEMORY = 192L * 1024 * 1024
+    private const val DERIVED_VERSION = 2
+    private const val PDF_RENDERER_VERSION = 2
     private val KEY = Regex("[0-9a-f]{40}")
+    private val BROWSER_IMAGE = setOf("image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/avif")
 
+    internal enum class AssetKind { SOURCE, IMAGE, PAGE, OFFICE }
+    internal class Asset(val file: File, val mime: String, val name: String)
     private class Meta(val name: String, val mime: String, val complete: Boolean)
+    private class Derived(val kind: AssetKind, val file: File, val mime: String, val name: String,
+                          val width: Int = 0, val height: Int = 0, val pages: Int = 0)
+
     private val meta = ConcurrentHashMap<String, Meta>()
+    private val derived = ConcurrentHashMap<String, Derived>()
     private val stops = ConcurrentHashMap<String, AtomicBoolean>()
     private val pdfLock = Any()
 
     fun folder(context: Context) = File(context.cacheDir, "sftp-preview").apply { mkdirs() }
+    private fun derivedFolder(context: Context) = File(context.cacheDir, "sftp-preview-derived").apply { mkdirs() }
+    private fun derivedDir(context: Context, kind: AssetKind): File =
+        File(derivedFolder(context), when (kind) {
+            AssetKind.IMAGE -> "images"; AssetKind.PAGE -> "pages"; AssetKind.OFFICE -> "office"; AssetKind.SOURCE -> "images"
+        }).apply { mkdirs() }
 
     /** Marks [token] cancelled; a fetch still reading stops at its next block and keeps nothing. */
     fun cancel(token: String) {
@@ -69,9 +93,31 @@ object Previews {
         while (stops.size > 200) stops.keys.firstOrNull()?.let { stops.remove(it) }
     }
 
-    fun clear(context: Context) { folder(context).listFiles()?.forEach { it.delete() }; meta.clear() }
+    fun clear(context: Context) {
+        deleteTree(folder(context)); deleteTree(derivedFolder(context)); meta.clear(); derived.clear()
+    }
 
     fun fetch(context: Context, device: String, req: JSONObject, progress: (Long) -> Unit): JSONObject {
+        val got = acquire(context, device, req, progress)
+        val kind = req.optString("kind", "text")
+        val out = JSONObject().put("key", got.key).put("name", got.name).put("mime", got.mime).put("size", got.size).put("mtime", got.mtime)
+            .put("cached", got.cached).put("complete", got.complete).put("path", got.path)
+        when (kind) {
+            "text" -> text(got, kind == "text" && req.optBoolean("tail"), out)
+            "image" -> image(context, got, out)
+            "pdf" -> out.put("page", pdfPage(context, got.key, got.file, 0, req.optInt("width", 1080)))
+        }
+        return out
+    }
+
+    internal class Fetched(val key: String, val file: File, val size: Long, val mtime: Long, val limit: Long, val skip: Long,
+                           val cached: Boolean, val complete: Boolean, val name: String, val mime: String, val path: String)
+
+    /**
+     * The reusable SFTP/stat/cache/progress/cancel half of [fetch]. Later media/Office phases can
+     * call this without going through the text/image/PDF formatting.
+     */
+    internal fun acquire(context: Context, device: String, req: JSONObject, progress: (Long) -> Unit): Fetched {
         val path = req.getString("path")
         require(path.startsWith("/") && path.indexOf('\u0000') < 0) { "路径不对" }
         val kind = req.optString("kind", "text").also { require(it in setOf("text", "image", "pdf", "raw")) { "不支持的预览方式" } }
@@ -123,22 +169,30 @@ object Previews {
                         if (!tmp.renameTo(file)) { file.delete(); check(tmp.renameTo(file)) { "手机缓存写不进去" } }
                     } finally { tmp.delete() }
                 } else file.setLastModified(System.currentTimeMillis())
-                Fetched(k, file, size, mtime, limit, skip, cached, useFull || (skip == 0L && limit == size))
+                Fetched(k, file, size, mtime, limit, skip, cached, useFull || (skip == 0L && limit == size), name, mime, path)
             }
-            prune(dir, got.file)
+            pruneSource(dir, got.file)
             meta[got.key] = Meta(name, mime, got.complete)
-            val out = JSONObject().put("key", got.key).put("name", name).put("mime", mime).put("size", got.size).put("mtime", got.mtime)
-                .put("cached", got.cached).put("complete", got.complete).put("path", path)
-            when (kind) {
-                "text" -> text(got, tail, out)
-                "image" -> image(got.file, mime, out)
-                "pdf" -> out.put("page", pdfPage(got.file, 0, req.optInt("width", 1080)))
-            }
-            return out
+            return got
         } finally { if (token.isNotEmpty()) stops.remove(token) }
     }
 
-    private class Fetched(val key: String, val file: File, val size: Long, val mtime: Long, val limit: Long, val skip: Long, val cached: Boolean, val complete: Boolean)
+    /** Look up an asset by capability token. No caller-supplied path ever reaches the filesystem. */
+    internal fun assetFor(context: Context, token: String, kind: AssetKind?): Asset? {
+        if (!KEY.matches(token)) return null
+        if (kind == null) {
+            derived[token]?.takeIf { it.kind == AssetKind.IMAGE }?.let {
+                if (it.file.isFile) return Asset(it.file, it.mime, it.name)
+            }
+            val m = meta[token] ?: return null
+            if (!m.complete) return null
+            val file = File(folder(context), token)
+            return if (file.isFile) Asset(file, m.mime, m.name) else null
+        }
+        val d = derived[token] ?: return null
+        if (d.kind != kind || !d.file.isFile) return null
+        return Asset(d.file, d.mime, d.name)
+    }
 
     // ─── Text ─────────────────────────────────────────────────────────────────────────────────────
     private fun text(f: Fetched, tail: Boolean, out: JSONObject) {
@@ -194,43 +248,103 @@ object Previews {
     } catch (_: CharacterCodingException) { null }
 
     // ─── Images ───────────────────────────────────────────────────────────────────────────────────
-    private fun image(file: File, mime: String, out: JSONObject) {
+    private fun image(context: Context, f: Fetched, out: JSONObject) {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.path, bounds)
+        BitmapFactory.decodeFile(f.file.path, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw Friendly("preview_image", "这张图片手机解不开，可以下载后用其他应用打开")
-        out.put("origWidth", bounds.outWidth).put("origHeight", bounds.outHeight)
-        if (bounds.outMimeType == "image/gif" && file.length() <= GIF_RAW) {
-            out.put("url", dataUrl(file.readBytes(), "image/gif")).put("width", bounds.outWidth).put("height", bounds.outHeight); return
+        val encoded = bounds.outMimeType ?: f.mime
+        val w = bounds.outWidth
+        val h = bounds.outHeight
+        val orientation = try {
+            ExifInterface(f.file.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        } catch (_: Exception) { ExifInterface.ORIENTATION_NORMAL }
+        val swapped = orientation in ExifInterface.ORIENTATION_TRANSPOSE..ExifInterface.ORIENTATION_ROTATE_270
+        val visualW = if (swapped) h else w
+        val visualH = if (swapped) w else h
+        out.put("origWidth", w).put("origHeight", h)
+        val passPixels = if (lowMemory()) 8_000_000L else PASS_PIXELS
+        if (encoded in BROWSER_IMAGE && f.complete && f.file.length() <= PASS_BYTES && w.toLong() * h <= passPixels) {
+            // The browser decodes the original (and its EXIF orientation, animated GIF frames) itself.
+            meta[f.key] = Meta(f.name, encoded, true)
+            out.put("url", PreviewServer.assetUrl(f.key)).put("width", visualW).put("height", visualH).put("mime", encoded)
+            return
         }
+        val maxEdge = if (lowMemory()) 3072 else IMAGE_MAX_EDGE
+        val maxPixels = if (lowMemory()) 6_000_000L else IMAGE_MAX_PIXELS
+        val targetScale = min(1.0, min(maxEdge.toDouble() / maxOf(visualW, visualH), sqrt(maxPixels.toDouble() / (visualW.toLong() * visualH))))
+        val targetW = maxOf(1, (visualW * targetScale).roundToInt())
+        val targetH = maxOf(1, (visualH * targetScale).roundToInt())
+        // Do not allocate the original 100 MP ARGB buffer just to scale it down.
         var sample = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= EDGE) sample *= 2
-        val raw = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
-            ?: throw Friendly("preview_image", "这张图片手机解不开，可以下载后用其他应用打开")
-        val orientation = try { ExifInterface(file.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) } catch (_: Exception) { ExifInterface.ORIENTATION_NORMAL }
-        val scale = minOf(1f, EDGE.toFloat() / maxOf(raw.width, raw.height))
-        val m = Matrix()
-        if (scale < 1f) m.postScale(scale, scale)
-        when (orientation) {
-            ExifInterface.ORIENTATION_ROTATE_90 -> m.postRotate(90f)
-            ExifInterface.ORIENTATION_ROTATE_180 -> m.postRotate(180f)
-            ExifInterface.ORIENTATION_ROTATE_270 -> m.postRotate(270f)
+        val decodeCap = if (lowMemory()) 12_000_000L else 24_000_000L
+        while ((w.toLong() / sample) * (h.toLong() / sample) > decodeCap && sample < 64) sample *= 2
+        val raw = try {
+            BitmapFactory.decodeFile(f.file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+        } catch (_: OutOfMemoryError) {
+            throw Friendly("preview_image", "这张图片太大，手机内存不够；可以下载后用其他应用打开")
+        } ?: throw Friendly("preview_image", "这张图片手机解不开，可以下载后用其他应用打开")
+        var upright: Bitmap? = null
+        var scaled: Bitmap? = null
+        try {
+            upright = orient(raw, orientation)
+            val sourceW = upright.width
+            val sourceH = upright.height
+            val sx = min(1.0, targetW.toDouble() / sourceW)
+            val sy = min(1.0, targetH.toDouble() / sourceH)
+            val s = min(sx, sy)
+            scaled = if (s >= 0.999) upright else Bitmap.createScaledBitmap(upright, maxOf(1, (sourceW * s).roundToInt()), maxOf(1, (sourceH * s).roundToInt()), true)
+            val png = scaled.hasAlpha()
+            val mime = if (png) "image/png" else "image/jpeg"
+            val bytes = ByteArrayOutputStream().also { scaled.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 92, it) }.toByteArray()
+            val token = keyFor("image-v$DERIVED_VERSION\n${f.key}\n${scaled.width}x${scaled.height}\n$mime")
+            val file = File(derivedDir(context, AssetKind.IMAGE), token)
+            if (!file.isFile || file.length() != bytes.size.toLong()) writeAtomic(file, bytes)
+            derived[token] = Derived(AssetKind.IMAGE, file, mime, f.name, scaled.width, scaled.height)
+            pruneDerived(context, file)
+            out.put("url", PreviewServer.assetUrl(token)).put("width", scaled.width).put("height", scaled.height).put("mime", mime).put("derived", true)
+            if (encoded == "image/gif") out.put("note", "动图较大，这里显示第一帧。")
+        } catch (_: OutOfMemoryError) {
+            throw Friendly("preview_image", "这张图片太大，手机内存不够；可以下载后用其他应用打开")
+        } finally {
+            if (scaled != null && scaled !== upright) scaled.recycle()
+            if (upright != null && upright !== raw) upright.recycle()
+            raw.recycle()
         }
-        val bmp = if (m.isIdentity) raw else Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
-        val png = bmp.hasAlpha()
-        val bytes = ByteArrayOutputStream().also { bmp.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 88, it) }.toByteArray()
-        out.put("url", dataUrl(bytes, if (png) "image/png" else "image/jpeg")).put("width", bmp.width).put("height", bmp.height)
+    }
+
+    /** EXIF 1–8, including the four mirroring orientations. */
+    private fun orient(raw: Bitmap, orientation: Int): Bitmap {
+        if (orientation == ExifInterface.ORIENTATION_NORMAL || orientation == ExifInterface.ORIENTATION_UNDEFINED) return raw
+        val m = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> m.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> m.postRotate(180f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> { m.postRotate(180f); m.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSPOSE -> { m.postRotate(90f); m.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_90 -> m.postRotate(90f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> { m.postRotate(-90f); m.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_270 -> m.postRotate(-90f)
+            else -> return raw
+        }
+        return try {
+            Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
+        } catch (_: OutOfMemoryError) {
+            throw Friendly("preview_image", "这张图片太大，手机内存不够；可以下载后用其他应用打开")
+        }
     }
 
     // ─── PDF ──────────────────────────────────────────────────────────────────────────────────────
     /** One more page of a PDF already in the cache ([fetch] with kind pdf). */
     fun page(context: Context, req: JSONObject): JSONObject {
         val key = req.getString("key").also { require(KEY.matches(it)) { "预览已过期" } }
+        val m = meta[key] ?: throw Friendly("preview_gone", "预览已过期，重新打开一下")
+        if (!m.complete || m.mime != "application/pdf") throw Friendly("preview_gone", "预览已过期，重新打开一下")
         val file = File(folder(context), key)
         if (!file.isFile) throw Friendly("preview_gone", "预览已过期，重新打开一下")
-        return pdfPage(file, req.optInt("page"), req.optInt("width", 1080))
+        return pdfPage(context, key, file, req.optInt("page"), req.optInt("width", 1080))
     }
 
-    private fun pdfPage(file: File, index: Int, width: Int): JSONObject = synchronized(pdfLock) {
+    private fun pdfPage(context: Context, sourceKey: String, file: File, index: Int, width: Int): JSONObject = synchronized(pdfLock) {
         try {
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
                 val r = PdfRenderer(fd)
@@ -238,23 +352,56 @@ object Previews {
                     val n = r.pageCount
                     if (n <= 0) throw Friendly("preview_pdf", "这个 PDF 没有页面")
                     val i = index.coerceIn(0, n - 1)
-                    val p = r.openPage(i)
-                    try {
-                        val w = width.coerceIn(240, 1600)
-                        val h = (w.toLong() * p.height / maxOf(1, p.width)).toInt().coerceIn(1, 4 * w)
-                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                        bmp.eraseColor(Color.WHITE)
-                        p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        val bytes = ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.JPEG, 86, it) }.toByteArray()
-                        bmp.recycle()
-                        JSONObject().put("url", dataUrl(bytes, "image/jpeg")).put("width", w).put("height", h).put("index", i).put("pages", n)
-                    } finally { p.close() }
+                    val box = r.openPage(i).use { p -> p.width to p.height }
+                    var w = pdfWidth(width, box.first, box.second, pdfPixelCap())
+                    var oom = false
+                    while (true) {
+                        val h = (w.toLong() * box.second / maxOf(1, box.first)).toInt().coerceIn(1, 4 * w)
+                        val token = keyFor("pdf-v$PDF_RENDERER_VERSION\n$sourceKey\n$i\n$w")
+                        val target = File(derivedDir(context, AssetKind.PAGE), token)
+                        val existing = derived[token]
+                        if (!oom && existing != null && existing.file.isFile && existing.width == w && existing.height == h) {
+                            return@synchronized pageJson(token, w, h, i, n)
+                        }
+                        try {
+                            val page = r.openPage(i)
+                            val bmp = try {
+                                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { it.eraseColor(Color.WHITE) }
+                            } catch (e: OutOfMemoryError) { page.close(); throw e }
+                            val bytes: ByteArray
+                            try {
+                                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                bytes = ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }.toByteArray()
+                            } finally { bmp.recycle(); page.close() }
+                            writeAtomic(target, bytes)
+                            derived[token] = Derived(AssetKind.PAGE, target, "image/jpeg", "${nameOf(sourceKey)}-${i + 1}.jpg", w, h, n)
+                            pruneDerived(context, target)
+                            return@synchronized pageJson(token, w, h, i, n).also { if (oom) it.put("note", "内存不足，已用较低分辨率渲染。") }
+                        } catch (_: OutOfMemoryError) {
+                            if (oom || w <= 240) throw Friendly("preview_pdf", "这页 PDF 太大，手机内存不够；可以下载后用其他应用打开")
+                            oom = true
+                            w = maxOf(240, w / 2)
+                        }
+                    }
+                    throw Friendly("preview_pdf", "这页 PDF 渲染不了；可以下载后用其他应用打开")
                 } finally { r.close() }
             }
         } catch (e: Friendly) { throw e }
         catch (e: SecurityException) { throw Friendly("preview_pdf", "这个 PDF 有密码，预览不了；可以下载后用其他应用打开") }
         catch (e: Exception) { throw Friendly("preview_pdf", "这个 PDF 打不开预览（可能已损坏）；可以下载后用其他应用打开") }
     }
+
+    private fun pdfWidth(requested: Int, pageW: Int, pageH: Int, cap: Long): Int {
+        val wanted = requested.coerceIn(240, PDF_MAX_WIDTH)
+        val byPixels = sqrt(cap.toDouble() * pageW / maxOf(1, pageH)).toInt()
+        // Keep the 240 px floor and the total-pixel cap at the same time; an extreme page shape is
+        // better refused than allocated past the cap.
+        if (byPixels < 240) throw Friendly("preview_pdf", "这页 PDF 比例太极端，预览不了；可以下载后用其他应用打开")
+        return min(wanted, byPixels)
+    }
+
+    private fun pageJson(token: String, w: Int, h: Int, i: Int, n: Int): JSONObject =
+        JSONObject().put("url", PreviewServer.pageUrl(token)).put("width", w).put("height", h).put("index", i).put("pages", n)
 
     // ─── Open with / share ────────────────────────────────────────────────────────────────────────
     /** ACTION_VIEW / ACTION_SEND for a complete cached copy, through [PreviewFiles] (read-only grant). */
@@ -270,16 +417,24 @@ object Previews {
     }
 
     internal fun fileFor(context: Context, key: String): File? = if (KEY.matches(key)) File(folder(context), key).takeIf { it.isFile } else null
-    internal fun nameOf(key: String): String = meta[key]?.name ?: key
-    internal fun mimeOf(key: String): String = meta[key]?.mime ?: "application/octet-stream"
+    internal fun nameOf(key: String): String = meta[key]?.name ?: derived[key]?.name ?: key
+    internal fun mimeOf(key: String): String = meta[key]?.mime ?: derived[key]?.mime ?: "application/octet-stream"
+
+    // ─── Test hooks (same module instrumentation tests; production paths are unchanged) ───────────
+    internal fun registerForTest(key: String, name: String, mime: String, complete: Boolean = true) {
+        if (KEY.matches(key)) meta[key] = Meta(name, mime, complete)
+    }
+    internal fun forgetForTest(token: String) { meta.remove(token); derived.remove(token) }
 
     // ─── Shared ───────────────────────────────────────────────────────────────────────────────────
     private fun key(device: String, path: String, mtime: Long, size: Long, skip: Long, limit: Long): String =
-        MessageDigest.getInstance("SHA-1").digest("$device\n$path\n$mtime\n$size\n$skip\n$limit".toByteArray()).joinToString("") { "%02x".format(it) }
+        keyFor("$device\n$path\n$mtime\n$size\n$skip\n$limit")
+    private fun keyFor(text: String): String =
+        MessageDigest.getInstance("SHA-1").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 
     /** Oldest first until the folder fits [CACHE_CAP]; [keep] (just read) stays. Stale temp files go too. */
-    private fun prune(dir: File, keep: File) {
-        val files = dir.listFiles()?.toMutableList() ?: return
+    private fun pruneSource(dir: File, keep: File) {
+        val files = dir.listFiles()?.filter { it.isFile }?.toMutableList() ?: return
         val now = System.currentTimeMillis()
         files.filter { it.name.endsWith(".tmp") && now - it.lastModified() > 3_600_000 }.forEach { it.delete(); files.remove(it) }
         var total = files.sumOf { it.length() }
@@ -289,7 +444,37 @@ object Previews {
             total -= f.length(); f.delete(); meta.remove(f.name)
         }
     }
-    private fun dataUrl(bytes: ByteArray, mime: String) = "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+
+    private fun pruneDerived(context: Context, keep: File) {
+        val dir = derivedFolder(context)
+        val files = dir.walkTopDown().filter { it.isFile }.toMutableList()
+        val now = System.currentTimeMillis()
+        files.filter { it.name.endsWith(".tmp") && now - it.lastModified() > 3_600_000 }.forEach { it.delete(); files.remove(it) }
+        var total = files.sumOf { it.length() }
+        for (f in files.sortedBy { it.lastModified() }) {
+            if (total <= DERIVED_CAP) break
+            if (f == keep) continue
+            total -= f.length(); f.delete()
+            derived.values.removeIf { it.file == f }
+        }
+        derived.values.removeIf { !it.file.isFile }
+    }
+
+    private fun writeAtomic(file: File, bytes: ByteArray) {
+        val tmp = File(file.parentFile, file.name + "." + UUID.randomUUID().toString().take(8) + ".tmp")
+        try {
+            FileOutputStream(tmp).use { it.write(bytes) }
+            if (!tmp.renameTo(file)) { file.delete(); check(tmp.renameTo(file)) { "手机缓存写不进去" } }
+        } finally { tmp.delete() }
+    }
+
+    private fun deleteTree(file: File) {
+        file.listFiles()?.forEach { if (it.isDirectory) deleteTree(it) else it.delete() }
+        file.delete()
+    }
+
+    private fun lowMemory() = Runtime.getRuntime().maxMemory() < LOW_MEMORY
+    private fun pdfPixelCap() = if (lowMemory()) 6_000_000L else PDF_MAX_PIXELS
     private fun mb(n: Long) = if (n >= 1_000_000_000) "%.1f GB".format(n / 1e9) else "${(n + 999_999) / 1_000_000} MB"
 }
 

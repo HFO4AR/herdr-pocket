@@ -5,6 +5,7 @@
 // Offline: native is a strict fake with an in-memory file tree; nothing reaches a computer.
 const {chromium}=require('playwright');
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {png}=require('./png_fixture.cjs');
 (async()=>{
 const root=path.resolve(__dirname,'..');
 const html=require('./ui_bundle.cjs')(root);
@@ -12,6 +13,9 @@ const shots=path.join(root,'ui-artifacts');fs.mkdirSync(shots,{recursive:true});
 const browser=await chromium.launch({headless:true,...(process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{})});
 const page=await browser.newPage({viewport:{width:390,height:844},deviceScaleFactor:2});
 const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});
+const PNG=png();
+await page.route('https://pocket.invalid/preview/**',route=>route.fulfill({status:200,contentType:'image/png',headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'},body:PNG}));
+await page.addInitScript(()=>{window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push({directive:e.violatedDirective,blocked:e.blockedURI}));});
 await page.addInitScript(()=>{
  const now=Math.floor(Date.now()/1000);
  const D={A:{id:'A',name:'家里的电脑',user:'u',host:'home.invalid',port:22,remember:true}};
@@ -25,11 +29,11 @@ await page.addInitScript(()=>{
   '/home/u/src/app/main.c':'#include <stdio.h>\n\nint main(void) {\n  printf("hello\\n");\n  return 0;\n}\n',
   '/home/u/src/notes.md':'# 项目笔记\n\n- 第一项\n- **第二项**\n\n```sh\nmake test\n```\n'
  };
- const P1='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lZq2AAAAAElFTkSuQmCC';
+ const IMG='https://pocket.invalid/preview/'+'a'.repeat(40),PAGE='https://pocket.invalid/preview/page/'+'b'.repeat(40);
  const kids=p=>[...T.keys()].filter(k=>k!==p&&k.slice(0,k.lastIndexOf('/')||1)===p);
  const base=p=>p.slice(p.lastIndexOf('/')+1),join=(d,n)=>d==='/'?'/'+n:d+'/'+n,parent=p=>p.slice(0,p.lastIndexOf('/'))||'/';
  const resolve=p=>!p||p==='~'?'/home/u':p.startsWith('~/')?'/home/u'+p.slice(1):p;
- window.fx={D,T,C,P1,calls:[],unnamed:[],transfers:[],seq:0,picks:[],listFail:0,listDelay:0,opened:[],dropped:[],
+ window.fx={D,T,C,IMG,PAGE,calls:[],unnamed:[],transfers:[],seq:0,picks:[],listFail:0,listDelay:0,opened:[],dropped:[],
   previews:[],previewPages:[],previewCancelled:[],previewOpened:[],previewDelay:20};
  window.PocketNative={request(id,op,raw){const a=JSON.parse(raw);let data={};fx.calls.push({op,a});
   const fail=(msg,code,info)=>{setTimeout(()=>nativeResult(id,{ok:false,error:msg,...(code?{code}:{}),...(info?{info}:{})}),10);};
@@ -66,13 +70,13 @@ await page.addInitScript(()=>{
      if((a.kind==='image'||a.kind==='pdf')&&e.size>20e6&&!a.allowLarge)return fail('文件有 25 MB，预览要先读到手机上','preview_large',{size:e.size,max:20000000});
      fx.previews.push(a);const key='a'.repeat(40),name=base(p),mime=/\.pdf$/.test(p)?'application/pdf':/\.png$/.test(p)?'image/png':'text/plain';
      const result={key,name,mime,size:e.size,mtime:e.mtime,cached:false,complete:true,path:p};
-     if(a.kind==='image'){setTimeout(()=>window.nativeProgress(id,String(Math.floor(e.size/2))),8);setTimeout(()=>nativeResult(id,{ok:true,data:{...result,url:fx.P1,width:2,height:2,origWidth:2,origHeight:2}}),fx.previewDelay);return;}
-     if(a.kind==='pdf'){setTimeout(()=>window.nativeProgress(id,String(Math.floor(e.size/2))),8);setTimeout(()=>nativeResult(id,{ok:true,data:{...result,page:{url:fx.P1,width:300,height:400,index:0,pages:3}}}),fx.previewDelay);return;}
+     if(a.kind==='image'){setTimeout(()=>window.nativeProgress(id,String(Math.floor(e.size/2))),8);setTimeout(()=>nativeResult(id,{ok:true,data:{...result,url:fx.IMG,width:2400,height:3200,origWidth:2400,origHeight:3200}}),fx.previewDelay);return;}
+     if(a.kind==='pdf'){setTimeout(()=>window.nativeProgress(id,String(Math.floor(e.size/2))),8);setTimeout(()=>nativeResult(id,{ok:true,data:{...result,page:{url:fx.PAGE,width:3200,height:2400,index:0,pages:3}}}),fx.previewDelay);return;}
      const txt=fxC(p),binary=/\.bin$/.test(p);
      setTimeout(()=>window.nativeProgress(id,String(Math.floor(e.size/2))),10);
      setTimeout(()=>window.nativeProgress(id,String(e.size)),Math.max(40,Math.round(fx.previewDelay*.75)));
      setTimeout(()=>nativeResult(id,{ok:true,data:binary?{...result,binary:true,shown:0,truncated:false,tail:false,offset:0}:{...result,binary:false,text:txt,encoding:'UTF-8',shown:txt.length,truncated:false,tail:!!a.tail,offset:0}}),fx.previewDelay);return;}
-    else if(op==='sftpPreviewPage'){fx.previewPages.push(a);data={url:fx.P1,width:300,height:400,index:Math.max(0,Math.min(2,a.page)),pages:3};}
+    else if(op==='sftpPreviewPage'){fx.previewPages.push(a);data={url:fx.PAGE,width:3200,height:2400,index:Math.max(0,Math.min(2,a.page)),pages:3};}
     else if(op==='sftpPreviewOpen'){fx.previewOpened.push(a);data={};}
     else if(op==='sftpPreviewCancel'){fx.previewCancelled.push(a.token);data={};}
     else throw Error('unexpected '+op);}
@@ -241,20 +245,58 @@ assert.deepEqual(await page.locator('.fx-table th').allTextContents(),['name','s
 assert.equal(await page.locator('.fx-table tbody tr').count(),2);
 await page.getByRole('button',{name:'源码',exact:true}).click();await page.locator('.fx-code').waitFor();
 await back();
-// Image: zoom and fit.
+// Image: the original cache file is served by URL (never data:), decoded at full width.
 await row('shot.png').locator('.file-row').click();await title('shot.png');await page.locator('.fx-zoom img').waitFor();
+await page.waitForFunction(()=>{const i=document.querySelector('.fx-zoom img');return i&&i.complete&&i.naturalWidth>2000;});
+const imgSrc=await page.locator('.fx-zoom img').getAttribute('src');
+assert.match(imgSrc,/^https:\/\/pocket\.invalid\/preview\/[0-9a-f]{40}$/);
+assert.equal((await page.evaluate(()=>[...document.querySelectorAll('#fx-body img')].filter(i=>i.src.startsWith('data:image')).length)),0,'image preview never uses data:');
+const fit=await page.evaluate(()=>FX.pv.imgView.scale);
+assert(fit>0&&fit<1,'fit scale shrinks a 2400 px picture');
+const scaleNow=()=>page.evaluate(()=>FX.pv.imgView.scale);
 await page.getByRole('button',{name:'放大',exact:true}).click();
-assert.match(await page.locator('.fx-zoom').getAttribute('style'),/scale\(1\.25\)/);
+assert((await scaleNow())>fit,'+ zooms in');
+// Pinch: two touch pointers moving apart.
+const beforePinch=await scaleNow();
+await page.evaluate(()=>{const st=document.querySelector('.fx-stage');const ev=(t,id,x,y)=>st.dispatchEvent(new PointerEvent(t,{bubbles:true,clientX:x,clientY:y,pointerId:id,pointerType:'touch'}));
+ ev('pointerdown',11,140,420);ev('pointerdown',12,240,420);ev('pointermove',12,340,420);ev('pointerup',11,140,420);ev('pointerup',12,340,420);});
+assert((await scaleNow())>beforePinch,'pinch zooms');
 await page.getByRole('button',{name:'适应屏幕',exact:true}).click();
-assert.match(await page.locator('.fx-zoom').getAttribute('style'),/scale\(1\)/);
+assert.match(await page.locator('.fx-zoom').getAttribute('style'),/translate3d\(0px, 0px, 0px\)/,'fit recentres');
+await page.getByRole('button',{name:'旋转 90 度',exact:true}).click();
+assert.match(await page.locator('.fx-zoom').getAttribute('style'),/rotate\(90deg\)/);
+await page.getByRole('button',{name:'按原像素显示',exact:true}).click();
+assert.match(await page.locator('.fx-zoom').getAttribute('style'),/scale\(1\)/,'1:1 shows native pixels');
+await page.getByRole('button',{name:'适应屏幕',exact:true}).click();
 await back();
-// PDF: page by page through sftpPreviewPage.
+// PDF: high-resolution page URLs, page input/slider, rotate/fit, reset on page change.
 await row('report.pdf').locator('.file-row').click();await title('report.pdf');
 await page.locator('.fx-pdf img').waitFor();
-await page.getByText('第 1 / 3 页',{exact:true}).waitFor();
+await page.waitForFunction(()=>{const i=document.querySelector('.fx-pdf img');return i&&i.complete&&i.naturalWidth>2000;});
+const pdfSrc=await page.locator('.fx-pdf img').getAttribute('src');
+assert.match(pdfSrc,/^https:\/\/pocket\.invalid\/preview\/page\/[0-9a-f]{40}$/);
+assert.equal((await page.evaluate(()=>[...document.querySelectorAll('#fx-body img')].filter(i=>i.src.startsWith('data:image')).length)),0,'PDF pages never use data:');
+assert.equal(await page.locator('.fx-page-input').inputValue(),'1');
+const pdfWidth=(await calls('sftpPreview')).filter(a=>a.kind==='pdf').at(-1).width;
+assert(pdfWidth>1600&&pdfWidth<=4096,'PDF requests device-pixel width, not the 1600 CSS clamp: '+pdfWidth);
+await page.setViewportSize({width:320,height:640});
+assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'PDF preview fits 320 px');
+assert.equal(await page.evaluate(()=>{const n=document.querySelector('.fx-pager');return !n||n.scrollWidth<=n.clientWidth+1;}),true,'page controls fit 320 px');
+await shot('preview-pdf-320');
+await page.setViewportSize({width:390,height:844});
+await page.getByRole('button',{name:'旋转 90 度',exact:true}).click();
+assert.match(await page.locator('.fx-zoom').getAttribute('style'),/rotate\(90deg\)/);
+await page.getByRole('button',{name:'适应屏幕',exact:true}).click();
 await page.getByRole('button',{name:'下一页',exact:true}).click();
-await page.getByText('第 2 / 3 页',{exact:true}).waitFor();
-assert.equal((await page.evaluate(()=>fx.previewPages)).at(-1).page,1);
+await page.waitForFunction(()=>FX.pv?.page===1&&FX.pv?.pageData?.index===1);
+assert.equal(await page.locator('.fx-page-input').inputValue(),'2');
+assert.doesNotMatch(await page.locator('.fx-zoom').getAttribute('style'),/rotate\((?:90|180|270)deg\)/,'page change resets rotation');
+assert((await page.evaluate(()=>fx.previewPages.length))>0);
+assert((await page.evaluate(()=>fx.previewPages)).some(a=>a.page===1&&a.width>1600),'page render width is high-DPI');
+await page.locator('.fx-page-slider').evaluate(el=>{el.value='3';el.dispatchEvent(new Event('change'));});
+await page.waitForFunction(()=>FX.pv?.page===2&&FX.pv?.pageData?.index===2);
+assert.equal(await page.locator('.fx-page-input').inputValue(),'3');
+await page.getByRole('button',{name:'上一页',exact:true}).click();await page.waitForFunction(()=>FX.pv?.page===1);
 await back();
 // Binary fallback keeps the useful actions and moves no bytes into the page.
 await row('blob.bin').locator('.file-row').click();await title('blob.bin');
@@ -469,6 +511,7 @@ await page.getByRole('button',{name:/^传文件/}).click();
 await page.locator('.files-crumb.here',{hasText:'empty'}).waitFor();
 await page.getByText('空文件夹',{exact:true}).waitFor();
 assert.deepEqual(await page.evaluate(()=>fx.unnamed),[],'every device-bound SFTP request named its computer');
+assert.deepEqual(await page.evaluate(()=>window.__csp),[],'no CSP violations while showing pocket.invalid preview assets');
 assert.deepEqual(errors,[]);
 console.log('PASS: terminal ⋯ 传文件 opens at the pane folder; all requests carry the device');
 await browser.close();

@@ -85,7 +85,7 @@ function settingsPage(main){
  const store=group(right,'缓存');
  const info=el('div','set-row');info.append(el('span','set-label','对话缓存'));const size=el('span','set-value',SET.cache?bytesText(SET.cache.bytes||0)+' · '+(SET.cache.entries||0)+' 项':'读取中…');size.id='cache-size';info.append(size);store.append(info);
  store.append(el('p','set-note','打开过的会话列表和对话会加密存在这台手机上，下次打开先显示，再在后台刷新。'));
- const clear=btn('清除缓存','secondary small',()=>confirmAction('清除缓存？','只删除手机上的缓存，电脑上的会话和历史不受影响。','清除',async()=>{try{await rpc('cacheClear');if(typeof cacheForget==='function')cacheForget();SET.cache={bytes:0,entries:0};toast('缓存已清除');paintSettings();}catch(e){error(e);}},true));
+ const clear=btn('清除缓存','secondary small',()=>confirmAction('清除缓存？','只删除手机上的缓存，电脑上的会话和历史不受影响。','清除',async()=>{try{await rpc('cacheClear');if(typeof cacheForget==='function')cacheForget();if(typeof fxForgetPreviews==='function')fxForgetPreviews();SET.cache={bytes:0,entries:0};toast('缓存已清除');paintSettings();}catch(e){error(e);}},true));
  clear.classList.add('set-action');store.append(clear);
  rpc('cacheInfo').then(c=>{SET.cache=c;const n=document.getElementById('cache-size');if(n)n.textContent=bytesText(c.bytes||0)+' · '+(c.entries||0)+' 项';}).catch(()=>{const n=document.getElementById('cache-size');if(n)n.textContent='—';});
 

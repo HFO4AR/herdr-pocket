@@ -8,14 +8,15 @@
 //    reported: bars animate between real byte updates, never past the last one.
 //  · Uploads never overwrite silently: a name that already exists asks 替换 / 保留两个 / 跳过 first, and
 //    native re-checks when it moves the finished temporary file into place.
-//  · 预览 (Previews.kt) reads one file into the app's private cache and hands this page text, a re-encoded
-//    image or one PDF page. Remote HTML/JS is only ever shown as text: this file never assigns innerHTML
-//    from remote content and never loads remote scripts.
+//  · 预览 (Previews.kt) reads one file into the app's private cache and hands this page text plus
+//    passive image/PDF URLs on https://pocket.invalid/preview/… (PreviewServer.kt). Remote HTML/JS is
+//    only ever shown as text: this file never assigns innerHTML from remote content and never loads
+//    remote scripts.
 const FX={view:null,transfers:[],states:new Map(),want:0,sort:'name',hidden:false,prefs:false,
  pv:null,pcache:new Map(),meters:new Map(),hint:undefined,hintLoaded:'',nav:0,flew:new Set(),lastPoll:0};
 const FX_BIG=200e6;// downloads above this ask first (mobile data, phone storage)
 const FX_MEDIA_MAX=20_000_000;// mirrors Previews.MEDIA_MAX: images/PDFs above this ask before reading
-const FX_MAX_LINES=4000,FX_SYNTAX_LINES=2500,FX_SEARCH_LINES=20000,FX_PCACHE=12;
+const FX_MAX_LINES=4000,FX_SYNTAX_LINES=2500,FX_SEARCH_LINES=20000,FX_PCACHE=12,FX_PDF_CACHE=5;
 const FX_IMG=/\.(png|jpe?g|gif|webp|bmp|avif|heic|heif)$/i,FX_PDF=/\.pdf$/i;
 const FX_MD=/\.(md|markdown|mdown|mkd|mdx)$/i,FX_JSON=/\.(json|jsonc|json5|geojson|webmanifest)$/i;
 const FX_CSV=/\.(csv|tsv)$/i,FX_LOG=/\.(log|out|err|trace|nohup)$/i;
@@ -344,6 +345,8 @@ function fxKindLabel(e){const n=e.name;
 function fxPreviewKind(e){if(FX_IMG.test(e.name))return 'image';if(FX_PDF.test(e.name))return 'pdf';return 'text';}
 function fxPreviewKey(dev,path,e,kind,tail){return [dev,path,e.mtime||0,e.size||0,kind,tail?'tail':'head'].join('|');}
 function fxPreviewCache(key,r){FX.pcache.delete(key);FX.pcache.set(key,r);while(FX.pcache.size>FX_PCACHE)FX.pcache.delete(FX.pcache.keys().next().value);}
+// 设置 → 清除缓存 removes native sources/derived URLs; do not keep reopening them from this page.
+function fxForgetPreviews(){FX.pcache.clear();}
 function filesPreview(e,opts={}){
  const v=FX.view;if(!v?.list)return;
  const path=filePath(e),kind=fxPreviewKind(e),size=e.size||0;
@@ -355,7 +358,8 @@ function filesPreview(e,opts={}){
  const key=fxPreviewKey(v.device,path,e,kind,tail),hit=FX.pcache.get(key);
  if(FX.pv)fxStopTail();
  FX.pv={entry:e,path,name:e.name,size,mtime:e.mtime||0,kind,tail,wrap:false,mode:'',q:'',hits:[],hit:-1,
-  page:0,pageData:null,pages:0,zoom:1,zx:0,zy:0,cached:!!hit,fromCache:!!hit,loading:!hit,error:'',r:null,
+  page:0,pageData:null,pages:0,pagesCache:new Map(),pdfSeq:0,pdfLoading:false,pdfError:'',pdfView:null,pdfPrefetching:new Set(),
+  imgView:null,imgError:'',imgLoading:false,imgTry:0,cached:!!hit,fromCache:!!hit,loading:!hit,error:'',r:null,
   token:'pv'+uuid(),allowLarge:!!opts.large,prepared:false,keepScroll:undefined,keepBottom:false,slide:opts.slide||0};
  filesHintSeen();
  if(hit){
@@ -408,8 +412,8 @@ function fxPrepare(r){
  p.rawText=typeof r.text==='string'?r.text:'';
  p.encoding=r.encoding||'';p.binary=!!r.binary;p.truncated=!!r.truncated;p.tailResult=!!r.tail;
  p.pages=r.page?.pages||p.pages||0;p.page=r.page?.index??p.page??0;p.pageData=r.page||p.pageData||null;
- p.prettyText='';p.tableData=null;p.totalLines=0;p.lines=[];
- if(r.page){p.pages=r.page.pages||p.pages;p.page=r.page.index||0;p.pageData=r.page;(p.pagesCache||(p.pagesCache=new Map())).set(p.page,r.page);}
+ p.prettyText='';p.tableData=null;p.totalLines=0;p.lines=[];p.imgError='';p.pdfError='';p.pdfLoading=false;
+ if(r.page){p.pages=r.page.pages||p.pages;p.page=r.page.index||0;p.pageData=r.page;fxPageCachePut(p,p.page,r.page);}
  if(!p.prepared){
   if(FX_MD.test(p.name))p.mode='rendered';
   else if(FX_CSV.test(p.name))p.mode='table';
@@ -436,7 +440,13 @@ function fxParseCsv(text,sep){
   else if(c!=='\r')cell+=c;}
  if(cell!==''||row.length){row.push(cell);rows.push(row);}
  return rows.map(r=>r.slice(0,50));}
-function fxPdfWidth(){const w=Math.min(1600,Math.max(240,Math.round((document.getElementById('fx-body')?.clientWidth||innerWidth)-32)));return w;}
+// Render at the device's real pixel density, not a 1600 CSS-pixel clamp: a page then stays sharp at
+// 1:1 and while pinching on a 2–3× display. Native applies its own 4096/total-pixel ceiling.
+function fxPdfWidth(){
+ const body=document.getElementById('fx-body');const css=Math.max(240,(body?.clientWidth||innerWidth)-24);
+ const dpr=Math.max(1,Math.min(4,window.devicePixelRatio||1));
+ return Math.min(4096,Math.max(1800,Math.round(css*dpr*4)));
+}
 
 // ─── Preview screen ─────────────────────────────────────────────────────────
 function renderPreviewView(){
@@ -455,8 +465,8 @@ function renderPreviewView(){
  find.append(input,count,prev,next,close);root.append(find);
  input.oninput=()=>{clearTimeout(fxFindTimer);fxFindTimer=setTimeout(fxRunSearch,120);};
  input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();fxFindGo(e.shiftKey?-1:1);}else if(e.key==='Escape')fxFindClose();};
- const body=el('div','fx-body');body.id='fx-body';root.append(body);
- if(p.kind!=='image')fxBindSwipe(body);
+ const body=el('div','fx-body'+(p.kind==='image'||p.kind==='pdf'?' fx-view-body':''));body.id='fx-body';root.append(body);
+ if(p.kind!=='image'&&p.kind!=='pdf')fxBindSwipe(body);
  const foot=el('div','fx-foot');foot.id='fx-foot';root.append(foot);
  paintPreview();
 }
@@ -470,11 +480,13 @@ function paintPreview(){
  paintPreviewTools(tools);
  const body=document.getElementById('fx-body');if(!body)return;
  const scroll=body.scrollTop;
+ const viewer=p.kind==='image'||p.kind==='pdf';
+ body.classList.toggle('fx-view-body',viewer);
  body.replaceChildren();
  if(p.loading&&!p.r)body.append(fxReadBox());
  else if(p.error&&!p.r)body.append(fxPreviewError());
  else if(p.kind==='image'&&p.r&&!p.binary&&p.r.url)fxImageBody(body);
- else if(p.kind==='pdf'&&p.r&&!p.binary&&(p.pageData||p.r.page))fxPdfBody(body);
+ else if(p.kind==='pdf'&&p.r&&!p.binary&&(p.pageData||p.pdfError||p.r.page))fxPdfBody(body);
  else if(p.kind==='text'&&p.r&&!p.binary)fxTextBody(body);
  else fxFallbackBody(body);
  if(p.keepScroll!==undefined){body.scrollTop=p.keepScroll;p.keepScroll=undefined;}
@@ -492,12 +504,17 @@ function paintPreviewTools(n){
   if(FX_JSON.test(p.name))n.append(chip(p.mode==='pretty'?'原始':'格式化',()=>fxToggleMode('pretty'),'fSort',p.mode==='pretty'));
   if(FX_CSV.test(p.name))n.append(chip(p.mode==='table'?'源码':'表格',()=>fxToggleMode('table'),'fSort',p.mode==='table'));
  }
- if(p.kind==='image'){
-  n.append(chip('−',()=>fxZoomBy(.8),'fMinus',false,'缩小'));
-  n.append(chip('+',()=>fxZoomBy(1.25),'plus',false,'放大'));
-  n.append(chip('适应',()=>fxZoomReset(),'fFit',false,'适应屏幕'));
+ if(p.kind==='image'||p.kind==='pdf'){
+  n.append(chip('−',()=>fxViewerZoomBy(p.kind==='image'?p.imgView:p.pdfView,.8),'fMinus',false,'缩小'));
+  n.append(chip('+',()=>fxViewerZoomBy(p.kind==='image'?p.imgView:p.pdfView,1.25),'plus',false,'放大'));
+  const pct=el('span','pill fx-chip-static fx-zoom-pct','100%');pct.id='fx-zoom-pct';n.append(pct);
+  n.append(chip('适应',()=>fxViewerFit(p.kind==='image'?p.imgView:p.pdfView),'fFit',false,'适应屏幕'));
+  n.append(chip('1:1',()=>fxViewerOne(p.kind==='image'?p.imgView:p.pdfView),'fSelect',false,'按原像素显示'));
+  n.append(chip('旋转',()=>fxViewerRotate(p.kind==='image'?p.imgView:p.pdfView),'refresh',false,'旋转 90 度'));
  }
  n.append(chip('下载',()=>fileDownload(p.entry,false),'download',false,'下载到手机'));
+ if((p.kind==='image'||p.kind==='pdf')&&p.r?.key&&p.r?.complete){
+  n.append(chip('分享',()=>fxPreviewOpen(true),'fShare',false,'分享'));n.append(chip('打开',()=>fxPreviewOpen(false),'file',false,'用其他应用打开'));}
  if(p.cached)n.append(el('span','pill fx-cache-chip',p.fromCache?'已缓存':'系统缓存'));
  if(p.mtime)n.append(el('span','pill fx-chip-static',relative(p.mtime)));
  if(p.encoding)n.append(el('span','pill fx-chip-static',p.encoding));
@@ -669,53 +686,173 @@ function fxFindClose(){const p=FX.pv,f=document.getElementById('fx-find');if(f){
  if(p){p.q='';p.hits=[];p.hit=-1;if(p.findRestore){p.mode=p.findRestore;p.findRestore=null;}fxBuildText();const body=document.getElementById('fx-body');if(body&&p.kind==='text'&&!p.binary){body.replaceChildren();fxTextBody(body);}paintPreviewTools(document.getElementById('fx-tools'));}}
 function fxFindGo(dir){const p=FX.pv;if(!p||!p.hits.length)return;p.hit=(p.hit+dir+p.hits.length)%p.hits.length;fxFindCount();fxFindScroll();}
 
-// ─── Images: pinch / double-tap zoom, drag to pan, swipe to the next file ───
-function fxImageBody(body){
- const p=FX.pv,stage=el('div','fx-stage');stage.tabIndex=0;stage.setAttribute('role','group');stage.setAttribute('aria-label',p.name+'，可缩放');
- const zoom=el('div','fx-zoom');const img=el('img');img.alt=p.name;img.src=p.r.url;img.draggable=false;zoom.append(img);stage.append(zoom);body.append(stage);
- fxZoomApply(zoom);
- const pts=new Map();let down=null,pinch=null;
+// ─── Viewers: one transform model (fit, pan, rotation, clamp) for images and PDF pages ────────────
+function fxViewerMetrics(v){
+ if(!v)return false;const r=v.stage.getBoundingClientRect();v.stageW=Math.max(1,r.width);v.stageH=Math.max(1,r.height);
+ const swap=Math.abs(v.rotation%180)===90;const rw=swap?v.naturalH:v.naturalW,rh=swap?v.naturalW:v.naturalH;
+ if(!(rw>0&&rh>0))return false;
+ v.fit=Math.min(v.stageW/rw,v.stageH/rh);v.min=Math.min(v.fit,1);v.max=Math.max(4,Math.min(8,v.fit*8));return true;
+}
+function fxViewerClamp(v){
+ const r=v.rotation*Math.PI/180,c=Math.abs(Math.cos(r)),s=Math.abs(Math.sin(r));
+ const dw=(v.naturalW*c+v.naturalH*s)*v.scale,dh=(v.naturalW*s+v.naturalH*c)*v.scale;
+ const mx=Math.max(0,(dw-v.stageW)/2),my=Math.max(0,(dh-v.stageH)/2);
+ v.tx=Math.max(-mx,Math.min(mx,v.tx));v.ty=Math.max(-my,Math.min(my,v.ty));
+}
+function fxViewerApply(v,instant){
+ if(!v?.el)return;
+ v.el.style.transform='translate3d('+v.tx+'px,'+v.ty+'px,0) rotate('+v.rotation+'deg) scale('+v.scale+')';
+ v.el.style.transition=instant||fxReduced()?'none':'transform .18s var(--ease-out)';
+ const pct=document.getElementById('fx-zoom-pct');if(pct)pct.textContent=Math.round(v.scale*100)+'%';
+}
+function fxViewerFit(v){
+ if(!v||!fxViewerMetrics(v))return;v.scale=v.fit;v.tx=0;v.ty=0;fxViewerApply(v);
+}
+function fxViewerOne(v){if(!v)return;v.scale=1;v.tx=0;v.ty=0;fxViewerClamp(v);fxViewerApply(v);}
+function fxViewerZoomAt(v,next,fx,fy){
+ if(!v)return;const n=Math.max(v.min??0.05,Math.min(v.max??8,next));
+ if(!(n>0)||!isFinite(n))return;
+ if(fx!==undefined&&fy!==undefined){const cx=v.stageW/2,cy=v.stageH/2,ratio=n/v.scale;v.tx=(fx-cx)-((fx-cx)-v.tx)*ratio;v.ty=(fy-cy)-((fy-cy)-v.ty)*ratio;}
+ v.scale=n;fxViewerClamp(v);fxViewerApply(v,true);
+}
+function fxViewerZoomBy(v,f){if(!v)return;fxViewerZoomAt(v,v.scale*f);}
+function fxViewerRotate(v){
+ if(!v)return;const atFit=Math.abs(v.scale-v.fit)<.01;v.rotation=(v.rotation+90)%360;
+ if(!fxViewerMetrics(v))return;
+ if(atFit){v.scale=v.fit;v.tx=0;v.ty=0;}fxViewerClamp(v);fxViewerApply(v);
+}
+function fxViewerCycle(v){
+ if(!v)return;const levels=[v.fit,Math.min(v.max,v.fit*2),Math.min(v.max,v.fit*4)];
+ const next=levels.find(x=>x>v.scale+.01)??v.fit;
+ if(next===v.fit){v.scale=v.fit;v.tx=0;v.ty=0;}else fxViewerZoomAt(v,next);
+}
+function fxViewerResize(){
+ const p=FX.pv;if(!p)return;const v=p.kind==='image'?p.imgView:p.pdfView;if(!v)return;
+ const atFit=Math.abs(v.scale-v.fit)<.01;if(!fxViewerMetrics(v))return;
+ if(atFit){v.scale=v.fit;v.tx=0;v.ty=0;}else fxViewerClamp(v);
+ fxViewerApply(v);
+}
+let fxViewerResizeTimer=0;
+window.addEventListener('resize',()=>{clearTimeout(fxViewerResizeTimer);fxViewerResizeTimer=setTimeout(fxViewerResize,120);});
+function fxViewerBind(stage,v,onSwipe){
+ const pts=new Map();let down=null,pinch=null,lastTap=0;
  stage.addEventListener('pointerdown',e=>{
   if(e.pointerType==='mouse'&&e.button!==0)return;pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  if(pts.size===2){const [a,b]=[...pts.values()];pinch={d:Math.hypot(a.x-b.x,a.y-b.y),z:p.zoom};down=null;return;}
-  down={x:e.clientX,y:e.clientY,zx:p.zx,zy:p.zy,moved:0};try{stage.setPointerCapture(e.pointerId);}catch(_){} });
+  if(pts.size===2){const [a,b]=[...pts.values()];pinch={d:Math.max(1,Math.hypot(a.x-b.x,a.y-b.y)),scale:v.scale};down=null;return;}
+  down={x:e.clientX,y:e.clientY,tx:v.tx,ty:v.ty,moved:0,at:Date.now()};try{stage.setPointerCapture(e.pointerId);}catch(_){}
+ });
  stage.addEventListener('pointermove',e=>{
   if(!pts.has(e.pointerId))return;pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  if(pinch&&pts.size>=2){const [a,b]=[...pts.values()];const d=Math.hypot(a.x-b.x,a.y-b.y);p.zoom=Math.max(1,Math.min(5,pinch.z*d/Math.max(1,pinch.d)));if(p.zoom<=1){p.zx=0;p.zy=0;}fxZoomApply(zoom);return;}
+  if(pinch&&pts.size>=2){const [a,b]=[...pts.values()];const d=Math.max(1,Math.hypot(a.x-b.x,a.y-b.y));fxViewerZoomAt(v,pinch.scale*d/pinch.d,(a.x+b.x)/2,(a.y+b.y)/2);return;}
   if(!down)return;const dx=e.clientX-down.x,dy=e.clientY-down.y;down.moved=Math.max(down.moved,Math.abs(dx)+Math.abs(dy));
-  if(p.zoom>1){p.zx=down.zx+dx;p.zy=down.zy+dy;fxZoomApply(zoom,true);} });
+  if(v.scale>v.fit*1.02){v.tx=down.tx+dx;v.ty=down.ty+dy;fxViewerClamp(v);fxViewerApply(v,true);}
+ });
  const end=e=>{
-  pts.delete(e.pointerId);if(pinch){if(pts.size<2)pinch=null;down=null;fxZoomApply(zoom);return;}
-  if(!down)return;const dx=e.clientX-down.x,dy=e.clientY-down.y,moved=down.moved;down=null;fxZoomApply(zoom);
-  if(p.zoom<=1&&Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.4&&moved>60){fxStepFile(dx<0?1:-1);} };
- stage.addEventListener('pointerup',end);stage.addEventListener('pointercancel',e=>{pts.delete(e.pointerId);pinch=null;down=null;});
- stage.addEventListener('dblclick',()=>{p.zoom=p.zoom>1?1:2;p.zx=0;p.zy=0;fxZoomApply(zoom);});
+  pts.delete(e.pointerId);
+  if(pinch){if(pts.size<2)pinch=null;down=null;return;}
+  if(!down)return;const dx=e.clientX-down.x,dy=e.clientY-down.y,moved=down.moved,dur=Date.now()-down.at;down=null;
+  if(moved<9&&dur<380){
+   const now=Date.now();if(now-lastTap<360){lastTap=0;fxViewerCycle(v);}else lastTap=now;
+   return;
+  }
+  if(v.scale<=v.fit*1.05&&onSwipe&&Math.abs(dx)>64&&Math.abs(dx)>Math.abs(dy)*1.4&&moved>60)onSwipe(dx<0?1:-1);
+ };
+ stage.addEventListener('pointerup',end);
+ stage.addEventListener('pointercancel',e=>{pts.delete(e.pointerId);pinch=null;down=null;});
+ stage.addEventListener('wheel',e=>{e.preventDefault();fxViewerZoomAt(v,v.scale*(e.deltaY<0?1.12:.89),e.clientX-stage.getBoundingClientRect().left,e.clientY-stage.getBoundingClientRect().top);},{passive:false});
 }
-function fxZoomApply(z,instant){const p=FX.pv;if(!p||!z)return;z.style.transform='translate3d('+p.zx+'px,'+p.zy+'px,0) scale('+p.zoom+')';z.style.transition=instant||fxReduced()?'none':'transform .18s var(--ease-out)';}
-function fxZoomBy(f){const p=FX.pv;if(!p)return;p.zoom=Math.max(1,Math.min(5,p.zoom*f));if(p.zoom===1){p.zx=0;p.zy=0;}fxZoomApply(document.querySelector('#fx-body .fx-zoom'));}
-function fxZoomReset(){const p=FX.pv;if(!p)return;p.zoom=1;p.zx=0;p.zy=0;fxZoomApply(document.querySelector('#fx-body .fx-zoom'));}
+
+// ─── Images: original URL, pinch / double-tap fit→2×→4×, pan, rotate, fit, 1:1 ───
+function fxViewerLoading(stage,text){
+ const box=el('div','fx-viewer-status');box.setAttribute('role','status');box.append(el('span','spinner'),el('span','',text));stage.append(box);return box;
+}
+function fxImageViewerError(p,stage,box){
+ p.imgError='图片没有加载出来。';p.imgLoading=false;box.replaceChildren();
+ const ic=el('div','fx-viewer-error-icon');ic.append(icon('alert'));box.append(ic,el('p','fx-viewer-error',p.imgError));
+ const acts=el('div','fx-viewer-actions');acts.append(btn('重试','primary',()=>fxImageRetry(),'refresh'),btn('下载到手机','secondary',()=>fileDownload(p.entry,false),'download'));
+ if(p.r?.complete)acts.append(btn('用其他应用打开','secondary',()=>fxPreviewOpen(false),'file'));
+ box.append(acts);box.classList.add('shown');
+}
+function fxImageRetry(){const p=FX.pv;if(!p?.r?.url)return;p.imgTry++;p.imgError='';p.imgLoading=true;paintPreview();}
+function fxImageBody(body){
+ const p=FX.pv,stage=el('div','fx-stage');stage.tabIndex=0;stage.setAttribute('role','group');stage.setAttribute('aria-label',p.name+'，可缩放');
+ const zoom=el('div','fx-zoom');const img=el('img');img.alt=p.name;img.draggable=false;img.decoding='async';zoom.append(img);stage.append(zoom);
+ const v={el:zoom,stage,img,naturalW:0,naturalH:0,rotation:0,scale:1,tx:0,ty:0,fit:1,min:.05,max:4};p.imgView=v;
+ const box=fxViewerLoading(stage,'正在载入原图…');p.imgLoading=true;
+ img.addEventListener('load',()=>{
+  v.naturalW=img.naturalWidth;v.naturalH=img.naturalHeight;fxViewerFit(v);box.remove();p.imgLoading=false;p.imgError='';});
+ img.addEventListener('error',()=>fxImageViewerError(p,stage,box));
+ body.append(stage);
+ if(p.r.note)stage.append(el('div','fx-viewer-note',p.r.note));
+ fxViewerBind(stage,v,dir=>fxStepFile(dir));
+ img.src=p.r.url+(p.imgTry?'?r='+p.imgTry:'');
+ if(img.complete&&img.naturalWidth)setTimeout(()=>{if(v.naturalW===0)img.dispatchEvent(new Event('load'));},0);
+}
 
 // ─── PDF: one page at a time, rendered natively (the WebView never parses a PDF) ───
+function fxPageCachePut(p,page,data){
+ const cache=p.pagesCache||(p.pagesCache=new Map());cache.delete(page);cache.set(page,data);
+ while(cache.size>FX_PDF_CACHE)cache.delete(cache.keys().next().value);
+}
 function fxPdfBody(body){
  const p=FX.pv,wrap=el('div','fx-pdf');wrap.id='fx-pdf';
- if(!p.pageData){const l=el('div','fx-pdf-loading');l.append(el('span','spinner'),el('span','','正在渲染这一页…'));wrap.append(l);}
- else{const img=el('img');img.alt=p.name+' 第 '+(p.page+1)+' 页';img.src=p.pageData.url;wrap.append(img);}
- body.append(wrap);}
-function fxPdfGo(i){
- const p=FX.pv;if(!p)return;if(!p.pages){return;}const page=Math.max(0,Math.min(p.pages-1,i));if(page===p.page&&p.pageData)return;
- p.page=page;const cache=p.pagesCache||(p.pagesCache=new Map());
- if(cache.has(page)){p.pageData=cache.get(page);paintPreview();return;}
- const wrap=document.getElementById('fx-pdf');if(wrap){wrap.replaceChildren(el('span','spinner'),el('span','','正在渲染第 '+(page+1)+' 页…'));}
- rpc('sftpPreviewPage',{key:p.r.key,page,width:fxPdfWidth()}).then(r=>{if(FX.pv!==p)return;cache.set(page,r);p.pageData=r;p.pages=r.pages||p.pages;paintPreview();}).catch(e=>{if(FX.pv!==p)return;toast(e.message||String(e));paintPreview();});}
+ if(p.pdfError){
+  const box=el('div','fx-viewer-status shown');box.setAttribute('role','alert');
+  const ic=el('div','fx-viewer-error-icon');ic.append(icon('alert'));box.append(ic,el('p','fx-viewer-error',p.pdfError));
+  const acts=el('div','fx-viewer-actions');acts.append(btn('重试','primary',()=>fxPdfRetry(),'refresh'),btn('下载到手机','secondary',()=>fileDownload(p.entry,false),'download'));
+  if(p.r?.complete)acts.append(btn('用其他应用打开','secondary',()=>fxPreviewOpen(false),'file'));
+  box.append(acts);wrap.append(box);body.append(wrap);return;
+ }
+ if(!p.pageData){const l=el('div','fx-viewer-status');l.setAttribute('role','status');l.append(el('span','spinner'),el('span','','正在渲染第 '+(p.page+1)+' 页…'));wrap.append(l);body.append(wrap);return;}
+ const stage=el('div','fx-stage fx-pdf-stage');stage.tabIndex=0;stage.setAttribute('role','group');stage.setAttribute('aria-label',p.name+' 第 '+(p.page+1)+' 页，可缩放');
+ const zoom=el('div','fx-zoom');const img=el('img');img.alt=p.name+' 第 '+(p.page+1)+' 页';img.decoding='async';zoom.append(img);stage.append(zoom);
+ const v={el:zoom,stage,img,naturalW:0,naturalH:0,rotation:0,scale:1,tx:0,ty:0,fit:1,min:.05,max:8};p.pdfView=v;
+ const box=fxViewerLoading(stage,'正在显示这一页…');
+ img.addEventListener('load',()=>{v.naturalW=img.naturalWidth;v.naturalH=img.naturalHeight;fxViewerFit(v);box.remove();p.pdfLoading=false;});
+ img.addEventListener('error',()=>{p.pdfError='页面图片没有加载出来；可以重试或先下载。';p.pdfLoading=false;paintPreview();});
+ wrap.append(stage);body.append(wrap);
+ fxViewerBind(stage,v);
+ img.src=p.pageData.url;
+ if(img.complete&&img.naturalWidth)setTimeout(()=>{if(v.naturalW===0)img.dispatchEvent(new Event('load'));},0);
+}
+function fxPdfRetry(){const p=FX.pv;if(!p)return;p.pdfError='';fxPdfGo(p.page,true);}
+function fxPdfPrefetch(p,page){
+ if(!p||page<0||page>=p.pages)return;const cache=p.pagesCache||(p.pagesCache=new Map());
+ if(cache.has(page)||p.pdfPrefetching.has(page))return;p.pdfPrefetching.add(page);
+ rpc('sftpPreviewPage',{key:p.r.key,page,width:fxPdfWidth()}).then(r=>{if(FX.pv===p&&r?.url)fxPageCachePut(p,page,r);}).catch(()=>{}).finally(()=>p.pdfPrefetching.delete(page));
+}
+function fxPdfGo(i,force){
+ const p=FX.pv;if(!p||!p.pages)return;const page=Math.max(0,Math.min(p.pages-1,i));
+ if(page===p.page&&p.pageData&&!force)return;
+ p.page=page;p.pdfError='';p.pdfLoading=true;p.pdfView=null;p.pdfSeq++;
+ const seq=p.pdfSeq,cache=p.pagesCache||(p.pagesCache=new Map());
+ if(!force&&cache.has(page)){p.pageData=cache.get(page);p.pdfLoading=false;paintPreview();fxPdfPrefetch(p,page+1);return;}
+ p.pageData=null;paintPreview();
+ rpc('sftpPreviewPage',{key:p.r.key,page,width:fxPdfWidth()}).then(r=>{
+  if(FX.pv!==p||seq!==p.pdfSeq)return;
+  p.pages=r.pages||p.pages;p.pageData=r;p.pdfLoading=false;p.pdfError='';fxPageCachePut(p,page,r);paintPreview();fxPdfPrefetch(p,page+1);
+ }).catch(e=>{
+  if(FX.pv!==p||seq!==p.pdfSeq)return;
+  p.pdfLoading=false;p.pdfError=(e.message||String(e));paintPreview();
+ });
+}
 function paintPreviewFoot(){
  const n=document.getElementById('fx-foot');const p=FX.pv;if(!n||!p)return;n.replaceChildren();
  const prev=document.getElementById('fx-find');if(prev&&p.mode!=='source'&&FX_MD.test(p.name)){/* find stays available */}
  if(p.kind==='pdf'&&p.pages){
-  const bar=el('div','fx-pager');bar.append(btn('上一页','secondary small',()=>fxPdfGo(p.page-1),'back'));bar.lastChild.disabled=p.page<=0;
-  bar.append(el('span','fx-page-n','第 '+(p.page+1)+' / '+p.pages+' 页'));
+  const bar=el('div','fx-pager');const prev=btn('上一页','secondary small',()=>fxPdfGo(p.page-1),'back');prev.disabled=p.page<=0;bar.append(prev);
+  const edit=el('label','fx-page-edit','第 ');
+  const input=el('input','fx-page-input');input.type='number';input.min='1';input.max=String(p.pages);input.value=String(p.page+1);
+  input.setAttribute('aria-label','页码');input.enterKeyHint='go';
+  input.onchange=()=>{const v=Math.round(Number(input.value));if(Number.isFinite(v))fxPdfGo(v-1);else input.value=String(p.page+1);};
+  input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();input.blur();}};
+  edit.append(input,el('span','',' / '+p.pages+' 页'));bar.append(edit);
   const nx=btn('下一页','secondary small',()=>fxPdfGo(p.page+1),'chevron');nx.disabled=p.page>=p.pages-1;bar.append(nx);n.append(bar);
+  const sliderRow=el('div','fx-slider-row');const slider=el('input','fx-page-slider');slider.type='range';slider.min='1';slider.max=String(p.pages);slider.value=String(p.page+1);
+  slider.setAttribute('aria-label','页面滑块');slider.onchange=()=>fxPdfGo(Number(slider.value)-1);sliderRow.append(slider);n.append(sliderRow);
+  if(p.pageData?.note)n.append(el('p','fine center',p.pageData.note));
  }else if(p.kind==='image'){
-  n.append(el('p','fine center','双指缩放 · 双击放大 · 单指拖动 · 左右滑动切换文件'));
+  n.append(el('p','fine center','双指缩放 · 双击 2×/4× · 拖动 · 旋转 · 左右滑动切换文件'));
  }else if(p.kind==='text'&&p.r&&!p.binary){
   const files=filesSorted(FX.view?.list?.entries||[]).filter(e=>!fileIsDir(e));const at=files.findIndex(e=>e.name===p.name);
   if(files.length>1){const bar=el('div','fx-pager');const a=btn('上一个','secondary small',()=>fxStepFile(-1),'back');a.disabled=at<=0;bar.append(a,el('span','fx-page-n',(at+1)+' / '+files.length));const b=btn('下一个','secondary small',()=>fxStepFile(1),'chevron');b.disabled=at<0||at>=files.length-1;bar.append(b);n.append(bar);}
