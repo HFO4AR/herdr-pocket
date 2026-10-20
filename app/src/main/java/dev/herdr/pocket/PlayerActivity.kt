@@ -359,13 +359,16 @@ class PlayerActivity : Activity() {
     private fun releasePlayer() {
         prepared = false
         playing = false
-        surface?.release(); surface = null
-        val mp = player ?: return
+        val mp = player
         player = null
-        try { mp.setOnPreparedListener(null); mp.setOnCompletionListener(null); mp.setOnErrorListener(null) } catch (_: Exception) { }
-        try { if (mp.isPlaying) mp.stop() } catch (_: Exception) { }
-        try { mp.reset() } catch (_: Exception) { }
-        try { mp.release() } catch (_: Exception) { }
+        if (mp != null) {
+            try { mp.setOnPreparedListener(null); mp.setOnCompletionListener(null); mp.setOnErrorListener(null) } catch (_: Exception) { }
+            try { if (mp.isPlaying) mp.stop() } catch (_: Exception) { }
+            try { mp.setSurface(null) } catch (_: Exception) { }
+            try { mp.reset() } catch (_: Exception) { }
+            try { mp.release() } catch (_: Exception) { }
+        }
+        surface?.release(); surface = null
         keepScreenOn(false)
     }
 
