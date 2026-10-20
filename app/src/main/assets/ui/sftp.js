@@ -467,7 +467,9 @@ function fxParseCsv(text,sep){
 function fxPdfWidth(){
  const body=document.getElementById('fx-body');const css=Math.max(240,(body?.clientWidth||innerWidth)-24);
  const dpr=Math.max(1,Math.min(4,window.devicePixelRatio||1));
- return Math.min(4096,Math.max(1800,Math.round(css*dpr*4)));
+ // 2× the device-pixel width is sharp at fit and at 1:1 and still allows some zoom; asking for
+ // 4× (up to 4096) decoded ~10 MP per page and made turning pages slow and janky.
+ return Math.min(3000,Math.max(1200,Math.round(css*dpr*2)));
 }
 
 // ─── Preview screen ─────────────────────────────────────────────────────────
@@ -718,7 +720,10 @@ function fxFindGo(dir){const p=FX.pv;if(!p||!p.hits.length)return;p.hit=(p.hit+d
 
 // ─── Viewers: one transform model (fit, pan, rotation, clamp) for images and PDF pages ────────────
 function fxViewerMetrics(v){
- if(!v)return false;const r=v.stage.getBoundingClientRect();v.stageW=Math.max(1,r.width);v.stageH=Math.max(1,r.height);
+ if(!v)return false;const r=v.stage.getBoundingClientRect(),cs=getComputedStyle(v.stage);
+ // Fit inside the stage's padding, not its border box (the page must not touch the screen edge).
+ v.stageW=Math.max(1,r.width-(parseFloat(cs.paddingLeft)||0)-(parseFloat(cs.paddingRight)||0));
+ v.stageH=Math.max(1,r.height-(parseFloat(cs.paddingTop)||0)-(parseFloat(cs.paddingBottom)||0));
  const swap=Math.abs(v.rotation%180)===90;const rw=swap?v.naturalH:v.naturalW,rh=swap?v.naturalW:v.naturalH;
  if(!(rw>0&&rh>0))return false;
  v.fit=Math.min(v.stageW/rw,v.stageH/rh);v.min=Math.min(v.fit,1);v.max=Math.max(4,Math.min(8,v.fit*8));return true;
@@ -735,8 +740,8 @@ function fxViewerApply(v,instant){
  v.el.style.transition=instant||fxReduced()?'none':'transform .18s var(--ease-out)';
  const pct=document.getElementById('fx-zoom-pct');if(pct)pct.textContent=Math.round(v.scale*100)+'%';
 }
-function fxViewerFit(v){
- if(!v||!fxViewerMetrics(v))return;v.scale=v.fit;v.tx=0;v.ty=0;fxViewerApply(v);
+function fxViewerFit(v,instant){
+ if(!v||!fxViewerMetrics(v))return;v.scale=v.fit;v.tx=0;v.ty=0;fxViewerApply(v,instant);
 }
 function fxViewerOne(v){if(!v)return;v.scale=1;v.tx=0;v.ty=0;fxViewerClamp(v);fxViewerApply(v);}
 function fxViewerZoomAt(v,next,fx,fy){
@@ -810,7 +815,7 @@ function fxImageBody(body){
  const v={el:zoom,stage,img,naturalW:0,naturalH:0,rotation:0,scale:1,tx:0,ty:0,fit:1,min:.05,max:4};p.imgView=v;
  const box=fxViewerLoading(stage,'正在载入原图…');p.imgLoading=true;
  img.addEventListener('load',()=>{
-  v.naturalW=img.naturalWidth;v.naturalH=img.naturalHeight;fxViewerFit(v);box.remove();p.imgLoading=false;p.imgError='';});
+  v.naturalW=img.naturalWidth;v.naturalH=img.naturalHeight;fxViewerFit(v,true);box.remove();p.imgLoading=false;p.imgError='';});
  img.addEventListener('error',()=>fxImageViewerError(p,stage,box));
  body.append(stage);
  if(p.r.note)stage.append(el('div','fx-viewer-note',p.r.note));
@@ -886,7 +891,7 @@ function fxPdfBody(body){
  const ghost=p.pdfGhost?el('div','fx-page-ghost'):null;if(ghost){ghost.append(p.pdfGhost);stage.append(ghost);p.pdfGhost=null;}
  const v={el:zoom,stage,img,naturalW:0,naturalH:0,rotation:0,scale:1,tx:0,ty:0,fit:1,min:.05,max:8};p.pdfView=v;
  const box=ghost?null:fxViewerLoading(stage,'正在显示这一页…');
- img.addEventListener('load',()=>{v.naturalW=img.naturalWidth;v.naturalH=img.naturalHeight;fxViewerFit(v);box?.remove();p.pdfLoading=false;fxPdfBusy(p,false);
+ img.addEventListener('load',()=>{v.naturalW=img.naturalWidth;v.naturalH=img.naturalHeight;fxViewerFit(v,true);box?.remove();p.pdfLoading=false;fxPdfBusy(p,false);
   if(ghost){ghost.classList.add('out');setTimeout(()=>ghost.remove(),180);}});
  img.addEventListener('error',()=>{p.pdfError='页面图片没有加载出来；可以重试或先下载。';p.pdfLoading=false;paintPreview();});
  wrap.append(stage);body.append(wrap);

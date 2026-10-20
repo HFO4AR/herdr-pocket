@@ -70,7 +70,7 @@ class MainActivity : Activity() {
     private var watched = false
     // One picker at a time: the request waiting for it, how many pictures it may add, the camera target.
     private var pickId: String? = null
-    private var pickMax = 4
+    private var pickMax = Int.MAX_VALUE
     private var shot: File? = null
     // Paints the strips behind the status and navigation bars (edge-to-edge, see SystemBars).
     private val bars = BarsBackground()
@@ -496,7 +496,8 @@ class MainActivity : Activity() {
                         "cacheInfo" -> core.cache.info().let { (bytes, entries) -> success(id, JSONObject().put("bytes", bytes).put("entries", entries)) }
                         "inputInfo" -> success(id, JSONObject().put("physicalKeyboard", physicalKeyboard()))
                         "cacheClear" -> { core.cache.clear(); Previews.clear(this@MainActivity); MediaPreview.clear(this@MainActivity); success(id, JSONObject()) }
-                        "pickImages" -> runOnUiThread { pick(id, req.optString("source"), req.optInt("max", 4).coerceIn(1, 4)) }
+                        // Pictures have no count limit: 0/absent means all the picker returns.
+                        "pickImages" -> runOnUiThread { pick(id, req.optString("source"), req.optInt("max", 0).let { if (it > 0) it else Int.MAX_VALUE }) }
                         "dropImages" -> {
                             val ids = req.optJSONArray("ids") ?: JSONArray()
                             for (i in 0 until ids.length()) ImagePrep.drop(ids.optString(i))
@@ -623,7 +624,7 @@ class MainActivity : Activity() {
                 .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 .apply { clipData = ClipData.newRawUri("", uri) }
         } else if (Build.VERSION.SDK_INT >= 33 || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 2)) {
-            Intent("android.provider.action.PICK_IMAGES").setType("image/*").apply { if (max > 1) putExtra("android.provider.extra.PICK_IMAGES_MAX", max) }
+            Intent("android.provider.action.PICK_IMAGES").setType("image/*").apply { if (max in 2..1000) putExtra("android.provider.extra.PICK_IMAGES_MAX", max) }
         } else {
             Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_ALLOW_MULTIPLE, max > 1)
         }

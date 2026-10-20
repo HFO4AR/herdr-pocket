@@ -17,7 +17,7 @@ await page.addInitScript(()=>{
  window.PocketNative={request(id,op,raw){const args=JSON.parse(raw);nx.calls.push({op,args});
   const ok=data=>setTimeout(()=>nativeResult(id,{ok:true,data}),20),fail=error=>setTimeout(()=>nativeResult(id,{ok:false,error}),20);
   if(['devices','demo','disconnect','protect','watchState'].includes(op))return ok(op==='devices'?{devices:[]}:{});
-  if(op==='pickImages'){const batch=(nx.picks.shift()||[]).slice(0,args.max);return ok({images:batch.map(([w,h,hue,label])=>({id:'att-'+(++n),thumb:pic(Math.round(w/8),Math.round(h/8),hue,label),width:w,height:h,bytes:w*h/6|0,type:'jpg'})),failed:0});}
+  if(op==='pickImages'){let batch=nx.picks.shift()||[];if(args.max>0)batch=batch.slice(0,args.max);return ok({images:batch.map(([w,h,hue,label])=>({id:'att-'+(++n),thumb:pic(Math.round(w/8),Math.round(h/8),hue,label),width:w,height:h,bytes:w*h/6|0,type:'jpg'})),failed:0});}
   if(op==='dropImages')return ok({});
   if(op==='uploadImage'){if(nx.uploadFail.has(args.id)){nx.uploadFail.delete(args.id);return fail('SFTP 写入失败');}return ok({name:'2026-10-15/'+args.id.padEnd(64,'0').replace(/[^a-f0-9]/g,'c')+'.jpg',sha256:args.id.padEnd(64,'0').replace(/[^a-f0-9]/g,'c'),bytes:1000});}
   if(op==='image'){nx.served.push(args);const key=args.kind+':'+(args.name||args.address||args.block);
@@ -112,14 +112,15 @@ console.log('PASS: history thumbnails for uploads, ch addresses and transcript p
 // Composer: gallery (2) + camera (1), remove one.
 await page.evaluate(()=>{nx.picks.push([[4032,3024,20,'相册 1'],[3024,4032,180,'相册 2']],[[4000,3000,300,'拍照']]);});
 await page.getByRole('button',{name:'添加附件',exact:true}).click();
-await page.getByRole('button',{name:/从相册选.*还能加 4 张/}).click();
+await page.getByRole('button',{name:/从相册选/}).click();
 const tray=page.getByRole('list',{name:'要发送的图片',exact:true});
 await tray.getByRole('listitem').nth(1).waitFor();
 await page.getByRole('button',{name:'添加附件',exact:true}).click();
 await page.getByRole('button',{name:/拍照/}).click();
 await tray.getByRole('listitem').nth(2).waitFor();
-assert.match(await tray.locator('.att-note').textContent(),/^3\/4 张 · /);
-assert.deepEqual((await page.evaluate(()=>nx.calls.filter(c=>c.op==='pickImages').map(c=>[c.args.source,c.args.max]))),[['gallery',4],['camera',2]]);
+assert.match(await tray.locator('.att-note').textContent(),/^3 张 · /);
+assert.deepEqual(await page.evaluate(()=>nx.calls.filter(c=>c.op==='pickImages').map(c=>c.args.source)),['gallery','camera']);
+assert.equal(await page.evaluate(()=>nx.calls.filter(c=>c.op==='pickImages').every(c=>c.args.max===undefined)),true,'pictures are requested without a count limit');
 await tray.getByRole('button',{name:'删掉图片 2',exact:true}).click();
 await page.waitForFunction(()=>document.querySelectorAll('.att').length===2);
 assert.deepEqual(await page.evaluate(()=>nx.calls.filter(c=>c.op==='dropImages').map(c=>c.args.ids)),[['att-2']]);

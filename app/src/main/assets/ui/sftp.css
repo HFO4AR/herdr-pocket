@@ -205,8 +205,10 @@
 /* Images / PDF pages: one transform model (translate, rotate, scale) with clamped panning. */
 .fx-stage,.fx-pdf{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:none;background:var(--terminal);padding:10px}
 :root[data-theme="dark"] .fx-stage{background:#0b0b0a}
-.fx-pdf{flex-direction:column;padding:0;background:var(--bg)}
-.fx-pdf-stage{padding:8px}
+.fx-pdf{flex-direction:column;padding:0;background:var(--bg);width:100%;min-width:0}
+/* The column flex item used to size itself to the page image (2400px+), so "fit" was computed
+   against that width and the page was clipped. The stage must be the screen's width. */
+.fx-pdf .fx-pdf-stage{width:100%;max-width:100%;min-width:0;box-sizing:border-box;padding:8px}
 .fx-zoom{display:block;width:max-content;max-width:none;transform-origin:center center;will-change:transform;line-height:0}
 .fx-zoom img{display:block;width:auto;height:auto;max-width:none;max-height:none;object-fit:contain;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;border-radius:4px;box-shadow:0 4px 24px #0006;background:#fff}
 .fx-pdf .fx-zoom img{border-radius:2px;box-shadow:0 2px 14px var(--edge-shadow)}

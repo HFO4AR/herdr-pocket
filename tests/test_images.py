@@ -49,8 +49,10 @@ class ImageTests(unittest.TestCase):
 
     def prompt(self, text="看看这个报错", images=None, **extra):
         images = images if images is not None else [{"name": self.day + "/" + self.sha + ".png", "sha256": self.sha}]
-        return dict(v=1, op="prompt", session="default", target="w1:p1", identity=bridge.identity(self.agent),
-                    text=text, images=images, id="12345678-1234-1234-1234-123456789012", **extra)
+        request = dict(v=1, op="prompt", session="default", target="w1:p1", identity=bridge.identity(self.agent),
+                       text=text, images=images, id="12345678-1234-1234-1234-123456789012")
+        request.update(extra)
+        return request
 
     def sent(self):
         return [c for c in self.commands if "prompt" in c]
@@ -68,6 +70,12 @@ class ImageTests(unittest.TestCase):
         self.assertEqual(text, "看看这个报错\n\n[图片] " + str(self.folder / (self.sha + ".png")))
         self.assertEqual(first["text"], text)
 
+    def test_more_than_four_images_are_allowed(self):
+        images = [{"name": self.day + "/" + self.sha + ".png", "sha256": self.sha}] * 9
+        result = bridge.handle(self.prompt(images=images, id="32345678-1234-1234-1234-123456789012"), self.state)
+        self.assertEqual(len(self.sent()), 1)
+        self.assertEqual(result["text"].count("[图片] "), 9)
+
     def test_image_only_prompt_is_allowed(self):
         bridge.handle(self.prompt(text=""), self.state)
         self.assertTrue(self.sent()[0][-1].startswith("[图片] /"))
@@ -77,8 +85,7 @@ class ImageTests(unittest.TestCase):
     def test_bad_images_are_not_sent_and_leave_no_receipt(self):
         cases = [[{"name": "../../etc/passwd", "sha256": self.sha}],
                  [{"name": self.day + "/" + "0" * 64 + ".png", "sha256": "0" * 64}],
-                 [{"name": self.day + "/" + self.sha + ".png", "sha256": "f" * 64}],
-                 [{"name": self.day + "/" + self.sha + ".png", "sha256": self.sha}] * 5]
+                 [{"name": self.day + "/" + self.sha + ".png", "sha256": "f" * 64}]]
         for images in cases:
             with self.assertRaises(bridge.BridgeError):
                 bridge.handle(self.prompt(images=images), self.state)

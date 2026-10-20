@@ -6,25 +6,21 @@
 //    with their names; the bridge turns them into a path or a ch-file:// address for the agent.
 //  · History: "[图片] <path|ch-file://…>" lines and pictures embedded in a transcript show as
 //    thumbnails, fetched lazily and only from places the bridge allows.
-const IMG_MAX=4;
 const IMG=new Map();// draft key → [{id,thumb,width,height,bytes,type,name?,sha256?}]
 function imgAttached(key=draftKey()){return IMG.get(key)||[];}
 function imgSet(key,list){if(list.length)IMG.set(key,list);else IMG.delete(key);}
 function imgMenu(){
- const key=draftKey();const left=IMG_MAX-imgAttached(key).length,docs=FILE_MAX-fileAttached(key).length;
+ const key=draftKey(),docs=FILE_MAX-fileAttached(key).length;
  const box=sheet('添加附件');
- const gallery=menuItem(box,'从相册选',()=>imgPick('gallery',key),'image',left>0?'还能加 '+left+' 张':'图片已满 4 张');
- const camera=menuItem(box,'拍照',()=>imgPick('camera',key),'camera');gallery.disabled=camera.disabled=left<=0;
+ menuItem(box,'从相册选',()=>imgPick('gallery',key),'image','可一次多选');
+ menuItem(box,'拍照',()=>imgPick('camera',key),'camera');
  menuItem(box,'文件',()=>filePick(key),'file',docs>0?'PDF、日志、压缩包等，单个不超过 25 MB · 还能加 '+docs+' 个':'文件已满 4 个').disabled=docs<=0;
  box.append(el('p','fine','图片会在手机上压缩，并去掉拍摄地点等信息；文件原样上传，保留文件名。'));}
 async function imgPick(source,key){
  if(S.demo){toast('演示模式：不能添加图片');return;}
- const left=IMG_MAX-imgAttached(key).length;if(left<=0)return;
- try{const r=await rpc('pickImages',{source,max:left});const all=r.images||[];
-  const got=all.slice(0,IMG_MAX-imgAttached(key).length);
+ try{const r=await rpc('pickImages',{source});const got=r.images||[];
   if(got.length)imgSet(key,imgAttached(key).concat(got));
-  const extra=all.slice(got.length);if(extra.length)rpc('dropImages',{ids:extra.map(a=>a.id)}).catch(()=>{});
-  if(r.failed)toast(r.failed+' 张图片没能读取'+(r.reason?'：'+r.reason:''));else if(extra.length)toast('一条消息最多带 4 张图片');
+  if(r.failed)toast(r.failed+' 张图片没能读取'+(r.reason?'：'+r.reason:''));
   renderComposer();}
  catch(e){error(e);}}
 function imgRemove(key,id){imgSet(key,imgAttached(key).filter(a=>a.id!==id));rpc('dropImages',{ids:[id]}).catch(()=>{});renderComposer();}
@@ -38,7 +34,7 @@ function imgTray(compose,key){
  list.forEach((a,i)=>{const item=el('div','att');item.setAttribute('role','listitem');const img=el('img');img.src=a.thumb;img.alt='图片 '+(i+1);
   img.onclick=()=>imgView(list.map(x=>({url:x.thumb})),i);item.append(img);
   const x=ib('x','删掉图片 '+(i+1),()=>imgRemove(key,a.id));x.classList.add('att-x');item.append(x);tray.append(item);});
- tray.append(el('span','att-note',list.length+'/'+IMG_MAX+' 张 · '+imgBytes(list)));}
+ tray.append(el('span','att-note',list.length+' 张 · '+imgBytes(list)));}
 // Uploads pictures not yet on the computer. A failure means nothing was sent to the agent; uploaded
 // names are kept on the attachment so trying again does not upload twice.
 async function imgUpload(list,progress){

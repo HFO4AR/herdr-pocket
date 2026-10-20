@@ -342,7 +342,7 @@ class TmuxAgentTests(unittest.TestCase):
         image_path.write_bytes(b"changed")
         cases = [(dict(images=[image]), "不一致"), (dict(images=[dict(image, name="2026-01-01/" + "a" * 64 + ".png", sha256="a" * 64)]), "还没传到"),
                  (dict(files=[dict(doc, sha256=doc["sha256"][:16] + "0" * 48)]), "不一致"), (dict(files=[doc], remote=True), "没发出去"),
-                 (dict(images=[]), "最多带 4 张")]
+                 (dict(images=[]), "没有图片")]
         for i, (extra, msg) in enumerate(cases):
             with self.subTest(extra=extra), self.assertRaisesRegex(bridge.BridgeError, msg):
                 self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[i], text="x", **extra)

@@ -4270,8 +4270,9 @@ def upload_path(name):
 
 
 def prompt_images(images, request, prefix, agent):
-    if not isinstance(images, list) or not 1 <= len(images) <= 4:
-        raise BridgeError("一条消息最多带 4 张图片")
+    # Pictures have no count limit; the 65536-byte request bounds the list. Files keep FILE_MAX.
+    if not isinstance(images, list) or not images:
+        raise BridgeError("没发出去：这条消息没有图片")
     try: prune_uploads()
     except OSError: pass
     files = []
@@ -6484,7 +6485,7 @@ def tmux_attachments(request):
     refs = []
     images, files = request.get("images"), request.get("files")
     if images is not None:
-        if not isinstance(images, list) or not 1 <= len(images) <= 4: raise BridgeError("一条消息最多带 4 张图片")
+        if not isinstance(images, list) or not images: raise BridgeError("没发出去：这条消息没有图片")
         try: prune_uploads()
         except OSError: pass
         for item in images:

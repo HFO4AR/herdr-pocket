@@ -15,7 +15,7 @@ window.pocketShare=p=>{
  const item={text:String(p?.text||''),images:Array.isArray(p?.images)?p.images:[],files:Array.isArray(p?.files)?p.files:[],at:Date.now()};
  const empty=!item.text.trim()&&!item.images.length&&!item.files.length;
  if(p?.failed)toast(empty?'分享的内容读不到'+(p.reason?'：'+p.reason:''):p.failed+' 个文件没加上'+(p.reason?'：'+p.reason:''));
- else if(p?.extra)toast('一条消息最多带 4 张图片和 4 个文件，多的没加');
+ else if(p?.extra)toast('一条消息最多带 4 个文件，多的没加');
  if(empty){if(!p?.failed)toast('没有可以发送的内容');shareTick();return;}
  // A newer share replaces one still waiting.
  if(SHARE.item)shareRelease(SHARE.item);
@@ -84,12 +84,13 @@ function sharePicker(){
   b.append(t,el('span','badge '+stateTone(a),stateLabel(a)));box.append(b);});
  box.append(el('p','fine','只会放进输入框，你看过再发。'));
  const row=el('div','sheet-actions');row.append(btn('取消分享','secondary',shareCancel),btn('稍后再选','secondary',closeSheet));box.append(row);}
-// Puts the share into that agent's draft: text after anything already typed, attachments up to the limits.
+// Puts the share into that agent's draft: text after anything already typed, pictures as they
+// came (no count limit), files up to the 4-file limit.
 function shareApply(a){
  const it=SHARE.item;if(!it)return;SHARE.item=null;closeSheet();
  const key=S.session+'/'+a.identity;
  if(it.text.trim()){const cur=S.drafts.get(key)||'';S.drafts.set(key,cur.trim()?cur.replace(/\s+$/,'')+'\n\n'+it.text:it.text);}
- const pics=it.images.slice(0,Math.max(0,IMG_MAX-imgAttached(key).length));
+ const pics=it.images;
  if(pics.length)imgSet(key,imgAttached(key).concat(pics));
  const have=fileAttached(key),docs=[];
  for(const f of it.files){if(have.length+docs.length<FILE_MAX&&!have.concat(docs).some(x=>x.name===f.name&&x.size===f.size))docs.push(f);}

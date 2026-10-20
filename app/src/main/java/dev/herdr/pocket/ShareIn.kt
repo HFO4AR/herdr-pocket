@@ -39,7 +39,6 @@ class ShareActivity : Activity() {
 /** Reads what another app shared: text, pictures (prepared like picked ones) and files. */
 object ShareIn {
     private const val MAX_TEXT = 20_000
-    private const val MAX_IMAGES = 4
 
     fun isShare(intent: Intent) = intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE
 
@@ -85,7 +84,6 @@ object ShareIn {
             val mime = try { resolver.getType(uri) } catch (_: Exception) { null } ?: ""
             var done = false
             if (mime.startsWith("image/") && mime != "image/gif" && mime != "image/svg+xml") {
-                if (images.length() >= MAX_IMAGES) { extra++; continue }
                 try { images.put(ImagePrep.describe(ImagePrep.prepare(resolver, uri))); done = true } catch (_: Throwable) {}
             }
             if (done) continue
