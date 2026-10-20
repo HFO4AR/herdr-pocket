@@ -161,7 +161,12 @@ def main():
     assert 'image-prep: PASS' in vault,vault
     assert 'watch-rules: PASS' in vault,vault
     assert 'image-prep-mediastore: PASS' in vault,vault
+    assert 'preview-server: PASS' in vault,vault
+    assert 'preview-pdf: PASS' in vault,vault
     print('PASS: picked pictures (file:// and a MediaStore content:// JPEG with EXIF rotation) prepared upright; shared gallery picture read',flush=True)
+    print('PASS: PreviewServer token/MIME/Range/HEAD/404/405 checks; native PDF page rendered to a high-resolution preview URL',flush=True)
+    if 'preview-webview: PASS' in vault: print('PASS: blockNetworkLoads WebView loaded a pocket.invalid preview image through shouldInterceptRequest with no CSP violation',flush=True)
+    else: print('NOT VERIFIED: in-app WebView preview-image probe did not pass (see preview-webview marker)',flush=True)
     if fixture: print('PASS: SSH fixture PTY, UTF-8, persistent cwd, resize, Ctrl+C, stale target and duplicate input',flush=True)
     if fixture: print('PASS: silent reconnect after a dropped session; refused after a host-key change',flush=True)
     if fixture: print('PASS: two- and three-hop jump chains, per-hop pins, hop errors, chain rebuilt after a drop',flush=True)

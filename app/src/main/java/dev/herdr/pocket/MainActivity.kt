@@ -109,7 +109,8 @@ class MainActivity : Activity() {
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse =
-                WebResourceResponse("text/plain", "UTF-8", "".byteInputStream())
+                if (PreviewServer.isPreviewUrl(request.url)) PreviewServer.handle(applicationContext, request)
+                else WebResourceResponse("text/plain", "UTF-8", "".byteInputStream())
             override fun onPageFinished(view: WebView, url: String) {
                 started = true
                 sendKeyboardState()

@@ -1,3 +1,15 @@
+# Preview Phase 1: images and PDF clarity (2026-10-20)
+
+Worktree `agent/preview1-10201236` on base `8146f19`. This phase adds the local preview asset channel and replaces inline `data:` image/PDF previews with cache-file URLs. No media or Office preview was added.
+
+- PASS: `python3 -m unittest discover -s tests` — 535 bridge tests, OK (bridge code unchanged).
+- PASS: `CHROME_BIN=/opt/google/chrome/chrome node scripts/test_sftp_ui.cjs` — browser fixture serves a generated 2400×3200 PNG at `https://pocket.invalid/preview/<key>` and `/preview/page/<token>`. Asserted the original image URL loads with `naturalWidth=2400`, no preview image/PDF page uses `data:`, pinch/rotate/fit/1:1 work, PDF page requests are device-pixel-width (>1600, ≤4096), numeric page input/slider navigation and rotation reset work, 320 px layout fits, and `securitypolicyviolation` stayed empty.
+- PASS: `CHROME_BIN=/opt/google/chrome/chrome node scripts/test_sftp_motion_ui.cjs` — folder/selection/transfer/reduced-motion checks still pass with the URL-based preview fakes and no CSP violations.
+- PASS: `JAVA_HOME=/tmp/herdr-pocket-jdk17 ANDROID_HOME=/home/yuki/Android/Sdk ./gradlew assembleDebug assembleDebugAndroidTest lintDebug --offline -q` — debug APK, instrumentation APK and offline lint.
+- Added `PreviewTests.kt` (called by `SecureProfilesTest`; smoke markers `preview-server: PASS`, `preview-pdf: PASS`, plus `preview-webview`): source/derived token authorization, exact bytes, `HEAD`, 200/206/416 ranges, 403/404/405, MIME rejection, and a real `PdfDocument` page rendered through `PdfRenderer` to a high-width JPEG page URL. A probe launches the actual `MainActivity`, registers a PNG, creates an `Image` on the app page and checks `naturalWidth > 0` plus zero CSP violations under `blockNetworkLoads=true`.
+- NOT RUN: Android instrumentation, the in-app WebView probe, and `scripts/smoke_ui.py`. This host's emulator (36.4.9) crashed with exit 139 during startup for both API 32 and API 36 AVDs, with hardware and software acceleration. The instrumentation APK compiles, but the device-only PreviewServer/PDF/WebView markers above have not been executed yet.
+- NOT VERIFIED: the `blockNetworkLoads=true` + `shouldInterceptRequest` interception gate on a real WebView, native image/PDF memory behavior on a low-RAM phone, and visual sharpness on a physical display. These require the emulator/device run described above; the browser checks use a routed PNG fixture and are not evidence for WebView networking or native bitmap limits.
+
 # v0.4.0 terminal and missing-history fixes (2026-10-15)
 
 - Added a persistent SSH PTY view with bundled xterm.js, resizing, UTF-8 byte streaming, direct keyboard and explicit line submission. Returning to the list preserves the shell; disconnect/explicit close ends it. No reconnect or input replay.

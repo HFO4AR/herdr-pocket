@@ -5,6 +5,7 @@
 // Offline: native SFTP is an in-memory fake; nothing leaves the page.
 const {chromium}=require('playwright');
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {png}=require('./png_fixture.cjs');
 (async()=>{
 const root=path.resolve(__dirname,'..');
 const html=require('./ui_bundle.cjs')(root);
@@ -12,18 +13,20 @@ const shots=path.join(root,'ui-artifacts');fs.mkdirSync(shots,{recursive:true});
 const browser=await chromium.launch({headless:true,...(process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{})});
 const page=await browser.newPage({viewport:{width:390,height:844},deviceScaleFactor:2});
 const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});
+await page.route('https://pocket.invalid/preview/**',route=>route.fulfill({status:200,contentType:'image/png',body:png()}));
+await page.addInitScript(()=>{window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push({directive:e.violatedDirective,blocked:e.blockedURI}));});
 await page.addInitScript(()=>{
  const now=Math.floor(Date.now()/1000);
  const T=new Map(),mk=(p,t,s=0)=>T.set(p,{type:t,size:s,mtime:now-30});
  mk('/','dir');mk('/home','dir');mk('/home/u','dir');mk('/home/u/src','dir');mk('/home/u/src/x.txt','file',500);
  mk('/home/u/a.txt','file',1000);mk('/home/u/b.txt','file',2000);
  const C={'/home/u/src/x.txt':'one\ntwo\nthree\n','/home/u/a.txt':'alpha\n','/home/u/b.txt':'beta\n'};
- const P1='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lZq2AAAAAElFTkSuQmCC';
+ const IMG='https://pocket.invalid/preview/'+'c'.repeat(40),PAGE='https://pocket.invalid/preview/page/'+'d'.repeat(40);
  const D={id:'A',name:'动画测试电脑',user:'u',host:'motion.invalid',port:22,remember:true};
  const kids=p=>[...T.keys()].filter(k=>k!==p&&k.slice(0,k.lastIndexOf('/')||1)===p);
  const base=p=>p.slice(p.lastIndexOf('/')+1),parent=p=>p.slice(0,p.lastIndexOf('/'))||'/';
  const resolve=p=>!p||p==='~'?'/home/u':p.startsWith('~/')?'/home/u'+p.slice(1):p;
- window.fx={T,C,P1,calls:[],transfers:[],seq:0,listDelay:0,previews:[],previewDelay:30,opened:[]};
+ window.fx={T,C,IMG,PAGE,calls:[],transfers:[],seq:0,listDelay:0,previews:[],previewDelay:30,opened:[]};
  const fail=(id,msg,code)=>setTimeout(()=>nativeResult(id,{ok:false,error:msg,code}),10);
  window.PocketNative={request(id,op,raw){const a=JSON.parse(raw);fx.calls.push({op,a});
   try{
@@ -44,8 +47,13 @@ await page.addInitScript(()=>{
    if(op==='sftpOpen'){fx.opened.push(a);setTimeout(()=>nativeResult(id,{ok:true,data:{}}),5);return;}
    if(op==='sftpPreview'){fx.previews.push(a);const p=resolve(a.path),e=T.get(p),key='b'.repeat(40);
     setTimeout(()=>window.nativeProgress(id,String(Math.floor((e?.size||0)/2))),8);
-    setTimeout(()=>nativeResult(id,{ok:true,data:{key,name:base(p),mime:'text/plain',size:e.size,mtime:e.mtime,cached:false,complete:true,path:p,binary:false,text:fx.C[p]||'',encoding:'UTF-8',shown:(fx.C[p]||'').length,truncated:false,tail:false,offset:0}}),fx.previewDelay);return;}
-   if(op==='sftpPreviewCancel'||op==='sftpPreviewPage'||op==='sftpPreviewOpen'){setTimeout(()=>nativeResult(id,{ok:true,data:{}}),5);return;}
+    const result={key,name:base(p),mime:a.kind==='pdf'?'application/pdf':a.kind==='image'?'image/png':'text/plain',size:e.size,mtime:e.mtime,cached:false,complete:true,path:p};
+    const data=a.kind==='image'?{...result,url:fx.IMG,width:2400,height:3200,origWidth:2400,origHeight:3200}
+      :a.kind==='pdf'?{...result,page:{url:fx.PAGE,width:3200,height:2400,index:0,pages:2}}
+      :{...result,binary:false,text:fx.C[p]||'',encoding:'UTF-8',shown:(fx.C[p]||'').length,truncated:false,tail:false,offset:0};
+    setTimeout(()=>nativeResult(id,{ok:true,data}),fx.previewDelay);return;}
+   if(op==='sftpPreviewPage'){setTimeout(()=>nativeResult(id,{ok:true,data:{url:fx.PAGE,width:3200,height:2400,index:a.page,pages:2}}),5);return;}
+   if(op==='sftpPreviewCancel'||op==='sftpPreviewOpen'){setTimeout(()=>nativeResult(id,{ok:true,data:{}}),5);return;}
    throw Error('unexpected '+op);
   }catch(e){fail(id,e.message);}}};
  window.fxStep=(id,done,state,extra={})=>{const t=fx.transfers.find(x=>x.id===id);t.done=done;if(state)t.state=state;Object.assign(t,extra);};
@@ -248,6 +256,7 @@ await page.locator('.fx-code').waitFor();await page.waitForTimeout(200);
 await shot('tablet-preview');
 await theme('dark');await page.waitForTimeout(120);
 await page.screenshot({path:path.join(shots,'sftp-tablet-preview-dark.png')});
+assert.deepEqual(await page.evaluate(()=>window.__csp),[],'no CSP violations');
 assert.deepEqual(errors,[]);
 console.log('PASS: 320 px dark and tablet (list + preview) screenshots, no page errors');
 await browser.close();
