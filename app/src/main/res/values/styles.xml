@@ -9,4 +9,13 @@
         <item name="android:statusBarColor">#FBFAF6</item>
     </style>
     <style name="AppTheme" parent="PocketBase" />
+    <!-- 文件 → 视频/音频: the native player is a black, edge-to-edge surface. -->
+    <style name="PlayerTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#F57B4A</item>
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
 </resources>

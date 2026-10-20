@@ -10,4 +10,13 @@
         <item name="android:statusBarColor">#151514</item>
     </style>
     <style name="AppTheme" parent="PocketBase" />
+    <!-- 文件 → 视频/音频: the native player is always black, light or dark system theme. -->
+    <style name="PlayerTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#F39A72</item>
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
 </resources>

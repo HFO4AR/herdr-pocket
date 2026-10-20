@@ -155,6 +155,7 @@ def main():
     assert 'jump-vault: PASS' in vault,vault
     if fixture: assert 'ssh-jump: PASS' in vault,vault
     assert 'sftp-paths: PASS' in vault,vault
+    assert 'media-preview: PASS' in vault,vault
     if fixture: assert 'sftp: PASS' in vault,vault
     assert 'terminal-buffer: PASS' in vault,vault
     assert 'vault-tests: PASS (2 tests)' in vault,vault

@@ -10,6 +10,21 @@ Worktree `agent/preview1-10201236` on base `8146f19`. This phase adds the local 
 - NOT RUN: Android instrumentation, the in-app WebView probe, and `scripts/smoke_ui.py`. This host's emulator (36.4.9) crashed with exit 139 during startup for both API 32 and API 36 AVDs, with hardware and software acceleration. The instrumentation APK compiles, but the device-only PreviewServer/PDF/WebView markers above have not been executed yet.
 - NOT VERIFIED: the `blockNetworkLoads=true` + `shouldInterceptRequest` interception gate on a real WebView, native image/PDF memory behavior on a low-RAM phone, and visual sharpness on a physical display. These require the emulator/device run described above; the browser checks use a routed PNG fixture and are not evidence for WebView networking or native bitmap limits.
 
+# 文件 preview phase 2: video/audio (2026-10-20)
+
+Validated source: `89eb603`.
+
+- Added whole-file video/audio caching over the device's existing SFTP session into a separate `cacheDir/media-preview` cache (1 GB LRU quota, 20 MB confirmation, 1 GB hard limit, free-space check) with real byte progress and cancellation. Metadata and a ≤ 512 px JPEG poster come from `MediaMetadataRetriever`; a JSON sidecar plus the original file extension keep name/MIME across process death.
+- Added the native `PlayerActivity` (`TextureView` + `MediaPlayer`): play/pause, seek bar, elapsed/total, mute, screen-on, audio focus, headphone-unplug pause, pause on `onPause`, release/pin-end on `onDestroy`, rotation/fullscreen/immersive, and a friendly fallback with 用其他应用打开/分享 for unsupported codecs. The file is pinned while the player is open, so prune and 清除缓存 cannot delete it. The WebView never creates a `<video>`/`<audio>` element and never receives a media URL.
+- PASS: 535 Python bridge tests (`python3 -m unittest discover -s tests`).
+- PASS: new browser suite `CHROME_BIN=/opt/google/chrome/chrome node scripts/test_sftp_media_ui.cjs`: media rows, real progress, poster/title/artist/duration/size, large-file confirmation, cache hit, native `sftpMediaPlay` call, playback-error inline fallback, `sftpMediaExternal` open/share, cancel on leaving, 320 px layout, and zero `<video>`/`<audio>`/`<source>` elements. Three initial assertions were fixed during the run (the media kind label lives in the sheet, the header subtitle now refreshes after the cache completes, and the tools row is a deliberate horizontal scroller); the suite then passed. The existing `test_sftp_ui.cjs` regression suite also passed.
+- PASS: `JAVA_HOME=/tmp/herdr-pocket-jdk17 ANDROID_HOME=/home/yuki/Android/Sdk ./gradlew assembleDebug assembleDebugAndroidTest lintDebug --offline` (debug APK, instrumentation APK and lint; only pre-existing warnings plus player string-literal/translation warnings).
+- PASS: browser screenshots from the media suite inspected in light, dark and 320 px layouts (poster, play control, metadata and fallback actions, no clipped card).
+- Instrumentation added (compiled, not executed in this worktree): a generated 1 s 8 kHz PCM WAV checks `MediaMetadataRetriever` duration/MIME; a red bitmap checks the JPEG poster; sidecar/extension fallback, pin/clear and LRU eviction use temporary cache files. The SFTP fixture also caches a WAV and checks byte progress, metadata and key length.
+- NOT VERIFIED: actual audio/video output, audio focus and headphone unplug on a device. The CI emulator runs `-noaudio` and codec support varies; MediaPlayer playback, fullscreen/rotation and the player's codec fallback remain a manual device check. Instrumentation was compiled only (no emulator run) to avoid interfering with parallel agents.
+
+---
+
 # v0.4.0 terminal and missing-history fixes (2026-10-15)
 
 - Added a persistent SSH PTY view with bundled xterm.js, resizing, UTF-8 byte streaming, direct keyboard and explicit line submission. Returning to the list preserves the shell; disconnect/explicit close ends it. No reconnect or input replay.

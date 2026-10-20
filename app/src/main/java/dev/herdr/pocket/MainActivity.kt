@@ -495,7 +495,7 @@ class MainActivity : Activity() {
                         }
                         "cacheInfo" -> core.cache.info().let { (bytes, entries) -> success(id, JSONObject().put("bytes", bytes).put("entries", entries)) }
                         "inputInfo" -> success(id, JSONObject().put("physicalKeyboard", physicalKeyboard()))
-                        "cacheClear" -> { core.cache.clear(); Previews.clear(this@MainActivity); success(id, JSONObject()) }
+                        "cacheClear" -> { core.cache.clear(); Previews.clear(this@MainActivity); MediaPreview.clear(this@MainActivity); success(id, JSONObject()) }
                         "pickImages" -> runOnUiThread { pick(id, req.optString("source"), req.optInt("max", 4).coerceIn(1, 4)) }
                         "dropImages" -> {
                             val ids = req.optJSONArray("ids") ?: JSONArray()
@@ -545,6 +545,18 @@ class MainActivity : Activity() {
                         "sftpPreviewCancel" -> { Previews.cancel(req.optString("token")); success(id, JSONObject()) }
                         "sftpPreviewOpen" -> {
                             val intent = Previews.intent(req.getString("key"), req.optBoolean("share"))
+                            runOnUiThread { try { startActivity(intent); success(id, JSONObject()) } catch (e: ActivityNotFoundException) { failure(id, IllegalStateException("手机上没有能打开这种文件的应用")) } }
+                        }
+                        // 文件 → 视频/音频 (MediaPreview): cache the complete file with real progress, then let
+                        // the native PlayerActivity read it. No <video>/<audio> element or media URL reaches the page.
+                        "sftpMediaOpen" -> success(id, try { MediaPreview.open(this@MainActivity, dev(req), req) { n -> progress(id, n.toString()) } } catch (e: Exception) { throw RemoteFiles.friendly(e) })
+                        "sftpMediaCancel" -> { MediaPreview.cancel(req.optString("token")); success(id, JSONObject()) }
+                        "sftpMediaPlay" -> {
+                            val intent = MediaPreview.playerIntent(this@MainActivity, req.getString("key"))
+                            runOnUiThread { try { startActivity(intent); success(id, JSONObject()) } catch (e: ActivityNotFoundException) { failure(id, IllegalStateException("手机上没有可用的播放器")) } }
+                        }
+                        "sftpMediaExternal" -> {
+                            val intent = MediaPreview.intent(this@MainActivity, req.getString("key"), req.optBoolean("share"))
                             runOnUiThread { try { startActivity(intent); success(id, JSONObject()) } catch (e: ActivityNotFoundException) { failure(id, IllegalStateException("手机上没有能打开这种文件的应用")) } }
                         }
                         "shellOpen", "shellRead", "shellWrite", "shellResize", "shellClose" -> success(id, core.terminal(dev(req), op, req))

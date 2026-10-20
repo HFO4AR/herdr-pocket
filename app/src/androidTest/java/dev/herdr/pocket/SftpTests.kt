@@ -32,6 +32,75 @@ object SftpTests {
         check(SftpPath.numbered("report.pdf", 2) == "report (2).pdf" && SftpPath.numbered(".bashrc", 3) == ".bashrc (3)" && SftpPath.numbered("Makefile", 2) == "Makefile (2)") { "numbered" }
     }
 
+    /**
+     * 文件 → 视频/音频 (MediaPreview), without a computer: a deterministic PCM WAV gives a real
+     * duration; the poster encoder must produce a JPEG; sidecar/extension fallback, pin and LRU
+     * eviction are checked on temporary cache files that are removed again.
+     */
+    fun mediaCache(context: Context) {
+        val dir = MediaPreview.folder(context)
+        val key = "0123456789abcdef0123456789abcdef01234567"
+        val other = "fedcba9876543210fedcba9876543210fedcba98"
+        val wav = File(dir, "$key.wav")
+        try {
+            writeWav(wav)
+            val meta = MediaPreview.analyze(wav, "tone.wav")
+            check(meta.optString("kind") == "audio") { "media kind: $meta" }
+            val duration = meta.optLong("durationMs", 0)
+            check(duration in 750..1250) { "WAV duration: $duration" }
+            check(Transfers.mimeOf("tone.wav").startsWith("audio/")) { "WAV MIME: ${Transfers.mimeOf("tone.wav")}" }
+            check(MediaPreview.fileFor(context, key) != null) { "fileFor" }
+            check(MediaPreview.mimeOf(context, key).startsWith("audio/")) { "extension MIME fallback: ${MediaPreview.mimeOf(context, key)}" }
+            check(MediaPreview.nameOf(context, key).endsWith(".wav")) { "extension name fallback: ${MediaPreview.nameOf(context, key)}" }
+
+            File(dir, "$key.json").writeText(JSONObject().put("name", "原文件名.wav").put("mime", "audio/wav").put("size", wav.length()).toString())
+            check(MediaPreview.nameOf(context, key) == "原文件名.wav") { "sidecar name: ${MediaPreview.nameOf(context, key)}" }
+            check(MediaPreview.mimeOf(context, key) == "audio/wav") { "sidecar MIME: ${MediaPreview.mimeOf(context, key)}" }
+
+            val bitmap = android.graphics.Bitmap.createBitmap(1200, 800, android.graphics.Bitmap.Config.ARGB_8888)
+                .apply { eraseColor(android.graphics.Color.RED) }
+            try { check(MediaPreview.posterFromBitmap(context, key, bitmap)) { "poster was not written" } } finally { bitmap.recycle() }
+            val poster = MediaPreview.posterFor(context, key)
+            check(poster != null && poster.length() > 200) { "poster size: ${poster?.length()}" }
+            val head = poster!!.readBytes().take(3)
+            check(head == listOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte())) { "poster is not a JPEG: $head" }
+
+            MediaPreview.pin(key)
+            MediaPreview.clear(context)
+            check(MediaPreview.fileFor(context, key) != null && poster.exists()) { "clear removed a pinned file" }
+            MediaPreview.unpin(key)
+
+            val unpinned = File(dir, "$other.mp3").apply { writeBytes(ByteArray(4096) { 1 }) }
+            MediaPreview.pin(key)
+            MediaPreview.pruneForTest(context, unpinned.length() + 1)
+            check(MediaPreview.fileFor(context, key) != null) { "LRU evicted the pinned file" }
+            check(MediaPreview.fileFor(context, other) == null) { "LRU kept the unpinned file over quota" }
+            MediaPreview.unpin(key)
+        } finally {
+            MediaPreview.unpin(key); MediaPreview.unpin(other)
+            dir.listFiles()?.forEach { if (it.name.startsWith(key) || it.name.startsWith(other) || it.name.startsWith("poster-$key")) it.delete() }
+        }
+    }
+
+    /** A 1 s, 8 kHz, mono, 16-bit PCM WAV: deterministic duration for MediaMetadataRetriever. */
+    private fun writeWav(file: File, seconds: Int = 1) {
+        val rate = 8000; val channels = 1; val bits = 16
+        val dataSize = rate * seconds * channels * bits / 8
+        val out = java.io.ByteArrayOutputStream()
+        fun le16(v: Int) { out.write(v and 0xff); out.write((v ushr 8) and 0xff) }
+        fun le32(v: Int) { le16(v and 0xffff); le16((v ushr 16) and 0xffff) }
+        out.write("RIFF".toByteArray()); le32(36 + dataSize); out.write("WAVE".toByteArray())
+        out.write("fmt ".toByteArray()); le32(16); le16(1); le16(channels); le32(rate); le32(rate * channels * bits / 8); le16(channels * bits / 8); le16(bits)
+        out.write("data".toByteArray()); le32(dataSize)
+        val pcm = ByteArray(dataSize)
+        for (i in 0 until dataSize / 2) {
+            val v = (Math.sin(2 * Math.PI * 440 * i / rate) * 4000).toInt()
+            pcm[i * 2] = v.toByte(); pcm[i * 2 + 1] = (v ushr 8).toByte()
+        }
+        out.write(pcm)
+        file.writeBytes(out.toByteArray())
+    }
+
     /** [connect] logs [SshTransport] in; [password] empty = the device logs in with the app's key (installed here). */
     fun fixture(context: Context, endpoint: Endpoint, pin: String, password: String, connect: (SshTransport) -> Unit) {
         PocketCore.init(context)
@@ -139,6 +208,27 @@ object SftpTests {
                 val missing = await(Transfers.download(context, id, JSONObject().put("path", "$dir/nope.bin"), null).getString("id"))
                 check(missing.state == "failed" && missing.uri == null) { "missing download ${missing.state}" }
             }
+            // 视频/音频: the complete file is cached over SFTP with real byte progress, metadata read
+            // natively, and the cache key can be pinned for the duration of playback.
+            val tone = File(context.cacheDir, "sftp-test-tone.wav")
+            try {
+                writeWav(tone)
+                upload(tone, "tone.wav", "new")
+                var last = 0L
+                val media = MediaPreview.open(context, id, JSONObject().put("path", "$dir/tone.wav").put("allowLarge", true)) { n -> last = n }
+                check(last == tone.length()) { "media progress: $last / ${tone.length()}" }
+                check(media.getString("path") == "$dir/tone.wav" && media.getBoolean("complete")) { "media open: $media" }
+                val mm = media.getJSONObject("media")
+                check(mm.optString("kind") == "audio" && mm.optLong("durationMs", 0) in 750..1250) { "media metadata: $mm" }
+                val mediaKey = media.getString("key")
+                check(Regex("[0-9a-f]{40}").matches(mediaKey)) { "media key: $mediaKey" }
+                check(MediaPreview.fileFor(context, mediaKey)?.length() == tone.length()) { "media cache length" }
+                check(MediaPreview.mimeOf(context, mediaKey).startsWith("audio/")) { "media MIME: ${MediaPreview.mimeOf(context, mediaKey)}" }
+                MediaPreview.pin(mediaKey)
+                check(MediaPreview.isPinned(mediaKey)) { "pin" }
+                MediaPreview.unpin(mediaKey)
+                check(!MediaPreview.isPinned(mediaKey)) { "unpin" }
+            } finally { tone.delete(); MediaPreview.clear(context) }
             val clash = upload(src, "up ✓.bin", "new")
             check(clash.state == "failed" && clash.error.contains("已经有")) { "silent overwrite: ${clash.state} ${clash.error}" }
             check(upload(src, "up ✓.bin", "keep").savedPath == "$dir/up ✓ (2).bin") { "keep both" }
