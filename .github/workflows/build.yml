@@ -38,7 +38,7 @@ jobs:
         run: |
           export CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable)"
           npm test
-      - run: ./gradlew assembleDebug assembleDebugAndroidTest lintDebug --no-daemon
+      - run: ./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest lintDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: herdr-pocket-debug

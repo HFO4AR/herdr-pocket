@@ -1,0 +1,107 @@
+/* Office reading view (office.js): Word blocks, Excel virtual grid, PowerPoint slide canvas.
+ * Tokens from app.css. Document text is always real DOM text; nothing here loads a remote font or
+ * executes document content. Rows/cells are plain divs so the grid can virtualise. */
+.file-badge.kind-office,.file-icon-badge.kind-office{background:var(--soft);color:var(--accent);box-shadow:none}
+
+/* ─── Word ─────────────────────────────────────────────────────────────────── */
+.fx-docx{max-width:900px;margin:0 auto;padding:18px var(--sp-4) 26px;background:var(--surface);
+ border-bottom:1px solid var(--line);font-size:calc(15px * var(--oz,1));line-height:1.75;color:var(--ink-2);
+ user-select:text;-webkit-user-select:text;overflow-wrap:anywhere}
+.fx-docx-block{margin:0 0 .62em}
+.fx-docx-p{white-space:pre-wrap}
+.fx-docx-line{white-space:pre-wrap}
+.fx-docx-h{margin:.9em 0 .45em;color:var(--ink);line-height:1.35;font-weight:700}
+.fx-docx-h.h1{font-size:1.7em;border-bottom:1px solid var(--line);padding-bottom:.2em}
+.fx-docx-h.h2{font-size:1.45em}
+.fx-docx-h.h3{font-size:1.25em}
+.fx-docx-h.h4{font-size:1.12em}
+.fx-docx-h.h5,.fx-docx-h.h6{font-size:1em;color:var(--ink-2)}
+.fx-docx-list{display:flex;gap:8px;align-items:baseline}
+.fx-docx-marker{flex:0 0 auto;min-width:1.25em;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.fx-docx-list .fx-docx-line{flex:1;min-width:0}
+.fx-docx-run{}
+.fx-docx-link{color:var(--accent);text-decoration:underline;text-underline-offset:2px;cursor:default}
+.fx-docx-tablewrap{overflow:auto;overscroll-behavior-x:contain;margin:.55em 0 1em;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+.fx-docx-table{border-collapse:collapse;min-width:100%;font-size:.92em;line-height:1.5}
+.fx-docx-table th,.fx-docx-table td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px 9px;vertical-align:top;text-align:left;min-width:2.2em}
+.fx-docx-table th{background:var(--sunken);color:var(--ink);font-weight:650}
+.fx-docx-table tr:last-child td,.fx-docx-table tr:last-child th{border-bottom:0}
+.fx-docx-table th:last-child,.fx-docx-table td:last-child{border-right:0}
+.fx-docx-table .fx-docx-block{margin-bottom:.25em}
+.fx-docx-table .fx-docx-block:last-child{margin-bottom:0}
+.fx-docx-figure{margin:.7em 0 1em;text-align:center}
+.fx-docx-img{max-width:100%;height:auto;border-radius:5px;box-shadow:0 2px 12px var(--edge-shadow);background:var(--sunken)}
+.fx-docx-img-missing{display:inline-block;padding:14px 18px;border:1px dashed var(--line-strong);border-radius:8px;color:var(--faint);font-size:.85em}
+.fx-docx-break{border-top:1px dashed var(--line-strong);margin:1.4em 0}
+.fx-docx-more{display:flex;align-items:center;justify-content:center;gap:9px;padding:18px 0 8px;color:var(--muted);font-size:var(--fs-sm)}
+.fx-docx-more .fx-notice{margin:0}
+
+/* ─── Excel ────────────────────────────────────────────────────────────────── */
+.fx-xl{display:flex;flex-direction:column;min-height:0;background:var(--surface);border-bottom:1px solid var(--line)}
+.fx-xl-tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;padding:6px var(--sp-3);background:var(--bg);border-bottom:1px solid var(--line);flex-shrink:0;position:sticky;top:0;z-index:6}
+.fx-xl-tabs::-webkit-scrollbar{display:none}
+.fx-xl-tab{flex:0 0 auto;min-height:36px;padding:0 12px;border-radius:8px 8px 0 0;border:1px solid transparent;border-bottom:2px solid transparent;
+ color:var(--muted);font-size:var(--fs-sm);font-weight:600;white-space:nowrap}
+.fx-xl-tab.active{color:var(--accent);background:var(--surface);border-color:var(--line);border-bottom-color:var(--accent)}
+.fx-xl-tab.hidden-sheet{opacity:.55;font-style:italic}
+.fx-xl-headwrap{position:relative;flex-shrink:0;height:calc(30px * var(--oz,1));min-height:24px;background:var(--sunken);border-bottom:1px solid var(--line-strong);overflow:hidden}
+.fx-xl-corner{position:absolute;left:0;top:0;bottom:0;width:calc(46px * var(--oz,1));z-index:3;background:var(--sunken);
+ border-right:1px solid var(--line-strong);display:grid;place-items:center;font-size:calc(10px * var(--oz,1));color:var(--faint)}
+.fx-xl-head{display:flex;height:100%;box-sizing:border-box;overflow:hidden;will-change:transform}
+.fx-xl-ch{flex:0 0 auto;display:flex;align-items:center;justify-content:center;box-sizing:border-box;border-right:1px solid var(--line);
+ font-size:calc(10.5px * var(--oz,1));color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden}
+.fx-xl-scroll{position:relative;overflow:auto;overscroll-behavior:contain;height:calc(100dvh - 320px);min-height:300px;background:var(--surface);-webkit-overflow-scrolling:touch}
+.fx-xl-scroll:focus{outline:none;box-shadow:inset 0 0 0 2px var(--focus-halo)}
+.fx-xl-canvas{position:relative}
+.fx-xl-row{position:absolute;left:0;display:flex;box-sizing:border-box;border-bottom:1px solid var(--line);background:var(--surface)}
+.fx-xl-row.hidden-row{opacity:.45}
+.fx-xl-rownum{position:sticky;left:0;z-index:3;flex:0 0 auto;display:flex;align-items:center;justify-content:center;box-sizing:border-box;
+ background:var(--sunken);color:var(--faint);border-right:1px solid var(--line-strong);font-size:calc(10px * var(--oz,1));
+ font-variant-numeric:tabular-nums;user-select:none;-webkit-user-select:none}
+.fx-xl-spacer{flex:0 0 auto}
+.fx-xl-cell{flex:0 0 auto;display:flex;align-items:center;box-sizing:border-box;padding:0 6px;border-right:1px solid var(--line);
+ background:var(--surface);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25}
+.fx-xl-cell:focus{outline:none;box-shadow:inset 0 0 0 2px var(--accent);z-index:4}
+.fx-xl-cell.wrap{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;align-items:flex-start;padding-top:3px}
+.fx-xl-cell.strike{text-decoration:line-through}
+.fx-xl-cell.merged{background:var(--surface);box-shadow:inset 0 0 0 1px var(--line-strong);align-items:flex-start;padding-top:3px}
+.fx-xl-status{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px var(--sp-3);background:var(--bg);
+ border-top:1px solid var(--line);font-size:var(--fs-xs);color:var(--muted);flex-shrink:0;min-height:34px}
+.fx-xl-hint{color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ─── PowerPoint ───────────────────────────────────────────────────────────── */
+.fx-ppt-wrap{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px;background:var(--bg);display:flex;justify-content:center;align-items:flex-start}
+.fx-ppt-stage{flex:0 0 auto;min-width:100%;display:flex;justify-content:center}
+.fx-ppt-canvas{position:relative;flex:0 0 auto;max-width:none;overflow:hidden;background:#fff;color:#111;
+ box-shadow:0 3px 18px var(--edge-shadow);border-radius:2px;font-family:var(--font, system-ui, sans-serif);line-height:1.25}
+.fx-ppt-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
+.fx-ppt-shape{position:absolute;box-sizing:border-box;padding:1.6%;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-start;z-index:1}
+.fx-ppt-shape.placeholder{border:1px dashed #b9b9b9;background-repeat:no-repeat}
+.fx-ppt-label{position:absolute;inset:0;display:grid;place-items:center;color:#777;font-size:14px;font-weight:600;letter-spacing:.04em}
+.fx-ppt-img{position:absolute;object-fit:contain;z-index:2}
+.fx-ppt-p{margin:0 0 .18em;display:flex;flex-wrap:wrap;gap:.3em;align-items:baseline;white-space:pre-wrap;overflow-wrap:anywhere}
+.fx-ppt-p:last-child{margin-bottom:0}
+.fx-ppt-p.lvl1{padding-left:1.2em}.fx-ppt-p.lvl2{padding-left:2.4em}.fx-ppt-p.lvl3{padding-left:3.6em}.fx-ppt-p.lvl4{padding-left:4.8em}
+.fx-ppt-marker{flex:0 0 auto;opacity:.75}
+.fx-ppt-run{white-space:pre-wrap;overflow-wrap:anywhere}
+.fx-ppt-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;color:var(--muted);font-size:var(--fs-sm);background:var(--surface)}
+.fx-ppt-wrap .fx-notice{padding:10px 4px 4px}
+
+/* ─── Shared ───────────────────────────────────────────────────────────────── */
+.fx-body>.fx-notice{padding:0 var(--sp-4)}
+.fx-office-loading{padding:18px var(--sp-4)}
+
+@media(min-width:600px){
+ .fx-docx{padding:24px 34px 32px}
+ .fx-xl-scroll{height:calc(100dvh - 300px)}
+ .fx-ppt-wrap{padding:18px}
+}
+@media(max-width:359px){
+ .fx-xl-tab{padding:0 9px;font-size:12px}
+ .fx-xl-status{font-size:10.5px}
+ .fx-xl-hint{display:none}
+ .fx-docx{padding:14px 12px 20px;font-size:calc(14px * var(--oz,1))}
+}
+@media(prefers-reduced-motion:reduce){
+ .fx-xl-head{will-change:auto}
+}

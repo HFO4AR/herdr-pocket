@@ -154,6 +154,7 @@ def main():
     assert 'ssh-identity: PASS' in vault,vault
     assert 'jump-vault: PASS' in vault,vault
     if fixture: assert 'ssh-jump: PASS' in vault,vault
+    assert 'office-parser: PASS' in vault,vault
     assert 'sftp-paths: PASS' in vault,vault
     if fixture: assert 'sftp: PASS' in vault,vault
     assert 'terminal-buffer: PASS' in vault,vault
@@ -162,6 +163,7 @@ def main():
     assert 'watch-rules: PASS' in vault,vault
     assert 'image-prep-mediastore: PASS' in vault,vault
     print('PASS: picked pictures (file:// and a MediaStore content:// JPEG with EXIF rotation) prepared upright; shared gallery picture read',flush=True)
+    print('PASS: Office parsers on-device: DOCX text/table, XLSX sheet/cell, PPTX slide text (Android pull parser)',flush=True)
     if fixture: print('PASS: SSH fixture PTY, UTF-8, persistent cwd, resize, Ctrl+C, stale target and duplicate input',flush=True)
     if fixture: print('PASS: silent reconnect after a dropped session; refused after a host-key change',flush=True)
     if fixture: print('PASS: two- and three-hop jump chains, per-hop pins, hop errors, chain rebuilt after a drop',flush=True)

@@ -50,6 +50,10 @@ object Previews {
     const val TAIL_MAX = 512L * 1024
     const val MEDIA_MAX = 20_000_000L
     const val HARD_MAX = 300_000_000L
+    /** One extracted Office image may become a derived preview asset. */
+    const val DERIVED_MAX = 16 * 1024 * 1024
+    /** Passive image types only; SVG/EMF/WMF/HTML are never registered as preview assets. */
+    val DERIVED_MIME = setOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp")
     private const val CACHE_CAP = 250_000_000L
     private const val EDGE = 2048
     private const val GIF_RAW = 6_000_000L
@@ -59,6 +63,7 @@ object Previews {
     private val meta = ConcurrentHashMap<String, Meta>()
     private val stops = ConcurrentHashMap<String, AtomicBoolean>()
     private val pdfLock = Any()
+    private val derivedLock = Any()
 
     fun folder(context: Context) = File(context.cacheDir, "sftp-preview").apply { mkdirs() }
 
@@ -267,6 +272,31 @@ object Previews {
             .apply { clipData = android.content.ClipData.newRawUri(m.name, uri) }
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "分享「${m.name}」")
         else Intent(Intent.ACTION_VIEW).setDataAndType(uri, m.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    /**
+     * Registers bytes derived from another preview (an Office image) under their SHA-1 and writes
+     * them into the same private cache. Phase 1's PreviewServer can then serve the 40-hex key as
+     * `/preview/office/<key>` without re-reading the document. Only passive image MIME types are
+     * accepted; the caller must already hold the extracted bytes, never a remote URL.
+     */
+    fun putDerived(context: Context, bytes: ByteArray, mime: String, name: String): String {
+        require(bytes.isNotEmpty() && bytes.size <= DERIVED_MAX) { "图片太大" }
+        require(mime in DERIVED_MIME) { "不支持的图片类型" }
+        synchronized(derivedLock) {
+            val key = MessageDigest.getInstance("SHA-1").digest(bytes).joinToString("") { "%02x".format(it) }
+            val dir = folder(context)
+            val file = File(dir, key)
+            if (!(file.isFile && file.length() == bytes.size.toLong())) {
+                val tmp = File(dir, "$key.${UUID.randomUUID().toString().take(8)}.tmp")
+                try {
+                    FileOutputStream(tmp).use { it.write(bytes) }
+                    if (!tmp.renameTo(file)) { file.delete(); check(tmp.renameTo(file)) { "手机缓存写不进去" } }
+                } finally { tmp.delete() }
+            }
+            meta[key] = Meta(name.take(120).ifEmpty { "image" }, mime, true)
+            return key
+        }
     }
 
     internal fun fileFor(context: Context, key: String): File? = if (KEY.matches(key)) File(folder(context), key).takeIf { it.isFile } else null

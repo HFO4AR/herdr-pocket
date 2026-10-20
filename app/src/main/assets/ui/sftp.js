@@ -17,6 +17,8 @@ const FX_BIG=200e6;// downloads above this ask first (mobile data, phone storage
 const FX_MEDIA_MAX=20_000_000;// mirrors Previews.MEDIA_MAX: images/PDFs above this ask before reading
 const FX_MAX_LINES=4000,FX_SYNTAX_LINES=2500,FX_SEARCH_LINES=20000,FX_PCACHE=12;
 const FX_IMG=/\.(png|jpe?g|gif|webp|bmp|avif|heic|heif)$/i,FX_PDF=/\.pdf$/i;
+const FX_OFFICE=/\.(docx|xlsx|pptx)$/i;
+const FX_OFFICE_ANY=/\.(docx|xlsx|pptx|doc|xls|ppt|docm|xlsm|pptm|dotx|dotm|xltx|xltm|potx|potm|ppsx|ppsm|odt|ods|odp|rtf)$/i;
 const FX_MD=/\.(md|markdown|mdown|mkd|mdx)$/i,FX_JSON=/\.(json|jsonc|json5|geojson|webmanifest)$/i;
 const FX_CSV=/\.(csv|tsv)$/i,FX_LOG=/\.(log|out|err|trace|nohup)$/i;
 function filesIcons(){if(paths.fUpload)return;Object.assign(paths,{fUpload:'M12 20V9M7 14l5-5 5 5M5 4h14',fTrash:'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6',fHome:'M3 11l9-7 9 7M5 9.5V20h5v-6h4v6h5V9.5',fLink:'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',fSort:'M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4',fEye:'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6',fShare:'M12 3v13M7 8l5-5 5 5M5 14v6h14v-6',fFolderPlus:'M4 5h5l2 2.5h9a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM12 10.5v6M9 13.5h6',fSelect:'M4 6l2 2 4-4M4 16l2 2 4-4M13 7h7M13 17h7',fMinus:'M5 12h14',fFit:'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',fWrap:'M4 6h16M4 12h13a3 3 0 1 1 0 6h-3M4 18h6M16 15l-3 3 3 3'});}
@@ -135,6 +137,7 @@ function fxMeta(e){
 // A quiet colour cue per file family; the extension chip or page icon stays the same.
 function fxKindClass(name){const x=(name.split('.').pop()||'').toLowerCase();
  if(FX_IMG.test(name))return 'kind-image';if(FX_PDF.test(name))return 'kind-pdf';
+ if(FX_OFFICE_ANY.test(name))return 'kind-office';
  if(['zip','tar','gz','tgz','bz2','xz','7z','rar','zst','dmg','iso'].includes(x))return 'kind-archive';
  if(['mp3','wav','flac','m4a','ogg','mp4','mov','mkv','webm','avi'].includes(x))return 'kind-media';
  if(FX_JSON.test(name)||FX_CSV.test(name)||['xml','yaml','yml','toml','ini','conf','sql','db','sqlite'].includes(x))return 'kind-data';
@@ -338,10 +341,11 @@ function numbered(name){const m=name.match(/^(.+?)(\.[^.]{1,16})$/);return m&&m[
 function fxKindLabel(e){const n=e.name;
  if(fileIsDir(e))return '文件夹';
  if(FX_IMG.test(n))return '图片';if(FX_PDF.test(n))return 'PDF';
+ if(FX_OFFICE.test(n))return officeLabel(n);if(FX_OFFICE_ANY.test(n))return '旧版 Office';
  if(FX_MD.test(n))return 'Markdown';if(FX_JSON.test(n))return 'JSON';if(FX_CSV.test(n))return 'CSV 表格';
  if(FX_LOG.test(n))return '日志';if(fxKindClass(n)==='kind-code')return '代码 · '+(n.split('.').pop()||'').toUpperCase();
  return e.type==='other'?'特殊文件':'文本';}
-function fxPreviewKind(e){if(FX_IMG.test(e.name))return 'image';if(FX_PDF.test(e.name))return 'pdf';return 'text';}
+function fxPreviewKind(e){if(FX_IMG.test(e.name))return 'image';if(FX_PDF.test(e.name))return 'pdf';if(FX_OFFICE_ANY.test(e.name))return 'office';return 'text';}
 function fxPreviewKey(dev,path,e,kind,tail){return [dev,path,e.mtime||0,e.size||0,kind,tail?'tail':'head'].join('|');}
 function fxPreviewCache(key,r){FX.pcache.delete(key);FX.pcache.set(key,r);while(FX.pcache.size>FX_PCACHE)FX.pcache.delete(FX.pcache.keys().next().value);}
 function filesPreview(e,opts={}){
@@ -349,15 +353,17 @@ function filesPreview(e,opts={}){
  const path=filePath(e),kind=fxPreviewKind(e),size=e.size||0;
  if(!opts.sensitive&&FX_SECRET.test(path)){
   confirmAction('预览这个敏感文件？','「'+e.name+'」看起来是密钥、凭据或 .env 一类的文件。预览只放在 App 的私有缓存里，不会进手机的「下载」文件夹，但屏幕上的内容别人也看得到。确定要看再打开。','仍然预览',()=>filesPreview(e,{sensitive:true,large:opts.large}));return;}
- if((kind==='image'||kind==='pdf')&&size>FX_MEDIA_MAX&&!opts.large){
+ if((kind==='image'||kind==='pdf'||(kind==='office'&&FX_OFFICE.test(e.name)))&&size>FX_MEDIA_MAX&&!opts.large){
   confirmAction('预览 '+fileSize(size)+' 的文件？','「'+e.name+'」不小，预览要先把整份读到手机的 App 缓存里（不会放进「下载」）。用流量的话会花一些。','仍然预览',()=>filesPreview(e,{sensitive:opts.sensitive,large:true}));return;}
  const tail=kind==='text'&&FX_LOG.test(e.name);
- const key=fxPreviewKey(v.device,path,e,kind,tail),hit=FX.pcache.get(key);
+ if(FX.pv&&FX.pv.kind==='office'&&typeof officeClose==='function')officeClose(FX.pv);
+ const cacheable=kind!=='office',key=cacheable?fxPreviewKey(v.device,path,e,kind,tail):'',hit=cacheable?FX.pcache.get(key):null;
  if(FX.pv)fxStopTail();
  FX.pv={entry:e,path,name:e.name,size,mtime:e.mtime||0,kind,tail,wrap:false,mode:'',q:'',hits:[],hit:-1,
   page:0,pageData:null,pages:0,zoom:1,zx:0,zy:0,cached:!!hit,fromCache:!!hit,loading:!hit,error:'',r:null,
   token:'pv'+uuid(),allowLarge:!!opts.large,prepared:false,keepScroll:undefined,keepBottom:false,slide:opts.slide||0};
  filesHintSeen();
+ if(kind==='office'){renderFiles();officeOpen(FX.pv);return;}
  if(hit){
   const p=FX.pv;p.r=hit;p.loading=false;p.cached=true;p.prepared=false;fxPrepare(hit);
   renderFiles();paintPreview();
@@ -367,7 +373,8 @@ function filesPreview(e,opts={}){
  renderFiles();fxFetchPreview();
 }
 function fxClosePreview(){fxStopTail();const p=FX.pv;if(!p)return;
- if(p.loading){const token=p.token;rpc('sftpPreviewCancel',{token}).catch(()=>{});}
+ if(p.kind==='office'&&typeof officeClose==='function')officeClose(p);
+ else if(p.loading){const token=p.token;rpc('sftpPreviewCancel',{token}).catch(()=>{});}
  FX.pv=null;}
 async function fxFetchPreview(quiet){
  const p=FX.pv;if(!p)return;const v=FX.view;if(!v)return;
@@ -456,12 +463,14 @@ function renderPreviewView(){
  input.oninput=()=>{clearTimeout(fxFindTimer);fxFindTimer=setTimeout(fxRunSearch,120);};
  input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();fxFindGo(e.shiftKey?-1:1);}else if(e.key==='Escape')fxFindClose();};
  const body=el('div','fx-body');body.id='fx-body';root.append(body);
- if(p.kind!=='image')fxBindSwipe(body);
+ if(p.kind!=='image'&&p.kind!=='office')fxBindSwipe(body);
  const foot=el('div','fx-foot');foot.id='fx-foot';root.append(foot);
  paintPreview();
 }
 let fxFindTimer=0;
 function fxSub(p){const parts=[fxKindLabel(p.entry)];if(p.size>0)parts.push(fileSize(p.size));if(p.mtime)parts.push(relative(p.mtime));
+ if(p.kind==='office'&&p.of){if(p.of.kind==='xlsx'&&p.of.sheets?.length)parts.push(p.of.sheets.length+' 个工作表');
+  if(p.of.kind==='pptx'&&p.of.slides)parts.push(p.of.slides+' 张幻灯片');}
  if(p.encoding)parts.push(p.encoding);if(p.cached)parts.push('已缓存');return parts.join(' · ');}
 
 function paintPreview(){
@@ -471,7 +480,8 @@ function paintPreview(){
  const body=document.getElementById('fx-body');if(!body)return;
  const scroll=body.scrollTop;
  body.replaceChildren();
- if(p.loading&&!p.r)body.append(fxReadBox());
+ if(p.kind==='office'&&typeof officePaint==='function')officePaint(body);
+ else if(p.loading&&!p.r)body.append(fxReadBox());
  else if(p.error&&!p.r)body.append(fxPreviewError());
  else if(p.kind==='image'&&p.r&&!p.binary&&p.r.url)fxImageBody(body);
  else if(p.kind==='pdf'&&p.r&&!p.binary&&(p.pageData||p.r.page))fxPdfBody(body);
@@ -483,6 +493,7 @@ function paintPreview(){
 }
 function paintPreviewTools(n){
  const p=FX.pv;if(!n)return;n.replaceChildren();
+ if(p.kind==='office'&&typeof officePaintTools==='function'){officePaintTools(n);return;}
  const chip=(label,fn,name,on,aria)=>{const b=btn(label,'pill fx-chip'+(on?' active':''),fn,name);if(aria)b.setAttribute('aria-label',aria);b.setAttribute('aria-pressed',on?'true':'false');return b;};
  if(p.kind==='text'&&p.r&&!p.binary){
   n.append(chip('查找',fxFindOpen,'search',false,'在文件里查找'));
@@ -709,6 +720,7 @@ function fxPdfGo(i){
  rpc('sftpPreviewPage',{key:p.r.key,page,width:fxPdfWidth()}).then(r=>{if(FX.pv!==p)return;cache.set(page,r);p.pageData=r;p.pages=r.pages||p.pages;paintPreview();}).catch(e=>{if(FX.pv!==p)return;toast(e.message||String(e));paintPreview();});}
 function paintPreviewFoot(){
  const n=document.getElementById('fx-foot');const p=FX.pv;if(!n||!p)return;n.replaceChildren();
+ if(p.kind==='office'&&typeof officePaintFoot==='function'){officePaintFoot(n);return;}
  const prev=document.getElementById('fx-find');if(prev&&p.mode!=='source'&&FX_MD.test(p.name)){/* find stays available */}
  if(p.kind==='pdf'&&p.pages){
   const bar=el('div','fx-pager');bar.append(btn('上一页','secondary small',()=>fxPdfGo(p.page-1),'back'));bar.lastChild.disabled=p.page<=0;

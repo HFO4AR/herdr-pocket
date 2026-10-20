@@ -24,10 +24,11 @@ class SecureProfilesTest : Instrumentation() {
             testWatchRules()
             testJumpVault()
             testResumeSet()
+            OfficeTests.pure(targetContext)
             SftpTests.pure()
             if (fixturePin.isNotEmpty()) { testSshPty(); testSilentReconnect(); testKeepAlive(); testKeyLogin(); testSeveralLinks(); testJumpChain(); testSftp() }
             val sftpLocal = sftpArgs?.let { testSftpLocal(it); "\nsftp-local: PASS" } ?: ""
-            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\nwatch-rules: PASS\njump-vault: PASS\nresume-set: PASS\nsftp-paths: PASS\n" + (if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS\nssh-jump: PASS\nsftp: PASS" else "ssh-pty: SKIPPED") + sftpLocal) })
+            finish(Activity.RESULT_OK, Bundle().apply { putString("stream", "vault-tests: PASS (2 tests)\nterminal-buffer: PASS\nimage-prep: PASS\nimage-prep-mediastore: $mediaStore\nconnect-errors: PASS\nshare-in: PASS\nssh-identity: PASS\nwatch-rules: PASS\njump-vault: PASS\nresume-set: PASS\noffice-parser: PASS\nsftp-paths: PASS\n" + (if (fixturePin.isNotEmpty()) "ssh-pty: PASS\nssh-reconnect: PASS\nssh-keep: PASS\nssh-key-login: PASS\nssh-jump: PASS\nsftp: PASS" else "ssh-pty: SKIPPED") + sftpLocal) })
         } catch (e: Throwable) {
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", "vault-tests: FAIL " + e.javaClass.simpleName + ": " + e.message) })
         }
