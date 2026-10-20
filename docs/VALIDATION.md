@@ -1,3 +1,15 @@
+# preview-87 integration: Office + CC Switch (2026-10-20)
+
+Integration branch `agent/preview87-integration-10201516` on `805cae1` (Phase 1 images/PDF + Phase 2 media). Merged `agent/preview3-10201303` (`97782db`) first, then `agent/ccswitch-10201303` (`71c2fc8`).
+
+- Office images now share Phase 1's derived registry: `Previews.putDerived` writes `AssetKind.OFFICE` files under `cacheDir/sftp-preview-derived/office/`, and `PreviewServer`'s `/preview/office/<40-hex>` route authorizes them through the same `derived` map (`assetFor(..., AssetKind.OFFICE)`); unregistered or active content still gets 404. `PreviewFiles` resolves preview sources, media and Office derived keys read-only.
+- PASS: `python3 -m unittest discover -s tests` — 546 tests, OK (535 bridge + 11 CC Switch).
+- PASS: `./gradlew testDebugUnitTest --offline` — 12 Office JVM parser tests.
+- PASS: browser suites `test_sftp_ui.cjs`, `test_sftp_media_ui.cjs`, `test_sftp_motion_ui.cjs`, `test_sftp_office_ui.cjs` and `test_ccswitch_ui.cjs`. One `test_sftp_ui.cjs` run failed only on the stale post-多选 selection-bar count and passed on retry; the other four passed first time.
+- PASS: `./gradlew assembleDebug assembleDebugAndroidTest lintDebug --offline` — debug APK, instrumentation APK, 0 lint errors (15 pre-existing warnings).
+- Test harness: the combined Phase 1–4 page crossed Chrome's data-URL canonical limit; `scripts/ui_bundle.cjs` now drops column-0 `//` comment lines (behaviour-neutral) before building the `page.goto` data URL, keeping the bundled test page under 2 MiB.
+- NOT VERIFIED: emulator/instrumentation and `scripts/smoke_ui.py` (not run), real WebView interception, real Office documents on a handset, and a phone-triggered CC Switch against a live config. The Phase notes below remain the per-phase evidence.
+
 # Preview Phase 1: images and PDF clarity (2026-10-20)
 
 Worktree `agent/preview1-10201236` on base `8146f19`. This phase adds the local preview asset channel and replaces inline `data:` image/PDF previews with cache-file URLs. No media or Office preview was added.
@@ -30,9 +42,17 @@ Validated source: `89eb603`.
 - **PASS: Office browser suite** (`CHROME_BIN=/opt/google/chrome/chrome node scripts/test_sftp_office_ui.cjs`): Word continuous blocks with sentinel chunk loading, table colspan, copied styles, asset image, inert `<script>`/event-attribute text, zoom; Excel sheet tabs, sticky headers, cell styles/fill, merged cell, virtual rows with a second row bucket, cell copy, zoom, 320 px; PowerPoint canvas, background/text/image/chart placeholder, next/previous/arrow navigation, counter, zoom; legacy `.doc` and encrypted `.docx` fallbacks; images use `https://pocket.invalid/preview/office/<40-hex>` (no `data:`), CSP allows only the preview origin, no page/CSP errors. The existing `scripts/test_sftp_ui.cjs` suite still passes.
 - **PASS: `./gradlew assembleDebug assembleDebugAndroidTest lintDebug --offline`** (JDK 17, Android SDK 35).
 - **Added but not run locally:** an on-device parser smoke in `OfficeTests.kt` (DOCX text/table, XLSX sheet/cell, PPTX slide text with Android's pull parser) emitting `office-parser: PASS` for `scripts/smoke_ui.py`, and deterministic `/home/pocket-fixture/office/{report.docx,budget.xlsx,deck.pptx}` fixtures generated with Python `zipfile` in `scripts/ci_ssh_fixture.sh`. No emulator was started for this phase.
-- **NOT VERIFIED:** a real Android WebView with the Phase 1 `PreviewServer` (not merged in this branch; `blockNetworkLoads=true` may block asset subresources until that gate is resolved), real Word/Excel/PowerPoint files from Microsoft Office/WPS, emulator/device rendering, and typography/layout fidelity. Office rendering is intentionally reading-level: complex columns/floating anchors, themes, charts, SmartArt and East-Asian font substitution may differ from the desktop application. No emulator was run concurrently with other agents.
+- **NOT VERIFIED:** a real Android WebView with the Phase 1 `PreviewServer` (the preview-87 integration branch wires Office images through it, but the `blockNetworkLoads=true` WebView gate is still device-only), real Word/Excel/PowerPoint files from Microsoft Office/WPS, emulator/device rendering, and typography/layout fidelity. Office rendering is intentionally reading-level: complex columns/floating anchors, themes, charts, SmartArt and East-Asian font substitution may differ from the desktop application. No emulator was run concurrently with other agents.
 
 ---
+
+# v0.6.0 CC Switch model switching (2026-10-20, preview-87)
+
+- Added read-only `ccswitch`/`providers` and guarded `ccswitchSwitch` bridge ops for Claude and Codex. Provider listing returns names, model slots and the current marker only; tokens, keys, base URLs, full settings config and arbitrary paths are never returned. Switching refuses official/no-config providers, backs up every replaced file 0600, merges common + provider config while preserving user fields, writes atomically 0600, updates `~/.cc-switch/settings.json` and `providers.is_current`, and never restarts a running Agent.
+- PASS: 11 new Python tests in `tests/test_ccswitch.py` (temporary HOME and fake SQLite DB): redaction, current detection (settings.json + DB), Claude/Codex merge rules, 0600 backups/atomic outputs, invalid app/ids, official/empty refusal, missing/corrupt DB, bad common config, hook/model-slot replacement, no-secret responses, limited TOML reader vs stdlib. No test opens the real `~/.cc-switch`, `~/.claude` or `~/.codex`.
+- PASS: `scripts/test_ccswitch_ui.cjs` (add to `npm test`): opens the sheet from the conversation menu, Claude/Codex tabs, current highlight, model slots, refresh, official rows disabled, confirmation stating new sessions only, Claude and Codex switch calls, friendly missing-CC-Switch state, dark 320 px and tablet layouts with no overflow, and no page errors. Fixture responses include token/base-URL fields that must not render.
+- Read-only check on this workstation: CC Switch 3.20.2's `ccswitch --help`, `provider list` and `provider current` printed nothing while the GUI was running, so no official CLI was used. A **copy** of the real DB/settings/configs in a temporary home listed 15 Claude/Codex providers (DeepSeek current for Claude, Codex `default` official), switched Claude and Codex on the copy, and verified token absence, status-line preservation, Codex user projects/tui/mcp preservation and 0600 outputs. The real files were not switched.
+- NOT VERIFIED: a real phone-triggered switch against the user's live config (deliberately avoided), physical handset, or the CC Switch GUI refreshing while locked. See SECURITY.md for the direct-config path and its limits.
 
 # v0.4.0 terminal and missing-history fixes (2026-10-15)
 

@@ -177,6 +177,36 @@ A `prompt` to a Claude Code / Codex agent whose input box is on screen (Herdr: `
 - Result: `tabs` (`[{tab, text, more}]` in the panel's own order; `text` is the rows between the tab row and the footer with the edge marks removed, scrolled rows merged; `more`: rows remain off screen, or Config's "↓ N more below"), `order`, `start`, `closed` (the panel is gone from the screen), `steps` (the keys pressed), `stopped` (why it stopped early, if it did), `sent`, `receipt`. As with every mutation the same id answers from its receipt and an unknown outcome (a key may have gone in) is never replayed.
 - The phone calls it only right after the person's own `/status` or `/usage` went out from the phone (typed or picked from the list, also from the queue), once, when the command card's first read finds the panel with Claude idle and no picker. It never calls it for /config, a command with arguments, a panel the person opened on the computer, or a card's later refresh. The card shows every tab as rows ("Key: value" with wrapped values joined, two-column settings, usage bars with their reset time, headings), the terminal text behind 「终端原文」, and one 「复制」 for all tabs. When the walk fails or stops with the panel still up, the card re-reads the screen and offers its keys as before. Codex /status is one screen: the card shows its rows (between the echoed `/status` and the composer) without pressing anything.
 
+## CC Switch: providers and model switching (protocol remains v1)
+
+The desktop CC Switch app (v3.20.2) stores providers in `~/.cc-switch/cc-switch.db` (SQLite: `providers`, `settings`) and the selected ids in `~/.cc-switch/settings.json`. That desktop build has no reliable CLI while its GUI runs (`--help`, `provider list` and `provider current` print nothing), so these ops use a guarded direct-config path in the bridge. No shell is involved; target paths are fixed under the SSH user's `$HOME`.
+
+- `ccswitch` (alias `providers`) — read-only, no fields. Opens the DB as `file:…?mode=ro` with a timeout and reads only `providers` and the two `common_config_*` settings rows. Returns:
+
+  ```json
+  {
+    "available": true,
+    "apps": ["claude", "codex"],
+    "current": {"claude": "<provider id or null>", "codex": "<provider id or null>"},
+    "providers": [{
+      "id": "<id>", "app_type": "claude|codex", "name": "<name>",
+      "is_current": true, "official": false, "switchable": true,
+      "models": [{"slot": "默认", "model": "<model>", "name": "<display name, optional>"}],
+      "model_provider": "<Codex model_provider, optional>",
+      "reason": "<why it cannot be switched, optional>"
+    }],
+    "note": "密钥只留在电脑上。"
+  }
+  ```
+
+  Claude model slots come only from `settings_config.env`: `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_FABLE_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`, plus the matching `*_MODEL_NAME`. Codex returns only `config`'s `model` and `model_provider`. **Tokens, API keys, base URLs, `settings_config` and arbitrary file paths are never returned.** Official rows (`claude-official`, `codex-official`, `default`) and providers with no writable config are listed with `switchable: false` and a human reason. A missing or unreadable CC Switch answers `{"available": false, "reason": "电脑上没有 CC Switch" | "CC Switch 的数据库读不出来（可能版本不兼容）", "providers": []}` rather than an error.
+
+- `ccswitchSwitch {app, provider}` — `app` must be `claude` or `codex`; `provider` must be an id present in the DB for that app (it is never a path or free-form config). Official/no-config providers are refused before anything is written. The bridge:
+  - **Claude**: merges `settings` → `common_config_claude` (env defaults, hooks, model, …) with the provider's `settings_config` and writes `~/.claude/settings.json`. The `env` object is replaced (another provider's token/model slots never survive); the current `statusLine` and user tables such as `modelSettings` are kept; hooks are unioned.
+  - **Codex**: merges `common_config_codex` (projects/trust) and the provider's `config` TOML over `~/.codex/config.toml`. User `projects`/trust, `tui`, `plugins`, `mcp_servers`, hooks and other tables are kept; provider-managed top-level keys (`model`, `model_provider`, `model_reasoning_effort`, `disable_response_storage`, `model_providers`) replace stale values. The provider's `auth` is written to `~/.codex/auth.json` when present (an `env_key` provider keeps the current auth file).
+  - Every replaced file is copied first to `<file>.ccswitch-backup-<YYYYmmdd_HHMMSS>` (0600, collision-suffixed). New files are written to a temp file in the same folder, `fsync`ed, atomically replaced and chmodded 0600. `~/.cc-switch/settings.json` gets `currentProviderClaude`/`currentProviderCodex`; `providers.is_current` is updated in one SQLite transaction (a locked GUI DB yields a warning, not a config rollback).
+  - Result: `{"switched": true, "app", "provider", "name", "new_sessions_only": true, "backup_count", "message", "warning"?}`. No secret or filesystem path is included. Only new sessions read the new config; a running Agent is never restarted or messaged. Model slots of the *current* provider can still be changed inside a running Claude session with `/model <slot>`.
+
 ## 文件: SFTP browsing and transfers (native, not bridge ops)
 
 These requests never reach the bridge; they run on an SFTP channel of the named computer's own SSH session (`device` is required by the page for each of them), with that SSH user's permissions. A channel that fails to open is "not sent" and retried once after a reconnect, like a bridge request; nothing else is retried.
@@ -189,7 +219,7 @@ These requests never reach the bridge; they run on an SFTP channel of the named 
 - `sftpPreview {device, path, kind: text|image|pdf, tail?, allowLarge?, width?, token?}` reads one regular file into the app's own cache and returns `{key, name, mime, size, mtime, cached, complete, path}` plus one of: text `{text, encoding, binary, shown, truncated, tail, offset}`; image `{url, width, height, origWidth, origHeight, derived?, note?}`; pdf `{page: {url, width, height, index, pages, note?}}`. Text is decoded natively (UTF-8, else GB18030) and capped at 5 MB from the start, or the last 512 KB with `tail`; a NUL-heavy file is reported `binary` and no bytes are sent. Images and PDFs above 20 MB need `allowLarge` (nothing above 300 MB). Progress is pushed as byte counts through the normal request progress channel. `token` lets `sftpPreviewCancel {token}` stop a read at its next block.
 - Image `url` is `https://pocket.invalid/preview/<40-hex-key>`; PDF page `url` is `https://pocket.invalid/preview/page/<40-hex-token>`. No image or PDF page is sent as `data:`. A complete JPEG/PNG/GIF/WebP/BMP/AVIF original up to ~36 MB and 14 MP is served as the cached source file itself (no re-encode; animated GIFs keep moving). Anything larger, or a format the WebView may not decode (e.g. HEIC), is decoded natively with full EXIF orientation (including flips/transpose), fitted to a 4096 px long edge and a 12 MP cap (3072 px / 6 MP on low-memory devices), and encoded as JPEG 92 (PNG when it has alpha) into a derived cache entry. An over-limit GIF falls back to its first frame and sets `note`.
 - PDF pages are rasterised one at a time under one native lock. `width` is clamped to 240–4096; the total page bitmap stays at or below 10 MP (6 MP on low-memory devices), JPEG quality 92. A page file is keyed by SHA-1(source key + page + rendered width + renderer version), so re-opening the same page/width reuses it. An out-of-memory render is retried once at half width. Derived pages are served as `image/jpeg` through the page URL.
-- `sftpPreviewPage {key, page, width?}` renders another page of a PDF already fetched; `sftpPreviewOpen {key, share?}` opens or shares a complete cached preview through the non-exported `PreviewFiles` provider by its key (never a URI from the page). Preview sources live in `cacheDir/sftp-preview/` (250 MB cap); image/page derivatives live separately in `cacheDir/sftp-preview-derived/` (120 MB cap). `cacheClear` removes both. Source entries are authorized by their in-memory preview metadata and derived pages by a separate registry. A page request never prunes the source PDF it is reading.
+- `sftpPreviewPage {key, page, width?}` renders another page of a PDF already fetched; `sftpPreviewOpen {key, share?}` opens or shares a complete cached preview through the non-exported `PreviewFiles` provider by its key (never a URI from the page). Preview sources live in `cacheDir/sftp-preview/` (250 MB cap); image, PDF-page and Office-image derivatives live separately in `cacheDir/sftp-preview-derived/` (120 MB cap). `cacheClear` removes both. Source entries are authorized by their in-memory preview metadata and derived pages by a separate registry. A page request never prunes the source PDF it is reading.
 
 ### Local preview asset channel (`https://pocket.invalid`)
 

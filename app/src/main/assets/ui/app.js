@@ -630,6 +630,7 @@ function chatMenu(){
  if(!S.chat.noTranscript){menuItem(box,'刷新对话',()=>{S.paused=false;fetchHistory(false,true);},'refresh');
   menuItem(box,S.paused?'恢复自动更新':'暂停自动更新',()=>{S.paused=!S.paused;toast(S.paused?'自动更新已暂停':'自动更新已恢复');},S.paused?'refresh':'pause');
   menuItem(box,'选择其他历史记录',pickHistory,'history');}
+ if(!S.demo)menuItem(box,'模型 · CC Switch',ccswitchOpen,'settings','Claude / Codex · 只影响新会话');
  if(S.chat.agent){menuItem(box,'终端按键',keyMenu,'terminal','↑ ↓ Enter Esc Ctrl+C'+(modeAgent(S.chat.agent)||modeShiftTab(S.chat.agent)?' Shift+Tab':''));menuItem(box,'查看终端',()=>{S.chatMode='terminal';S.epoch++;renderChat();fetchTerminal();},'terminal');if(typeof filesAgentItem==='function')filesAgentItem(box,S.chat.agent);}
  closeChatMenu(box);}
 function keyMenu(){const box=sheet('终端按键');box.append(el('p','fine','先看一眼终端：Enter 可能会批准当前操作。'));[['↑ 上','up'],['↓ 下','down'],['Enter 确认','enter'],['Esc 返回','esc'],['Ctrl+C 中断','ctrl+c']].forEach(([t,key])=>{const b=btn(t,'menu-item',()=>{closeSheet();sendKey(key,t);});box.append(b);});

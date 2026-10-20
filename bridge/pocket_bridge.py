@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Herdr Pocket protocol v1. One bounded JSON request over SSH stdin."""
+import copy
+import datetime
 import hashlib
 import json
 import os
@@ -11,6 +13,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import stat as stat_module
 from urllib.parse import quote as uri_quote
@@ -7445,6 +7448,719 @@ def server_brief():
     return {"pid": runs[-1]["pid"], "started": runs[-1]["started"], "clean": runs[-1]["clean"]}
 
 
+# ─── CC Switch: read providers, switch the config for new sessions ──────────
+# The desktop CC Switch 3.20.2 has no usable CLI while its GUI runs (`cc-switch --help`,
+# `provider list` and `provider current` print nothing), so the bridge performs the same
+# controlled edit itself: the provider ids come only from CC Switch's own SQLite DB, the target
+# paths are fixed under $HOME, no shell is involved, and only whitelisted model fields are ever
+# returned. API keys/tokens/base URLs/settings_config never leave this process.
+CCSWITCH_APPS = ("claude", "codex")
+CCSWITCH_OFFICIAL = {("claude", "claude-official"), ("codex", "codex-official"), ("codex", "default")}
+CCSWITCH_PROVIDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+CCSWITCH_CLAUDE_SLOTS = (
+    ("ANTHROPIC_MODEL", "默认"),
+    ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "Haiku"),
+    ("ANTHROPIC_DEFAULT_SONNET_MODEL", "Sonnet"),
+    ("ANTHROPIC_DEFAULT_OPUS_MODEL", "Opus"),
+    ("ANTHROPIC_DEFAULT_FABLE_MODEL", "Fable"),
+    ("CLAUDE_CODE_SUBAGENT_MODEL", "子 Agent"),
+)
+# Provider-generated Codex keys: a new provider replaces these; user tables such as tui, plugins,
+# mcp_servers, hooks and projects are kept.
+CCSWITCH_CODEX_MANAGED = ("model", "model_provider", "model_reasoning_effort", "disable_response_storage", "model_providers")
+
+
+class _TomlRaw(str):
+    """A TOML date/time token kept verbatim instead of being turned into a quoted string."""
+
+
+class _TomlError(ValueError):
+    pass
+
+
+class _TomlParser:
+    """A small TOML reader for Codex config files (tables, dotted/quoted keys, arrays, inline
+    tables, strings/numbers/bools/dates). Python 3.9/3.10 have no tomllib; this keeps Codex
+    switching working there. It deliberately supports only the TOML these configs use."""
+    def __init__(self, text):
+        self.s, self.i, self.n = text, 0, len(text)
+
+    def error(self, message):
+        raise _TomlError(message)
+
+    def peek(self):
+        return self.s[self.i] if self.i < self.n else ""
+
+    def skip(self, newlines=True):
+        while self.i < self.n:
+            c = self.s[self.i]
+            if c in " \t\r": self.i += 1
+            elif c == "\n" and newlines: self.i += 1
+            elif c == "#":
+                while self.i < self.n and self.s[self.i] not in "\r\n": self.i += 1
+            else: return
+
+    def parse(self):
+        table = root = {}
+        while True:
+            self.skip()
+            if self.i >= self.n: return root
+            if self.peek() == "[":
+                self.i += 1
+                array = self.peek() == "["
+                if array: self.i += 1
+                path = self.parse_key_path()
+                self.skip(False)
+                if self.peek() != "]": self.error("table header")
+                self.i += 1
+                if array:
+                    if self.peek() != "]": self.error("array table header")
+                    self.i += 1
+                table = self.make_table(root, path, array)
+            else:
+                path = self.parse_key_path()
+                self.skip(False)
+                if self.peek() != "=": self.error("expected =")
+                self.i += 1
+                self.assign(table, path, self.parse_value())
+            self.skip(False)
+            if self.peek() not in ("", "\r", "\n", "#"): self.error("trailing text")
+
+    def parse_key_path(self):
+        parts = []
+        while True:
+            self.skip(False)
+            c = self.peek()
+            if c == '"': parts.append(self.parse_string(multi=False))
+            elif c == "'": parts.append(self.parse_literal(multi=False))
+            else:
+                start = self.i
+                while self.i < self.n and self.s[self.i] not in " \t\r\n.=[]#,{}": self.i += 1
+                key = self.s[start:self.i]
+                if not key or not re.fullmatch(r"[A-Za-z0-9_-]+", key): self.error("key")
+                parts.append(key)
+            self.skip(False)
+            if self.peek() != ".": return parts
+            self.i += 1
+
+    def table_at(self, node, path):
+        for part in path:
+            if isinstance(node, list):
+                if not node: self.error("empty table")
+                node = node[-1]
+            if not isinstance(node, dict): self.error("not a table")
+            if part not in node: node[part] = {}
+            node = node[part]
+        if not isinstance(node, dict): self.error("not a table")
+        return node
+
+    def make_table(self, root, path, array):
+        parent = self.table_at(root, path[:-1])
+        last = path[-1]
+        if array:
+            value = parent.setdefault(last, [])
+            if not isinstance(value, list): self.error("not an array table")
+            item = {}
+            value.append(item)
+            return item
+        if last in parent:
+            value = parent[last]
+            if not isinstance(value, dict): self.error("not a table")
+            return value
+        parent[last] = {}
+        return parent[last]
+
+    def assign(self, table, path, value):
+        table = self.table_at(table, path[:-1])
+        if path[-1] in table: self.error("duplicate key")
+        table[path[-1]] = value
+
+    def parse_string(self, multi):
+        if multi:
+            if self.s[self.i:self.i + 3] != '"""': self.error("string")
+            self.i += 3
+            if self.peek() == "\n": self.i += 1
+            out = []
+            while self.i < self.n:
+                if self.s[self.i:self.i + 3] == '"""':
+                    self.i += 3
+                    return "".join(out)
+                out.append(self.parse_escape())
+            self.error("unterminated string")
+        self.i += 1
+        out = []
+        while self.i < self.n:
+            c = self.s[self.i]
+            if c == '"': self.i += 1; return "".join(out)
+            if c == "\n": self.error("newline in string")
+            out.append(self.parse_escape())
+        self.error("unterminated string")
+
+    def parse_literal(self, multi):
+        quote = "'''" if multi else "'"
+        if self.s[self.i:self.i + len(quote)] != quote: self.error("literal string")
+        self.i += len(quote)
+        if multi and self.peek() == "\n": self.i += 1
+        end = self.s.find(quote, self.i)
+        if end < 0: self.error("unterminated literal string")
+        value = self.s[self.i:end]
+        self.i = end + len(quote)
+        return value
+
+    def parse_escape(self):
+        c = self.peek()
+        if c != "\\":
+            self.i += 1
+            return c
+        self.i += 1
+        c = self.peek(); self.i += 1
+        basic = {"b": "\b", "t": "\t", "n": "\n", "f": "\f", "r": "\r", '"': '"', "\\": "\\"}
+        if c in basic: return basic[c]
+        if c in ("u", "U"):
+            size = 4 if c == "u" else 8
+            digits = self.s[self.i:self.i + size]
+            if len(digits) != size or not re.fullmatch(r"[0-9A-Fa-f]+", digits): self.error("escape")
+            self.i += size
+            try: return chr(int(digits, 16))
+            except ValueError: self.error("escape")
+        self.error("escape")
+
+    def parse_value(self):
+        self.skip(False)
+        c = self.peek()
+        if c == '"':
+            if self.s[self.i:self.i + 3] == '"""': return self.parse_string(True)
+            return self.parse_string(False)
+        if c == "'":
+            if self.s[self.i:self.i + 3] == "'''": return self.parse_literal(True)
+            return self.parse_literal(False)
+        if c == "[": return self.parse_array()
+        if c == "{": return self.parse_inline_table()
+        start = self.i
+        while self.i < self.n and self.s[self.i] not in " \t\r\n,]}#": self.i += 1
+        token = self.s[start:self.i]
+        if token == "true": return True
+        if token == "false": return False
+        if re.fullmatch(r"[+-]?(?:0|[1-9](?:_?[0-9])*)", token):
+            try: return int(token.replace("_", ""))
+            except ValueError: pass
+        if re.fullmatch(r"[+-]?(?:0[box][0-9A-Fa-f_]+)", token):
+            try: return int(token.replace("_", ""), 0)
+            except ValueError: pass
+        if re.fullmatch(r"[+-]?(?:[0-9](?:_?[0-9])*)(?:\.[0-9](?:_?[0-9])*)?(?:[eE][+-]?[0-9](?:_?[0-9])*)?", token):
+            try: return float(token.replace("_", ""))
+            except ValueError: pass
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[Tt ].*)?|[+-]?\d{2}:\d{2}:\d{2}(?:\.\d+)?", token):
+            return _TomlRaw(token)
+        self.error("value")
+
+    def parse_array(self):
+        self.i += 1
+        out = []
+        while True:
+            self.skip()
+            if self.i >= self.n: self.error("unterminated array")
+            if self.peek() == "]": self.i += 1; return out
+            out.append(self.parse_value())
+            self.skip()
+            if self.peek() == ",": self.i += 1; continue
+            if self.peek() == "]": self.i += 1; return out
+            self.error("array")
+
+    def parse_inline_table(self):
+        self.i += 1
+        out = {}
+        self.skip()
+        if self.peek() == "}": self.i += 1; return out
+        while True:
+            path = self.parse_key_path()
+            self.skip(False)
+            if self.peek() != "=": self.error("inline table")
+            self.i += 1
+            self.assign(out, path, self.parse_value())
+            self.skip()
+            if self.peek() == ",": self.i += 1; continue
+            if self.peek() == "}": self.i += 1; return out
+            self.error("inline table")
+
+
+def _toml_parse(text):
+    """Parse a Codex config. Prefer the stdlib reader when the host Python has it."""
+    try:
+        import tomllib
+        return tomllib.loads(text)
+    except ImportError:
+        return _TomlParser(text).parse()
+
+
+def _toml_key(key):
+    key = str(key)
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key, ensure_ascii=False)
+
+
+def _toml_value(value):
+    if isinstance(value, _TomlRaw): return str(value)
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat().replace("+00:00", "Z")
+    if isinstance(value, bool): return "true" if value else "false"
+    if isinstance(value, int): return str(value)
+    if isinstance(value, float):
+        if value != value: return "nan"
+        if value == float("inf"): return "inf"
+        if value == float("-inf"): return "-inf"
+        return repr(value)
+    if isinstance(value, str): return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, list): return "[" + ", ".join(_toml_value(x) for x in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(_toml_key(k) + " = " + _toml_value(v) for k, v in value.items()) + " }"
+    raise _TomlError("unsupported value")
+
+
+def _toml_dumps(data):
+    lines = []
+
+    def emit(table, path):
+        scalars, children = [], []
+        for key, value in table.items():
+            if value is None: continue
+            if isinstance(value, list) and value and all(isinstance(x, dict) for x in value):
+                children.append((key, value, True))
+            elif isinstance(value, dict):
+                children.append((key, value, False))
+            else:
+                scalars.append((key, value))
+        for key, value in scalars:
+            lines.append("%s = %s" % (_toml_key(key), _toml_value(value)))
+        for key, value, is_array in children:
+            child_path = path + (key,)
+            header = ".".join(_toml_key(x) for x in child_path)
+            if is_array:
+                for item in value:
+                    lines.extend(["", "[[%s]]" % header])
+                    emit(item, child_path)
+            else:
+                lines.extend(["", "[%s]" % header])
+                emit(value, child_path)
+
+    emit(data, ())
+    return "\n".join(lines).strip() + "\n" if lines else ""
+
+
+def _ccswitch_home(home=None):
+    return Path(home if home is not None else Path.home())
+
+
+def _ccswitch_db_path(home):
+    return home / ".cc-switch" / "cc-switch.db"
+
+
+def _ccswitch_settings_path(home):
+    return home / ".cc-switch" / "settings.json"
+
+
+def _ccswitch_read_settings(home, strict=False):
+    path = _ccswitch_settings_path(home)
+    if not path.is_file(): return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+        if len(raw) > 1_000_000: raise ValueError("too large")
+        data = json.loads(raw)
+        if not isinstance(data, dict): raise ValueError("not an object")
+        return data
+    except (OSError, ValueError):
+        if strict: raise BridgeError("CC Switch 的设置文件读不出来，没有切换")
+        return {}
+
+
+def _ccswitch_snapshot(home):
+    """Providers and the two common-config rows, read-only (file:…?mode=ro). Raises a friendly
+    BridgeError when CC Switch is missing or its DB cannot be read."""
+    path = _ccswitch_db_path(home)
+    if not path.is_file(): raise BridgeError("电脑上没有 CC Switch")
+    try:
+        conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=2.5)
+    except (sqlite3.Error, OSError, ValueError):
+        raise BridgeError("CC Switch 的数据库读不出来（可能版本不兼容）")
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        rows = conn.execute(
+            "SELECT id, app_type, name, is_current, category, settings_config FROM providers "
+            "WHERE app_type IN ('claude','codex') ORDER BY app_type, COALESCE(sort_index, 1000000), name"
+        ).fetchall()
+        common = {}
+        for key in ("common_config_claude", "common_config_codex"):
+            try:
+                found = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            except sqlite3.Error:
+                found = None
+            common[key] = found[0] if found else None
+        return rows, common
+    except sqlite3.Error:
+        raise BridgeError("CC Switch 的数据库读不出来（可能版本不兼容）")
+    finally:
+        conn.close()
+
+
+def _ccswitch_config(raw):
+    """A provider's settings_config as a dict; invalid JSON/too large reads as {}."""
+    if not isinstance(raw, str) or len(raw) > 1_000_000: return {}
+    try: data = json.loads(raw)
+    except (TypeError, ValueError): return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _ccswitch_official(app, provider, category):
+    return category == "official" or (app, provider) in CCSWITCH_OFFICIAL
+
+
+def _ccswitch_claude_models(config):
+    env = config.get("env")
+    if not isinstance(env, dict): return []
+    models = []
+    for key, slot in CCSWITCH_CLAUDE_SLOTS:
+        value = env.get(key)
+        if not isinstance(value, str) or not value.strip(): continue
+        item = {"slot": slot, "model": value.strip()[:160]}
+        name = env.get(key + "_NAME")
+        if isinstance(name, str) and name.strip(): item["name"] = name.strip()[:80]
+        models.append(item)
+    return models
+
+
+def _ccswitch_codex_config(config):
+    """The Codex `config` TOML as a dict; None when it is present but unreadable."""
+    raw = config.get("config")
+    if not isinstance(raw, str) or not raw.strip(): return {}
+    try: data = _toml_parse(raw)
+    except (ValueError, TypeError): return None
+    return data if isinstance(data, dict) else None
+
+
+def _ccswitch_codex_models(config):
+    data = _ccswitch_codex_config(config)
+    if not isinstance(data, dict): return [], {}
+    model = data.get("model")
+    models = [{"slot": "默认", "model": model.strip()[:160]}] if isinstance(model, str) and model.strip() else []
+    provider = data.get("model_provider")
+    return models, ({"model_provider": provider[:80]} if isinstance(provider, str) and provider.strip() else {})
+
+
+def _ccswitch_has_config(app, config):
+    if app == "claude":
+        env = config.get("env")
+        return isinstance(env, dict) and any(isinstance(v, str) and v.strip() for v in env.values())
+    data = _ccswitch_codex_config(config)
+    if not isinstance(data, dict): return False
+    auth = config.get("auth")
+    has_auth = isinstance(auth, dict) and bool(auth)
+    return has_auth or any(k in data for k in ("model", "model_provider"))
+
+
+def _ccswitch_off_reason(app, provider, official, switchable):
+    if official: return "官方登录：请在电脑的 CC Switch 里切换或重新登录"
+    if not switchable: return "没有可写入的配置：请先在电脑的 CC Switch 里配置"
+    return None
+
+
+def _ccswitch_currents(rows, settings):
+    current = {}
+    for app in CCSWITCH_APPS:
+        ids = {row[0] for row in rows if row[1] == app}
+        wanted = settings.get("currentProvider" + app.capitalize())
+        if isinstance(wanted, str) and wanted in ids:
+            current[app] = wanted
+        else:
+            chosen = next((row[0] for row in rows if row[1] == app and row[3]), None)
+            current[app] = chosen
+    return current
+
+
+def ccswitch_providers(home=None):
+    """Read-only: Claude/Codex providers with names, model slots and which one is current.
+    Only whitelisted model fields are returned; settings_config, tokens, keys, base URLs and file
+    paths never are. A missing/corrupt CC Switch answers {available: false, reason}."""
+    home = _ccswitch_home(home)
+    try: rows, _ = _ccswitch_snapshot(home)
+    except BridgeError as exc:
+        return {"available": False, "reason": str(exc), "apps": list(CCSWITCH_APPS),
+                "current": {app: None for app in CCSWITCH_APPS}, "providers": []}
+    settings = _ccswitch_read_settings(home)
+    current = _ccswitch_currents(rows, settings)
+    providers = []
+    for provider, app, name, _db_current, category, raw in rows:
+        if app not in CCSWITCH_APPS or not isinstance(provider, str): continue
+        config = _ccswitch_config(raw)
+        official = _ccswitch_official(app, provider, category)
+        switchable = not official and _ccswitch_has_config(app, config)
+        if app == "claude":
+            models, extra = _ccswitch_claude_models(config), {}
+        else:
+            models, extra = _ccswitch_codex_models(config)
+        item = {"id": provider[:128], "app_type": app,
+                "name": (name if isinstance(name, str) else provider)[:80],
+                "is_current": current.get(app) == provider,
+                "official": official, "switchable": switchable, "models": models}
+        item.update(extra)
+        reason = _ccswitch_off_reason(app, provider, official, switchable)
+        if reason: item["reason"] = reason
+        providers.append(item)
+    return {"available": True, "apps": list(CCSWITCH_APPS), "current": current,
+            "providers": providers, "note": "密钥只留在电脑上。"}
+
+
+def _ccswitch_deep_merge(base, incoming):
+    out = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for key, value in incoming.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _ccswitch_deep_merge(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def _ccswitch_hooks_merge(base, incoming):
+    """User hooks stay; CC Switch/common hooks are added once each."""
+    out = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for event, items in incoming.items():
+        if event not in out:
+            out[event] = copy.deepcopy(items)
+        elif isinstance(out[event], list) and isinstance(items, list):
+            seen = {json.dumps(x, sort_keys=True, ensure_ascii=False) for x in out[event]}
+            for item in items:
+                marker = json.dumps(item, sort_keys=True, ensure_ascii=False)
+                if marker not in seen:
+                    out[event].append(copy.deepcopy(item)); seen.add(marker)
+        elif isinstance(out[event], dict) and isinstance(items, dict):
+            out[event] = _ccswitch_deep_merge(out[event], items)
+        else:
+            out[event] = copy.deepcopy(items)
+    return out
+
+
+def _ccswitch_claude_merge(current, common, provider):
+    """common_config_claude then the provider's settings_config over the current file. The env is
+    replaced (never keeps another provider's token); the current statusLine and user tables
+    (modelSettings …) stay; hooks are unioned."""
+    out = copy.deepcopy(current) if isinstance(current, dict) else {}
+    env = {}
+    for source in (common.get("env"), provider.get("env")):
+        if not isinstance(source, dict): continue
+        for key, value in source.items():
+            if isinstance(key, str) and 0 < len(key) <= 200 and isinstance(value, str) and len(value) <= 32768:
+                env[key] = value
+    out["env"] = env
+    for source in (common, provider):
+        for key, value in source.items():
+            if key == "env": continue
+            if key == "hooks":
+                out["hooks"] = _ccswitch_hooks_merge(out.get("hooks"), value)
+            elif key == "statusLine":
+                if not out.get("statusLine"): out["statusLine"] = copy.deepcopy(value)
+            elif isinstance(value, dict) and isinstance(out.get(key), dict):
+                out[key] = _ccswitch_deep_merge(out[key], value)
+            else:
+                out[key] = copy.deepcopy(value)
+    return out
+
+
+def _ccswitch_codex_projects(current, incoming):
+    merged = copy.deepcopy(incoming) if isinstance(incoming, dict) else {}
+    if isinstance(current, dict):
+        for key, value in current.items(): merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _ccswitch_codex_merge(current, common, provider):
+    """User config (projects/trust, tui, plugins, mcp_servers …) stays. Common projects are added;
+    provider-managed top-level keys replace the previous provider's, so a stale model_provider
+    can never point at the old endpoint."""
+    out = copy.deepcopy(current) if isinstance(current, dict) else {}
+    for source in (common, provider):
+        for key, value in source.items():
+            if key == "projects" and isinstance(value, dict):
+                out["projects"] = _ccswitch_codex_projects(out.get("projects"), value)
+            elif key not in CCSWITCH_CODEX_MANAGED and isinstance(value, dict) and isinstance(out.get(key), dict):
+                out[key] = _ccswitch_deep_merge(out[key], value)
+            elif key not in CCSWITCH_CODEX_MANAGED:
+                out[key] = copy.deepcopy(value)
+    for key in CCSWITCH_CODEX_MANAGED: out.pop(key, None)
+    for key in CCSWITCH_CODEX_MANAGED:
+        if key in provider: out[key] = copy.deepcopy(provider[key])
+    return out
+
+
+def _ccswitch_atomic_write(path, data, mode=0o600):
+    """Temp file in the same folder, fsync, replace, chmod 0600: never a partial config."""
+    path = Path(path)
+    if isinstance(data, str): data = data.encode("utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as exc:
+        raise BridgeError("写不进 %s（文件夹权限或磁盘问题）" % path.name) from exc
+    fd = temp = None
+    try:
+        fd, temp = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=str(path.parent))
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as stream:
+            fd = None
+            stream.write(data); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temp, path); temp = None
+        os.chmod(path, mode)
+    except OSError as exc:
+        raise BridgeError("写不进 %s（文件权限或磁盘问题）" % path.name) from exc
+    finally:
+        if fd is not None:
+            try: os.close(fd)
+            except OSError: pass
+        if temp is not None:
+            try: os.unlink(temp)
+            except OSError: pass
+
+
+def _ccswitch_backup(path):
+    """Timestamped copy next to the file, 0600. Returns the backup path or None."""
+    path = Path(path)
+    if not path.is_file(): return None
+    try:
+        if path.stat().st_size > 8 * 1024 * 1024: raise BridgeError("备份不了 %s（文件太大）" % path.name)
+        data = path.read_bytes()
+    except OSError as exc:
+        raise BridgeError("备份不了 %s（文件读不出来）" % path.name) from exc
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    target = path.with_name(path.name + ".ccswitch-backup-" + stamp)
+    index = 1
+    while target.exists():
+        target = path.with_name(path.name + ".ccswitch-backup-" + stamp + "-" + str(index)); index += 1
+    _ccswitch_atomic_write(target, data, 0o600)
+    return target
+
+
+def _ccswitch_read_json_config(path, label):
+    path = Path(path)
+    if not path.is_file(): return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+        if len(raw) > 1_000_000: raise ValueError("too large")
+        data = json.loads(raw)
+        if not isinstance(data, dict): raise ValueError("not an object")
+        return data
+    except (OSError, ValueError):
+        raise BridgeError("%s 读不出来，没有切换" % label)
+
+
+def _ccswitch_read_toml_config(path, label):
+    path = Path(path)
+    if not path.is_file(): return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+        if len(raw) > 1_000_000: raise ValueError("too large")
+        data = _toml_parse(raw)
+        if not isinstance(data, dict): raise ValueError("not a table")
+        return data
+    except (OSError, ValueError):
+        raise BridgeError("%s 读不出来，没有切换" % label)
+
+
+def _ccswitch_set_db_current(home, app, provider):
+    """Transaction: exactly one is_current row for this app. Best effort after the config write;
+    a locked GUI DB returns False and the caller reports a friendly warning."""
+    try:
+        conn = sqlite3.connect(str(_ccswitch_db_path(home)), timeout=5.0)
+    except (sqlite3.Error, OSError):
+        return False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            "UPDATE providers SET is_current = CASE WHEN id = ? THEN 1 ELSE 0 END WHERE app_type = ?",
+            (provider, app))
+        if cursor.rowcount < 1: raise sqlite3.Error("provider row disappeared")
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        try: conn.rollback()
+        except sqlite3.Error: pass
+        return False
+    finally:
+        conn.close()
+
+
+def ccswitch_switch(request, home=None):
+    """Switch Claude/Codex to a provider that exists in CC Switch's own DB. Only a known
+    app/provider pair is accepted (never a path or a form), official/no-config providers are
+    refused, the old files are backed up 0600, and the new ones are written atomically 0600.
+    Running agents are never restarted: the next session reads the new config."""
+    app = request.get("app")
+    provider = request.get("provider")
+    if app not in CCSWITCH_APPS: raise BridgeError("只支持 Claude 和 Codex")
+    if not isinstance(provider, str) or not CCSWITCH_PROVIDER_ID.fullmatch(provider):
+        raise BridgeError("供应商无效，刷新后再选")
+    home = _ccswitch_home(home)
+    rows, common_rows = _ccswitch_snapshot(home)
+    row = next((item for item in rows if item[1] == app and item[0] == provider), None)
+    if row is None: raise BridgeError("找不到这个供应商（可能已在电脑上删除），刷新一下")
+    _provider, _app, name, _db_current, category, raw = row
+    name = (name if isinstance(name, str) else provider)[:80]
+    config = _ccswitch_config(raw)
+    official = _ccswitch_official(app, provider, category)
+    if official: raise BridgeError("「%s」是官方登录，不能从手机切换；请在电脑的 CC Switch 里切换或重新登录" % name)
+    if not _ccswitch_has_config(app, config):
+        raise BridgeError("「%s」没有可写入的配置；请先在电脑的 CC Switch 里配置它" % name)
+
+    backups = []
+    if app == "claude":
+        common_raw = common_rows.get("common_config_claude")
+        if common_raw is None:
+            common = {}
+        else:
+            try:
+                common = json.loads(common_raw)
+                if not isinstance(common, dict): raise ValueError("not an object")
+            except (TypeError, ValueError):
+                raise BridgeError("CC Switch 的 Claude 公共配置读不出来，没有切换")
+        current = _ccswitch_read_json_config(home / ".claude" / "settings.json", "Claude 的 settings.json")
+        merged = _ccswitch_claude_merge(current, common, config)
+        backups.append(_ccswitch_backup(home / ".claude" / "settings.json"))
+        _ccswitch_atomic_write(home / ".claude" / "settings.json",
+                               json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
+    else:
+        common_raw = common_rows.get("common_config_codex")
+        if common_raw is None:
+            common = {}
+        else:
+            try:
+                common = _toml_parse(common_raw)
+                if not isinstance(common, dict): raise ValueError("not a table")
+            except (TypeError, ValueError):
+                raise BridgeError("CC Switch 的 Codex 公共配置读不出来，没有切换")
+        provider_config = _ccswitch_codex_config(config)
+        if not isinstance(provider_config, dict):
+            raise BridgeError("「%s」的 Codex 配置读不出来；请先在电脑的 CC Switch 里检查它" % name)
+        current = _ccswitch_read_toml_config(home / ".codex" / "config.toml", "Codex 的 config.toml")
+        merged = _ccswitch_codex_merge(current, common, provider_config)
+        auth = config.get("auth")
+        auth = auth if isinstance(auth, dict) else {}
+        backups.append(_ccswitch_backup(home / ".codex" / "config.toml"))
+        backups.append(_ccswitch_backup(home / ".codex" / "auth.json"))
+        _ccswitch_atomic_write(home / ".codex" / "config.toml", _toml_dumps(merged))
+        # A provider without its own auth (an env_key endpoint) keeps the current auth file.
+        if auth:
+            _ccswitch_atomic_write(home / ".codex" / "auth.json",
+                                   json.dumps(auth, ensure_ascii=False, indent=2) + "\n")
+
+    settings = _ccswitch_read_settings(home, strict=True)
+    settings["currentProvider" + app.capitalize()] = provider
+    _ccswitch_atomic_write(_ccswitch_settings_path(home),
+                           json.dumps(settings, ensure_ascii=False, indent=2) + "\n")
+    db_updated = _ccswitch_set_db_current(home, app, provider)
+    label = "Claude" if app == "claude" else "Codex"
+    result = {"switched": True, "app": app, "provider": provider, "name": name,
+              "new_sessions_only": True, "backup_count": len([x for x in backups if x]),
+              "message": "已切换到「%s」。新打开的 %s 会话会用它；正在运行的 Agent 不受影响，密钥只留在电脑上。" % (name, label)}
+    if not db_updated:
+        result["warning"] = "配置文件已切换，但 CC Switch 的数据库正被占用；电脑上的 CC Switch 可能还显示旧供应商（刷新即可）"
+    return result
+
+
 def ssh_info():
     import getpass
     import socket
@@ -7490,6 +8206,12 @@ def handle(request, state_dir=None):
         running = active_agent_threads()
         page = [dict(x, running=x["thread"] in running) for x in catalog[offset:offset+100]]
         return {"records": [public_record(x) for x in page], "total": len(catalog), "next": offset+100 if len(catalog)>offset+100 else None}
+    if op in ("ccswitch", "providers"):
+        # Read-only: CC Switch's Claude/Codex providers and model slots (never tokens/keys).
+        return ccswitch_providers()
+    if op == "ccswitchSwitch":
+        # Validated app/provider only; fixed ~/.claude and ~/.codex paths; no shell.
+        return ccswitch_switch(request)
     if op == "native":
         return native_sessions()
     if op == "sessions":
