@@ -158,9 +158,12 @@ let saved;
  await page.evaluate(()=>closeSheet());
  // Already running elsewhere (the bridge says so; the list then finds it): 打开 instead.
  // (Status polls held, so only the refusal makes the app look again.)
- await page.evaluate(()=>{S.statusSupported=false;fx.createError='没继续：这段对话已经在运行了（在某个终端里开着）。打开那个就行，不用再开一个';
+ // The app must not know the agent before the create call: it appears only when the bridge
+ // answers "already running", exactly like a list refresh finding it afterwards.
+ await page.evaluate(()=>{S.statusSupported=false;fx.createError=()=>{
   fx.agents.push({pane_id:'w1:p20',terminal_id:'t20',identity:'id-w1:p20',agent:'codex',agent_status:'working',cwd:'/home/me/old',workspace_id:'w1',
-   history_ref:{status:'matched',source:'title',record_id:'rx9',thread:fx.R.x9.thread,record:fx.R.x9}});});
+   history_ref:{status:'matched',source:'title',record_id:'rx9',thread:fx.R.x9.thread,record:fx.R.x9}});
+  return '没继续：这段对话已经在运行了（在某个终端里开着）。打开那个就行，不用再开一个';};});
  await foot.getByRole('button',{name:'继续这个对话'}).click();
  await page.getByRole('dialog',{name:'继续这个对话'}).getByRole('button',{name:'继续这个对话',exact:true}).click();
  sheet=page.getByRole('dialog',{name:'这段对话已经开着'});await sheet.waitFor();
