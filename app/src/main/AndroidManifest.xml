@@ -17,6 +17,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- 文件 → 视频/音频: a native TextureView + MediaPlayer player over the app's own media cache.
+             Not exported: only MainActivity's sftpMediaPlay op starts it, with a 40-hex cache key. -->
+        <activity android:name=".PlayerActivity" android:exported="false" android:theme="@style/PlayerTheme"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
         <!-- 分享到 Herdr Pocket: a no-UI trampoline that hands text, pictures and files to MainActivity. -->
         <activity android:name=".ShareActivity" android:exported="true" android:theme="@android:style/Theme.NoDisplay"
             android:excludeFromRecents="true" android:noHistory="true">

@@ -14,9 +14,13 @@
 const FX={view:null,transfers:[],states:new Map(),want:0,sort:'name',hidden:false,prefs:false,
  pv:null,pcache:new Map(),meters:new Map(),hint:undefined,hintLoaded:'',nav:0,flew:new Set(),lastPoll:0};
 const FX_BIG=200e6;// downloads above this ask first (mobile data, phone storage)
-const FX_MEDIA_MAX=20_000_000;// mirrors Previews.MEDIA_MAX: images/PDFs above this ask before reading
+const FX_MEDIA_MAX=20_000_000;// mirrors MediaPreview.CONFIRM_MAX: media (and images/PDFs) above this ask first
+const FX_PLAY_MAX=1_000_000_000;// mirrors MediaPreview.HARD_MAX: one cached video/audio file
 const FX_MAX_LINES=4000,FX_SYNTAX_LINES=2500,FX_SEARCH_LINES=20000,FX_PCACHE=12;
 const FX_IMG=/\.(png|jpe?g|gif|webp|bmp|avif|heic|heif)$/i,FX_PDF=/\.pdf$/i;
+// Videos/audio are cached whole and played by the native PlayerActivity; the WebView never gets a media element.
+const FX_AUDIO=/\.(mp3|m4a|aac|wav|flac|ogg|oga|opus|wma|amr|mid|midi|aiff|aif|mka)$/i;
+const FX_MEDIA=/\.(mp4|m4v|mov|mkv|webm|avi|3gp|m2ts|mpg|mpeg|flv|wmv|mp3|m4a|aac|wav|flac|ogg|oga|opus|wma|amr|mid|midi|aiff|aif|mka)$/i;
 const FX_MD=/\.(md|markdown|mdown|mkd|mdx)$/i,FX_JSON=/\.(json|jsonc|json5|geojson|webmanifest)$/i;
 const FX_CSV=/\.(csv|tsv)$/i,FX_LOG=/\.(log|out|err|trace|nohup)$/i;
 function filesIcons(){if(paths.fUpload)return;Object.assign(paths,{fUpload:'M12 20V9M7 14l5-5 5 5M5 4h14',fTrash:'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6',fHome:'M3 11l9-7 9 7M5 9.5V20h5v-6h4v6h5V9.5',fLink:'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',fSort:'M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4',fEye:'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6',fShare:'M12 3v13M7 8l5-5 5 5M5 14v6h14v-6',fFolderPlus:'M4 5h5l2 2.5h9a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM12 10.5v6M9 13.5h6',fSelect:'M4 6l2 2 4-4M4 16l2 2 4-4M13 7h7M13 17h7',fMinus:'M5 12h14',fFit:'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',fWrap:'M4 6h16M4 12h13a3 3 0 1 1 0 6h-3M4 18h6M16 15l-3 3 3 3'});}
@@ -136,7 +140,7 @@ function fxMeta(e){
 function fxKindClass(name){const x=(name.split('.').pop()||'').toLowerCase();
  if(FX_IMG.test(name))return 'kind-image';if(FX_PDF.test(name))return 'kind-pdf';
  if(['zip','tar','gz','tgz','bz2','xz','7z','rar','zst','dmg','iso'].includes(x))return 'kind-archive';
- if(['mp3','wav','flac','m4a','ogg','mp4','mov','mkv','webm','avi'].includes(x))return 'kind-media';
+ if(FX_MEDIA.test(name))return 'kind-media';
  if(FX_JSON.test(name)||FX_CSV.test(name)||['xml','yaml','yml','toml','ini','conf','sql','db','sqlite'].includes(x))return 'kind-data';
  if(['js','jsx','ts','tsx','mjs','cjs','c','h','cc','cpp','hpp','cs','java','kt','kts','go','rs','py','rb','php','swift','sh','bash','zsh','fish','lua','pl','scss','css','html','vue','svelte'].includes(x))return 'kind-code';
  if(['md','markdown','mdown','mkd','txt','rst','org'].includes(x))return 'kind-doc';return '';}
@@ -338,10 +342,11 @@ function numbered(name){const m=name.match(/^(.+?)(\.[^.]{1,16})$/);return m&&m[
 function fxKindLabel(e){const n=e.name;
  if(fileIsDir(e))return '文件夹';
  if(FX_IMG.test(n))return '图片';if(FX_PDF.test(n))return 'PDF';
+ if(FX_MEDIA.test(n))return FX_AUDIO.test(n)?'音频':'视频';
  if(FX_MD.test(n))return 'Markdown';if(FX_JSON.test(n))return 'JSON';if(FX_CSV.test(n))return 'CSV 表格';
  if(FX_LOG.test(n))return '日志';if(fxKindClass(n)==='kind-code')return '代码 · '+(n.split('.').pop()||'').toUpperCase();
  return e.type==='other'?'特殊文件':'文本';}
-function fxPreviewKind(e){if(FX_IMG.test(e.name))return 'image';if(FX_PDF.test(e.name))return 'pdf';return 'text';}
+function fxPreviewKind(e){if(FX_IMG.test(e.name))return 'image';if(FX_PDF.test(e.name))return 'pdf';if(FX_MEDIA.test(e.name))return 'media';return 'text';}
 function fxPreviewKey(dev,path,e,kind,tail){return [dev,path,e.mtime||0,e.size||0,kind,tail?'tail':'head'].join('|');}
 function fxPreviewCache(key,r){FX.pcache.delete(key);FX.pcache.set(key,r);while(FX.pcache.size>FX_PCACHE)FX.pcache.delete(FX.pcache.keys().next().value);}
 function filesPreview(e,opts={}){
@@ -349,6 +354,9 @@ function filesPreview(e,opts={}){
  const path=filePath(e),kind=fxPreviewKind(e),size=e.size||0;
  if(!opts.sensitive&&FX_SECRET.test(path)){
   confirmAction('预览这个敏感文件？','「'+e.name+'」看起来是密钥、凭据或 .env 一类的文件。预览只放在 App 的私有缓存里，不会进手机的「下载」文件夹，但屏幕上的内容别人也看得到。确定要看再打开。','仍然预览',()=>filesPreview(e,{sensitive:true,large:opts.large}));return;}
+ if(kind==='media'&&size>FX_PLAY_MAX){toast('这个文件超过 1 GB，App 内播放不了；可以下载后用其他应用打开');return;}
+ if(kind==='media'&&size>FX_MEDIA_MAX&&!opts.large){
+  confirmAction('缓存 '+fileSize(size)+' 后播放？','「'+e.name+'」不小，要先把整份缓存到手机的 App 私有空间，再用 App 内的播放器播放（不会放进「下载」，也不边下边播）。用流量的话会花一些。','缓存并播放',()=>filesPreview(e,{sensitive:opts.sensitive,large:true}));return;}
  if((kind==='image'||kind==='pdf')&&size>FX_MEDIA_MAX&&!opts.large){
   confirmAction('预览 '+fileSize(size)+' 的文件？','「'+e.name+'」不小，预览要先把整份读到手机的 App 缓存里（不会放进「下载」）。用流量的话会花一些。','仍然预览',()=>filesPreview(e,{sensitive:opts.sensitive,large:true}));return;}
  const tail=kind==='text'&&FX_LOG.test(e.name);
@@ -367,7 +375,7 @@ function filesPreview(e,opts={}){
  renderFiles();fxFetchPreview();
 }
 function fxClosePreview(){fxStopTail();const p=FX.pv;if(!p)return;
- if(p.loading){const token=p.token;rpc('sftpPreviewCancel',{token}).catch(()=>{});}
+ if(p.loading){const token=p.token;rpc(p.kind==='media'?'sftpMediaCancel':'sftpPreviewCancel',{token}).catch(()=>{});}
  FX.pv=null;}
 async function fxFetchPreview(quiet){
  const p=FX.pv;if(!p)return;const v=FX.view;if(!v)return;
@@ -376,7 +384,10 @@ async function fxFetchPreview(quiet){
  if(!quiet){p.loading=true;p.error='';p.got=0;paintPreview();}
  else{p.keepScroll=body?body.scrollTop:0;p.keepBottom=!!stick;}
  try{
-  const r=await rpc('sftpPreview',{device:v.device,path:p.path,kind:p.kind,tail:!!(p.tail&&p.kind==='text'),allowLarge:!!p.allowLarge,width:fxPdfWidth(),token:p.token},n=>{
+  const media=p.kind==='media';
+  const r=await rpc(media?'sftpMediaOpen':'sftpPreview',media
+   ?{device:v.device,path:p.path,allowLarge:!!p.allowLarge,token:p.token}
+   :{device:v.device,path:p.path,kind:p.kind,tail:!!(p.tail&&p.kind==='text'),allowLarge:!!p.allowLarge,width:fxPdfWidth(),token:p.token},n=>{
    if(FX.pv!==p)return;const got=Number(n);if(!(got>=0))return;p.got=got;fxPaintReadProgress();});
   if(FX.pv!==p)return;
   p.r=r;p.loading=false;p.quietBusy=false;p.cached=!!r.cached;p.key=r.key;p.size=r.size||p.size;p.mtime=r.mtime||p.mtime;
@@ -387,6 +398,11 @@ async function fxFetchPreview(quiet){
  }catch(err){
   if(FX.pv!==p)return;p.quietBusy=false;p.loading=false;if(quiet){if(err.code!=='preview_cancelled')toast('最新内容没读到：'+(err.message||err));return;}
   p.error=err.message||String(err);
+  if(err.code==='media_large'&&err.info?.hard){paintPreview();return;}
+  if(err.code==='media_large'){
+   paintPreview();
+   confirmAction('缓存 '+fileSize(p.size)+' 后播放？','「'+p.name+'」不小，要先把整份缓存到手机的 App 私有空间，再用 App 内的播放器播放（不会放进「下载」，也不边下边播）。用流量的话会花一些。','缓存并播放',()=>{p.allowLarge=true;p.error='';fxFetchPreview();});
+   return;}
   if(err.code==='preview_large'){
    paintPreview();
    confirmAction('预览 '+fileSize(p.size)+' 的文件？','「'+p.name+'」不小，预览要先把整份读到手机的 App 缓存里（不会放进「下载」）。用流量的话会花一些。','仍然预览',()=>{p.allowLarge=true;p.error='';fxFetchPreview();});
@@ -408,6 +424,7 @@ function fxPrepare(r){
  p.rawText=typeof r.text==='string'?r.text:'';
  p.encoding=r.encoding||'';p.binary=!!r.binary;p.truncated=!!r.truncated;p.tailResult=!!r.tail;
  p.pages=r.page?.pages||p.pages||0;p.page=r.page?.index??p.page??0;p.pageData=r.page||p.pageData||null;
+ p.media=r.media||p.media||null;p.poster=typeof r.poster==='string'?r.poster:(p.poster||'');
  p.prettyText='';p.tableData=null;p.totalLines=0;p.lines=[];
  if(r.page){p.pages=r.page.pages||p.pages;p.page=r.page.index||0;p.pageData=r.page;(p.pagesCache||(p.pagesCache=new Map())).set(p.page,r.page);}
  if(!p.prepared){
@@ -462,18 +479,22 @@ function renderPreviewView(){
 }
 let fxFindTimer=0;
 function fxSub(p){const parts=[fxKindLabel(p.entry)];if(p.size>0)parts.push(fileSize(p.size));if(p.mtime)parts.push(relative(p.mtime));
+ if(p.media?.durationMs>0)parts.push(fxDuration(p.media.durationMs));
+ if(p.media?.width>0&&p.media?.height>0)parts.push(p.media.width+'×'+p.media.height);
  if(p.encoding)parts.push(p.encoding);if(p.cached)parts.push('已缓存');return parts.join(' · ');}
 
 function paintPreview(){
  const p=FX.pv;if(!p)return;
  const tools=document.getElementById('fx-tools');if(!tools){if(document.getElementById('files-list'))renderPreviewView();return;}
  paintPreviewTools(tools);
+ const sub=document.querySelector('.fx-sub');if(sub)sub.textContent=fxSub(p);
  const body=document.getElementById('fx-body');if(!body)return;
  const scroll=body.scrollTop;
  body.replaceChildren();
  if(p.loading&&!p.r)body.append(fxReadBox());
  else if(p.error&&!p.r)body.append(fxPreviewError());
  else if(p.kind==='image'&&p.r&&!p.binary&&p.r.url)fxImageBody(body);
+ else if(p.kind==='media'&&p.r&&!p.binary)fxMediaBody(body);
  else if(p.kind==='pdf'&&p.r&&!p.binary&&(p.pageData||p.r.page))fxPdfBody(body);
  else if(p.kind==='text'&&p.r&&!p.binary)fxTextBody(body);
  else fxFallbackBody(body);
@@ -497,6 +518,7 @@ function paintPreviewTools(n){
   n.append(chip('+',()=>fxZoomBy(1.25),'plus',false,'放大'));
   n.append(chip('适应',()=>fxZoomReset(),'fFit',false,'适应屏幕'));
  }
+ if(p.kind==='media'&&p.media?.durationMs>0)n.append(el('span','pill fx-chip-static',fxDuration(p.media.durationMs)));
  n.append(chip('下载',()=>fileDownload(p.entry,false),'download',false,'下载到手机'));
  if(p.cached)n.append(el('span','pill fx-cache-chip',p.fromCache?'已缓存':'系统缓存'));
  if(p.mtime)n.append(el('span','pill fx-chip-static',relative(p.mtime)));
@@ -507,11 +529,11 @@ function paintPreviewTools(n){
 }
 function fxReadBox(){
  const p=FX.pv,box=el('div','fx-read');box.id='fx-read';box.setAttribute('role','status');
- const row=el('div','fx-read-row');row.append(el('span','spinner'),el('span','grow','正在从电脑上读取…'));
+ const row=el('div','fx-read-row');row.append(el('span','spinner'),el('span','grow',p.kind==='media'?'正在缓存到手机…':'正在从电脑上读取…'));
  const got=el('span','fx-read-bytes',p.size>0?fileSize(p.got||0)+' / '+fileSize(p.size):'');got.dataset.got='1';row.append(got);box.append(row);
  const bar=el('span','files-progress fx-read-bar');bar.setAttribute('role','progressbar');bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax',String(p.size||0));bar.setAttribute('aria-valuenow',String(p.got||0));bar.setAttribute('aria-label','读取进度');
  const fill=el('span','');fill.style.width=(p.size>0?Math.min(100,(p.got||0)*100/p.size):0)+'%';bar.append(fill);box.append(bar);
- if(p.cached)box.append(el('p','fine','这是缓存里的副本，马上就能看。'));
+ if(p.cached)box.append(el('p','fine',p.kind==='media'?'缓存里已有完整副本，马上就能播放。':'这是缓存里的副本，马上就能看。'));
  return box;}
 function fxPaintReadProgress(){
  const p=FX.pv;if(!p)return;const box=document.getElementById('fx-read');if(!box)return;
@@ -538,7 +560,7 @@ function fxFallbackBody(body){
  acts.append(btn('复制路径','secondary',()=>copyText(p.path),'copy'));
  if(!complete&&p.r?.key)acts.append(el('p','fine','只读了一部分；下载完整的文件后才能用其他应用打开或分享。'));
  box.append(acts);body.append(box);}
-function fxPreviewOpen(share){const p=FX.pv;if(!p?.r?.key){toast('先等文件读完');return;}rpc('sftpPreviewOpen',{key:p.r.key,share:!!share}).catch(error);}
+function fxPreviewOpen(share){const p=FX.pv;if(!p?.r?.key){toast('先等文件读完');return;}rpc(p.kind==='media'?'sftpMediaExternal':'sftpPreviewOpen',{key:p.r.key,share:!!share}).catch(error);}
 
 function fxTextBody(body){
  const p=FX.pv,wrap=el('div','fx-text');
@@ -695,6 +717,38 @@ function fxZoomApply(z,instant){const p=FX.pv;if(!p||!z)return;z.style.transform
 function fxZoomBy(f){const p=FX.pv;if(!p)return;p.zoom=Math.max(1,Math.min(5,p.zoom*f));if(p.zoom===1){p.zx=0;p.zy=0;}fxZoomApply(document.querySelector('#fx-body .fx-zoom'));}
 function fxZoomReset(){const p=FX.pv;if(!p)return;p.zoom=1;p.zx=0;p.zy=0;fxZoomApply(document.querySelector('#fx-body .fx-zoom'));}
 
+// ─── Video / audio: whole file cached, played by the native PlayerActivity ───
+// Nothing here creates a <video>/<audio> element or a media URL: native owns decoding, audio focus,
+// headphone unplug, screen-on and the cache pin while playing.
+function fxDuration(ms){const s=Math.max(0,Math.round(ms/1000)),h=Math.floor(s/3600),m=Math.floor((s%3600)/60),x=s%60;
+ return h?h+':'+String(m).padStart(2,'0')+':'+String(x).padStart(2,'0'):m+':'+String(x).padStart(2,'0');}
+function fxMediaBody(body){
+ const p=FX.pv,m=p.media||{};
+ const card=el('div','fx-media');card.id='fx-media';
+ const art=el('div','fx-media-art '+(m.kind==='audio'?'audio':'video'));
+ if(p.poster){const img=el('img');img.alt='';img.src=p.poster;art.append(img);}
+ else{const g=el('span','fx-media-glyph');g.append(icon(m.kind==='audio'?'music':'video'));art.append(g);}
+ const play=btn('','fx-media-play',fxMediaPlay,'play');play.setAttribute('aria-label','播放 '+p.name);play.disabled=!!p.playBusy;art.append(play);
+ card.append(art);
+ const info=el('div','fx-media-info');
+ info.append(el('h2','fx-media-title',m.title||p.name));
+ const sub=[m.artist,m.album].filter(Boolean).join(' · ');if(sub)info.append(el('p','fx-media-sub',sub));
+ const facts=[];if(m.durationMs>0)facts.push(fxDuration(m.durationMs));if(p.size>0)facts.push(fileSize(p.size));
+ if(m.width>0&&m.height>0)facts.push(m.width+'×'+m.height);facts.push(p.r?.cached?'已在手机缓存':'已缓存到手机');
+ info.append(el('p','fx-media-meta',facts.join(' · ')));
+ if(p.playError)info.append(el('p','fx-media-error',p.playError));
+ const acts=el('div','fx-media-acts');
+ acts.append(btn('用其他应用打开','secondary small',()=>fxPreviewOpen(false),'file'),btn('分享','secondary small',()=>fxPreviewOpen(true),'fShare'),btn('下载到手机','secondary small',()=>fileDownload(p.entry,false),'download'));
+ info.append(acts);card.append(info);body.append(card);
+ body.append(el('p','fx-notice','视频和音乐会先完整缓存到手机的 App 私有空间，再由 App 内的播放器播放；不会在网页里播放，也不会边下边播。'));
+}
+function fxMediaPlay(){
+ const p=FX.pv;if(!p?.r?.key||p.playBusy)return;
+ p.playBusy=true;p.playError='';paintPreview();
+ rpc('sftpMediaPlay',{key:p.r.key}).then(()=>{const q=FX.pv;if(q!==p)return;p.playBusy=false;paintPreview();})
+  .catch(e=>{if(FX.pv!==p)return;p.playBusy=false;p.playError=e.message||String(e);paintPreview();});
+}
+
 // ─── PDF: one page at a time, rendered natively (the WebView never parses a PDF) ───
 function fxPdfBody(body){
  const p=FX.pv,wrap=el('div','fx-pdf');wrap.id='fx-pdf';
@@ -716,6 +770,9 @@ function paintPreviewFoot(){
   const nx=btn('下一页','secondary small',()=>fxPdfGo(p.page+1),'chevron');nx.disabled=p.page>=p.pages-1;bar.append(nx);n.append(bar);
  }else if(p.kind==='image'){
   n.append(el('p','fine center','双指缩放 · 双击放大 · 单指拖动 · 左右滑动切换文件'));
+ }else if(p.kind==='media'){
+  const many=filesSorted(FX.view?.list?.entries||[]).filter(e=>!fileIsDir(e)).length>1;
+  n.append(el('p','fine center','真实进度缓存到手机 · App 内播放'+(many?' · 左右滑动切换文件':'')));
  }else if(p.kind==='text'&&p.r&&!p.binary){
   const files=filesSorted(FX.view?.list?.entries||[]).filter(e=>!fileIsDir(e));const at=files.findIndex(e=>e.name===p.name);
   if(files.length>1){const bar=el('div','fx-pager');const a=btn('上一个','secondary small',()=>fxStepFile(-1),'back');a.disabled=at<=0;bar.append(a,el('span','fx-page-n',(at+1)+' / '+files.length));const b=btn('下一个','secondary small',()=>fxStepFile(1),'chevron');b.disabled=at<0||at>=files.length-1;bar.append(b);n.append(bar);}

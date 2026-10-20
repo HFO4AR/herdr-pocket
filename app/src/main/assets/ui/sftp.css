@@ -202,6 +202,25 @@
 .fx-zoom{display:grid;place-items:center;transform-origin:center center;will-change:transform}
 .fx-zoom img{max-width:100%;max-height:calc(100dvh - 240px);object-fit:contain;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;border-radius:4px;box-shadow:0 4px 24px #0006}
 
+/* Video / audio: poster + play; decoding happens in the native PlayerActivity, never in the WebView. */
+.fx-media{max-width:640px;margin:14px auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-card);overflow:hidden}
+.fx-media-art{position:relative;display:grid;place-items:center;aspect-ratio:16/9;background:#111;color:#fff;overflow:hidden}
+.fx-media-art.audio{aspect-ratio:16/10;background:linear-gradient(160deg,#2b2722,#111)}
+.fx-media-art img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.fx-media-art::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,#0000 45%,#0009);pointer-events:none}
+.fx-media-glyph{display:grid;place-items:center;width:76px;height:76px;border-radius:50%;background:#ffffff1a;color:#fff}
+.fx-media-glyph svg{width:34px;height:34px}
+.fx-media-play{position:absolute;z-index:1;display:grid;place-items:center;width:64px;height:64px;border-radius:50%;background:#f57b4ae6;color:#fff;box-shadow:0 6px 24px #0006}
+.fx-media-play svg{width:28px;height:28px;margin-left:3px}
+.fx-media-play:disabled{opacity:.55}
+.fx-media-info{padding:14px var(--sp-4) 16px}
+.fx-media-title{margin:0 0 4px;font-size:var(--fs-lg);overflow-wrap:anywhere}
+.fx-media-sub{margin:0 0 6px;color:var(--muted);font-size:var(--fs-sm);overflow-wrap:anywhere}
+.fx-media-meta{margin:0;color:var(--muted);font-size:var(--fs-xs);font-variant-numeric:tabular-nums}
+.fx-media-error{margin:8px 0 0;color:var(--danger);font-size:var(--fs-sm);overflow-wrap:anywhere}
+.fx-media-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.fx-media-acts .small{min-height:36px}
+
 /* PDF (rendered natively, one page at a time) */
 .fx-pdf{display:flex;justify-content:center;padding:12px}
 .fx-pdf img{max-width:100%;height:auto;background:#fff;box-shadow:0 2px 14px var(--edge-shadow);border-radius:3px}

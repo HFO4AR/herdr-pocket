@@ -296,19 +296,27 @@ object Previews {
 /** Read-only access to one cached preview copy, only through a per-intent grant (not exported). */
 class PreviewFiles : ContentProvider() {
     override fun onCreate() = true
-    private fun fileFor(uri: Uri): File {
-        val key = uri.lastPathSegment ?: throw SecurityException("bad uri")
+    private fun keyOf(uri: Uri): String {
         if (uri.pathSegments.size != 1) throw SecurityException("bad uri")
-        return Previews.fileFor(context!!, key) ?: throw SecurityException("gone")
+        return uri.lastPathSegment ?: throw SecurityException("bad uri")
     }
+    private fun fileFor(context: Context, key: String): File? = Previews.fileFor(context, key) ?: MediaPreview.fileFor(context, key)
+    private fun fileFor(uri: Uri): File = fileFor(context!!, keyOf(uri)) ?: throw SecurityException("gone")
+    private fun displayName(context: Context, key: String): String =
+        if (Previews.fileFor(context, key) != null) Previews.nameOf(key) else MediaPreview.nameOf(context, key)
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         if (mode != "r") throw SecurityException("read only")
         return ParcelFileDescriptor.open(fileFor(uri), ParcelFileDescriptor.MODE_READ_ONLY)
     }
-    override fun getType(uri: Uri) = Previews.mimeOf(uri.lastPathSegment ?: "")
+    override fun getType(uri: Uri): String {
+        val key = keyOf(uri)
+        return if (Previews.fileFor(context!!, key) != null) Previews.mimeOf(key) else MediaPreview.mimeOf(context!!, key)
+    }
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, args: Array<out String>?, sort: String?): Cursor {
         val file = fileFor(uri)
-        return MatrixCursor(arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)).apply { addRow(arrayOf<Any>(Previews.nameOf(file.name), file.length())) }
+        return MatrixCursor(arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)).apply {
+            addRow(arrayOf<Any>(displayName(context!!, keyOf(uri)), file.length()))
+        }
     }
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
     override fun delete(uri: Uri, selection: String?, args: Array<out String>?) = 0
