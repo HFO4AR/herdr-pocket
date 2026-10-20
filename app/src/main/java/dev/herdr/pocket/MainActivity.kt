@@ -47,8 +47,8 @@ private const val SAVE_AS = 47
 private const val MAX_UPLOAD_PICK = 50
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/dirpick.css", "ui/create.css", "ui/slash.css", "ui/panel.css", "ui/rename.css", "ui/close.css", "ui/settings.css", "ui/keys.css", "ui/onboard.css", "ui/resume.css", "ui/hops.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/termkeys.css", "ui/glyphs.css", "ui/ansi.css", "ui/kids.css", "ui/bg.css", "ui/mode.css", "ui/foot.css", "ui/activity.css", "ui/tmux.css", "ui/hpanes.css", "ui/pickup.css", "ui/guard.css", "ui/sftp.css", "ui/layout.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/ansi.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/dirpick.js", "ui/create.js", "ui/slash.js", "ui/panel.js", "ui/rename.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/keys.js", "ui/hops.js", "ui/onboard.js", "ui/resume.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/bg.js", "ui/mode.js", "ui/foot.js", "ui/activity.js", "ui/termkeys.js", "ui/app.js", "ui/tmux.js", "ui/hpanes.js", "ui/pickup.js", "ui/guard.js", "ui/sftp.js", "ui/layout.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/dirpick.css", "ui/create.css", "ui/slash.css", "ui/panel.css", "ui/rename.css", "ui/close.css", "ui/settings.css", "ui/ccswitch.css", "ui/keys.css", "ui/onboard.css", "ui/resume.css", "ui/hops.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/termkeys.css", "ui/glyphs.css", "ui/ansi.css", "ui/kids.css", "ui/bg.css", "ui/mode.css", "ui/foot.css", "ui/activity.css", "ui/tmux.css", "ui/hpanes.css", "ui/pickup.css", "ui/guard.css", "ui/sftp.css", "ui/office.css", "ui/layout.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/ansi.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/dirpick.js", "ui/create.js", "ui/slash.js", "ui/panel.js", "ui/rename.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/ccswitch.js", "ui/keys.js", "ui/hops.js", "ui/onboard.js", "ui/resume.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/bg.js", "ui/mode.js", "ui/foot.js", "ui/activity.js", "ui/termkeys.js", "ui/app.js", "ui/tmux.js", "ui/hpanes.js", "ui/pickup.js", "ui/guard.js", "ui/sftp.js", "ui/office.js", "ui/layout.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -543,6 +543,18 @@ class MainActivity : Activity() {
                         "sftpPreview" -> success(id, try { Previews.fetch(this@MainActivity, dev(req), req) { n -> progress(id, n.toString()) } } catch (e: Exception) { throw RemoteFiles.friendly(e) })
                         "sftpPreviewPage" -> success(id, Previews.page(this@MainActivity, req))
                         "sftpPreviewCancel" -> { Previews.cancel(req.optString("token")); success(id, JSONObject()) }
+                        // Office reading view (office/OfficePreview): complete file into the private
+                        // cache, then bounded chunks. Responses are structured JSON, never XML.
+                        "sftpOfficeOpen" -> success(id, try {
+                            dev.herdr.pocket.office.OfficePreview.open(this@MainActivity, dev(req), req) { n -> progress(id, n.toString()) }
+                        } catch (e: Exception) { throw RemoteFiles.friendly(e) })
+                        "sftpOfficeChunk" -> success(id, dev.herdr.pocket.office.OfficePreview.chunk(
+                            req.optString("session"), req.optInt("from", 0), req.optInt("count", dev.herdr.pocket.office.OfficePreview.DOCX_CHUNK)))
+                        "sftpOfficeSheet" -> success(id, dev.herdr.pocket.office.OfficePreview.sheet(
+                            req.optString("session"), req.optInt("sheet", 0), req.optInt("start", 0), req.optInt("count", dev.herdr.pocket.office.OfficePreview.XLSX_CHUNK)))
+                        "sftpOfficeSlide" -> success(id, dev.herdr.pocket.office.OfficePreview.slide(req.optString("session"), req.optInt("index", 0)))
+                        "sftpOfficeClose" -> { dev.herdr.pocket.office.OfficePreview.close(req.optString("session")); success(id, JSONObject()) }
+                        "sftpOfficeCancel" -> { dev.herdr.pocket.office.OfficePreview.cancel(req.optString("token")); success(id, JSONObject()) }
                         "sftpPreviewOpen" -> {
                             val intent = Previews.intent(req.getString("key"), req.optBoolean("share"))
                             runOnUiThread { try { startActivity(intent); success(id, JSONObject()) } catch (e: ActivityNotFoundException) { failure(id, IllegalStateException("手机上没有能打开这种文件的应用")) } }
@@ -574,7 +586,7 @@ class MainActivity : Activity() {
                             success(id, JSONObject().put("devices", core.vault.list()))
                         }
                         "remote" -> {
-                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "fileView", "dirList", "bgOutput", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "panelTour", "hidden", "doctor", "glance", "hello", "tmux", "tmuxRead", "tmuxSend", "tmuxInfo", "tmuxNew", "tmuxKill", "herdrHealth", "herdrStart", "guardPlan", "guardSet")) { "不支持的操作" }
+                            check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "fileView", "dirList", "bgOutput", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "panelTour", "hidden", "doctor", "glance", "hello", "tmux", "tmuxRead", "tmuxSend", "tmuxInfo", "tmuxNew", "tmuxKill", "herdrHealth", "herdrStart", "guardPlan", "guardSet", "ccswitch", "providers", "ccswitchSwitch")) { "不支持的操作" }
                             // `device` picks the computer; it is not part of the bridge request.
                             val device = dev(req)
                             req.remove("device")
@@ -803,6 +815,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         if (core.shellWake === shellWake) core.shellWake = null
         destroyed = true
+        dev.herdr.pocket.office.OfficePreview.clear()
         core.linkListener = null
         // Swiped away from recents (back never finishes the activity): the connections stay while the
         // service keeps them (same time limit as in the background); otherwise they end here.
