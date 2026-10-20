@@ -16,8 +16,8 @@ function glanceAt(a){const g=glanceOf(a);const d=toDate(g?.at)||(g?.modified?toD
 function glanceItem(a){
  if(S.demo)return kidsGlance(a,{key:agentKey(a)});
  const ref=a.history_ref,rec=ref?.record;if(!ref||ref.status!=='matched'||ref.remote||rec?.remote)return null;
- const record_id=ref.record_id||rec?.id,thread=ref.thread||rec?.thread;if(!record_id||!thread||!['claude','codex'].includes(a.agent))return null;
- const g=GL.map.get(agentKey(a));const item={key:agentKey(a),provider:a.agent,thread,record_id,cwd:rec?.cwd||a.foreground_cwd||a.cwd||''};
+ const record_id=ref.record_id||rec?.id,thread=ref.thread||rec?.thread,provider=agentProvider(a);if(!record_id||!thread||!['claude','codex'].includes(provider))return null;
+ const g=GL.map.get(agentKey(a));const item={key:agentKey(a),provider,thread,record_id,cwd:rec?.cwd||a.foreground_cwd||a.cwd||''};
  if(g?.stamp)item.stamp=g.stamp;return kidsGlance(a,item);}
 // all=false (status poll): only agents that are busy, changed state or have nothing yet.
 async function glanceRefresh(all=false){

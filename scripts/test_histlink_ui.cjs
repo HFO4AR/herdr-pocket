@@ -21,9 +21,10 @@ await page.addInitScript(()=>{
   [R.moved.id]:[msg(5,'user','搬过来之前问的',900),msg(6,'assistant','搬过来的回答：已经处理。',890)],
   [R.local.id]:[msg(9,'user','本机问题',50),msg(10,'assistant','本机回答。',40)]};
  const matched=(r,source='native-process',extra={})=>({status:'matched',source,record_id:r.id,thread:r.thread,record:r,remote:ctx,...extra});
- const CH={pane_id:'w1:p2',terminal_id:'term-ch',agent:'claude',agent_status:'done',identity:'id-ch',cwd:'/home/u/proj',title:'远端的对话',
+ // Herdr 0.8.2 lists a ch pane as agent "ch" with the conversation's provider in display_agent.
+ const CH={pane_id:'w1:p2',terminal_id:'term-ch',agent:'ch',display_agent:'claude',agent_status:'done',identity:'id-ch',cwd:'/home/u/proj',title:'远端的对话',
   terminal_title_stripped:'proj: ch --host fx resume 5fce',history_ref:matched(R.live)};
- const CH2={pane_id:'w1:p3',terminal_id:'term-ch2',agent:'claude',agent_status:'done',identity:'id-ch2',cwd:'/home/u/other',title:'ch-cli',
+ const CH2={pane_id:'w1:p3',terminal_id:'term-ch2',agent:'ch',display_agent:'claude',agent_status:'done',identity:'id-ch2',cwd:'/home/u/other',title:'ch-cli',
   terminal_title_stripped:'other: ch --host fx resume 6abc',history_ref:{status:'remote_missing',remote:{...ctx,target:'w1:p3',identity:'id-ch2'},candidates:[],reason:'远端会话没有公开可核实的会话标识'}};
  window.fx={R,CH,CH2,matched,list:[CH,CH2],follow:null,history:'ok',calls:[],links:[],catalogs:[]};
  const device={id:'fx',name:'测试电脑',user:'u',host:'fixture.invalid',port:22,remember:true};
@@ -52,6 +53,7 @@ const shot=name=>page.screenshot({path:path.join(shots,'histlink-'+name+'.png')}
 // 1. The other computer drops off while the chat is open: the messages stay, a quiet note, no pause.
 await page.getByRole('button',{name:/远端的对话/}).click();
 await page.getByText('远端的回答：日志正常。').waitFor();
+assert.equal(await page.evaluate(()=>noTranscript(fx.CH)),false,'a ch pane uses its displayed Claude for history');
 await page.evaluate(()=>{fx.history='ch 正在重新连接远端电脑，稍后自动重试';});
 await poll();
 await page.getByText('暂时读不到，正在重试').waitFor();

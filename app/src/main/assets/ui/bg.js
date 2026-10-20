@@ -49,7 +49,7 @@ function bgForget(){BG.map.clear();BG.rec.clear();}
 // ─── Where a task's output is read: the agent's record (local or a ch route) ────────────────
 function bgRef(a){
  if(a){const ref=a.history_ref,rec=ref?.record;if(!ref||ref.status!=='matched')return null;
-  return {provider:a.agent==='codex'?'codex':'claude',thread:rec?.thread||ref.thread,record_id:rec?.id||ref.record_id,cwd:rec?.cwd||a.foreground_cwd||a.cwd||'',remote:rec?.remote||ref.remote||null};}
+  return {provider:agentProvider(a)==='codex'?'codex':'claude',thread:rec?.thread||ref.thread,record_id:rec?.id||ref.record_id,cwd:rec?.cwd||a.foreground_cwd||a.cwd||'',remote:rec?.remote||ref.remote||null};}
  const c=S.chat,rec=c?.record;if(!rec)return null;
  return {provider:rec.provider==='codex'?'codex':'claude',thread:rec.thread,record_id:rec.id,cwd:rec.cwd||'',remote:rec.remote||null};}
 function bgArgs(ref,task){const args={provider:ref.provider,thread:ref.thread,record_id:ref.record_id,task};if(ref.cwd)args.cwd=ref.cwd;if(ref.remote)args.remote=ref.remote;return args;}

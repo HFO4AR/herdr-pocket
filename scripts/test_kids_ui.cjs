@@ -154,7 +154,53 @@ for(const [w,h,dark] of [[320,640,false],[390,844,true],[320,640,true]]){
  await noInput(page);
  await page.context().close();}
 
+// 5. A parent blocked inside a foreground Agent call reads "working" in Herdr, and the bridge's
+// kids report says waiting: the phone treats it as held by its sub-agents, so a message goes to the
+// parent pane at once (Claude queues it) without Esc. A parent working on its own still queues.
+{const page=await fresh();
+ await page.getByRole('button',{name:'子 Agent 3 · 2 运行中，展开',exact:true}).waitFor();
+ await page.evaluate(()=>{
+  fx.agents=fx.agents.map((a,i)=>i===2?{...a,agent_status:'working'}:a);
+  fx.kids.r2.waiting=true;
+  const base=remote;
+  remote=async(op,args={})=>{if(op==='prompt'){fx.calls.push({op,args});return{sent:true,receipt:args.id};}return base(op,args);};
+ });
+ await page.evaluate(async()=>{S.statusBusy=false;await refreshStatus();await glanceRefresh();});
+ await page.waitForFunction(()=>agentState(S.agents[2])==='kids');
+ assert.equal(await page.evaluate(()=>stateLabel(S.agents[2])),'子 Agent 运行中 · 2');
+ assert.equal(await groupOf(page,'整理串口日志解析'),'执行中');
+ await rowOf(page,'整理串口日志解析').click();
+ await page.locator('#chat-meta .meta-state',{hasText:'子 Agent 运行中 · 2'}).waitFor();
+ assert.equal(await page.getByRole('button',{name:'发送消息',exact:true}).getAttribute('title'),'发送','not a queue button');
+ await page.getByRole('textbox',{name:'消息输入框',exact:true}).fill('等子 Agent 时直接发');
+ await page.getByRole('button',{name:'发送消息',exact:true}).click();
+ const sent=await page.evaluate(async()=>{for(let i=0;i<80&&!fx.calls.some(c=>c.op==='prompt');i++)await new Promise(r=>setTimeout(r,50));return fx.calls.filter(c=>c.op==='prompt');});
+ assert.equal(sent.length,1,'sent once');
+ assert.equal(sent[0].args.target,'w3:p3','the parent pane');
+ assert.equal(sent[0].args.identity,'id2','the parent agent');
+ assert.equal(sent[0].args.text,'等子 Agent 时直接发');
+ assert.equal(await page.locator('.message.queued').count(),0,'not queued');
+ assert.equal((await calls(page,'key')).length,0,'no Esc');
+ // Nothing says waiting any more: a working parent queues the next message as before.
+ await page.evaluate(async()=>{fx.kids.r2.waiting=false;await glanceRefresh();});
+ await page.waitForFunction(()=>agentState(S.chat.agent)==='working');
+ await page.getByRole('textbox',{name:'消息输入框',exact:true}).fill('它自己也在干活');
+ await page.getByRole('button',{name:'发送消息',exact:true}).click();
+ await page.locator('.message.queued').filter({hasText:'它自己也在干活'}).getByText('排队中 · 等它停下再发',{exact:true}).waitFor();
+ assert.equal(await page.evaluate(()=>fx.calls.filter(c=>c.op==='prompt').length),1,'no prompt while it works');
+ // An automatic status refresh that repaints the list must keep the reading position and must
+ // not replay the entrance animation (that was the quick jump to the top / flicker).
+ await page.getByRole('button',{name:'返回列表',exact:true}).click();
+ await page.evaluate(()=>{document.querySelector('.main').scrollTop=500;});
+ const before=await page.evaluate(()=>document.querySelector('.main').scrollTop);
+ assert(before>0,'list scrolled');
+ await page.evaluate(async()=>{fx.agents=fx.agents.map((a,i)=>i===4?{...a,agent_status:a.agent_status==='idle'?'done':'idle'}:a);S.statusBusy=false;await refreshStatus();});
+ const after=await page.evaluate(()=>document.querySelector('.main').scrollTop);
+ assert(Math.abs(after-before)<2,'scroll kept on refresh: '+before+' → '+after);
+ assert.equal(await page.evaluate(()=>document.querySelector('.main').classList.contains('pane-enter')),false,'no entrance replay');
+ await page.context().close();}
+
 await browser.close();
 assert.deepEqual(errors,[]);
-console.log('PASS: sub-agents keep parents working, chip expands and opens read-only, chat sheet live, watcher state, tablet');
+console.log('PASS: sub-agents keep parents working, chip expands and opens read-only, chat sheet live, watcher state, tablet, waiting parent takes a message');
 })().catch(e=>{console.error(e);process.exit(1);});

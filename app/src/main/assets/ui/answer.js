@@ -210,7 +210,7 @@ function qaMenuModel(menu,a){
  // Claude's list scrolls: options outside the visible window come from the transcript (same numbering,
  // the text row right after them). The bridge checks each label once the cursor reaches it.
  let textRow=input?input.n:null;
- if(q&&a.agent==='claude'&&menu.kind==='question'){q.options.forEach((t,i)=>{if(!menu.options.some(o=>o.n===i+1))options.push({n:i+1,label:t.label,description:t.description,screen:t.label});});
+ if(q&&agentProvider(a)==='claude'&&menu.kind==='question'){q.options.forEach((t,i)=>{if(!menu.options.some(o=>o.n===i+1))options.push({n:i+1,label:t.label,description:t.description,screen:t.label});});
   options.sort((x,y)=>x.n-y.n);if(textRow===null&&!menu.options.some(o=>o.n===q.options.length+1&&!o.input))textRow=q.options.length+1;}
  // A picker: what the agent put up itself (Codex's rate-limit switch) or a /model the person opened;
  // the screen cannot tell them apart. One the phone's own command card opened says which command.

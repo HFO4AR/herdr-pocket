@@ -26,7 +26,7 @@ function footQueueText(a,key){
  const q=Q.get(key),head=q?.items[0];if(!head)return '';
  if(head.state==='unknown')return '结果未知';if(head.state==='sending'||head.state==='checking')return '发送中…';if(head.state==='interrupting')return '正在中断…';
  if(S.chat?.exited)return '不会再发';if(q.paused)return '已暂停';
- return a.agent_status==='blocked'?(qaPicker(a)?'选完再发':'确认完再发'):a.agent_status==='working'?'它停下就发':'马上发';}
+ const st=agentState(a);return st==='blocked'?(qaPicker(a)?'选完再发':'确认完再发'):st==='working'?'它停下就发':'马上发';}
 function footQueueShow(){const box=document.querySelector('#chat-scroll .queue');if(!box)return;S.stick=false;
  box.scrollIntoView({block:'nearest',behavior:tlCalm()?'auto':'smooth'});if(typeof updateJump==='function')updateJump();}
 
@@ -37,7 +37,8 @@ function footPaint(footer,a){
  let rail=footer.querySelector(':scope>#foot-rail');
  if(!rail){rail=el('div','foot-rail');rail.id='foot-rail';rail.setAttribute('role','group');rail.setAttribute('aria-label','对话状态');footer.prepend(rail);}
  modeBar(rail,a);const bar=rail.querySelector('#mode-bar');
- const key=draftKey(),st=a.agent_status,blocked=st==='blocked';
+ // Effective state (kids.js): a parent waiting on its sub-agents is not "执行中" itself.
+ const key=draftKey(),st=agentState(a),blocked=st==='blocked';
  const ask=live.querySelector('.qa-card,.confirm-panel'),mini=live.querySelector('.qa-mini');
  const slash=footer.querySelector('.slash-pop');
  // The slash list opening under a card means the person is writing: fold the card.

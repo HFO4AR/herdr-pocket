@@ -102,8 +102,11 @@ function kindSafe(p){return typeof p==='string'&&/^[a-z0-9][a-z0-9_-]{0,31}$/i.t
 function providerName(p){const k=kindSafe(p);return AGENT_KINDS[k]?.[0]||(k?k[0].toUpperCase()+k.slice(1):'Agent');}
 function kindInitials(p){const k=kindSafe(p);return AGENT_KINDS[k]?.[1]||(k?k[0].toUpperCase()+(k[1]||''):'');}
 function hasTranscript(p){return TRANSCRIPT_KINDS.includes(p);}
+// Herdr lists a ch pane as agent "ch" with display_agent "claude"/"codex": the conversation,
+// history and sub-agents are that agent's; prompts and keys still go to the ch pane itself.
+function agentProvider(a){const shown=kindSafe(a?.display_agent);return hasTranscript(shown)?shown:kindSafe(a?.agent);}
 // A live agent whose conversation the app cannot read (any kind but Claude / Codex).
-function noTranscript(a){return !!a?.agent&&!hasTranscript(a.agent);}
+function noTranscript(a){return !!a?.agent&&!hasTranscript(agentProvider(a));}
 // Prefer names that tell agents apart: Herdr's agent title, a meaningful terminal
 // title (not the generic "<dir>: ch" / "<dir>: claude"), then the first prompt.
 function cleanTitle(t){return String(t||'').replace(/<\/?pasted_content(?:\s+id="[^"]{0,40}")?\s*>/g,' ').replace(/^[\s✳✻✽✶⠀-⣿·•*]+/,'').replace(/\s*\|\s*[^|]+$/,'').trim();}
@@ -168,8 +171,13 @@ function skeleton(main,rows=4){for(let i=0;i<rows;i++){const r=el('div','skeleto
 function empty(main,title,desc,action,name='chat'){const n=el('div','empty');const a=el('div','empty-icon');a.append(icon(name));n.append(a,el('h2','',title),el('p','',desc));if(action)n.append(action);main.append(n);}
 function render(){
  if(S.chat){renderChat();return;}if(typeof T!=='undefined'&&T.view){renderTerminal();return;}if(typeof FX!=='undefined'&&FX.view){renderFiles();return;}
+ // A refresh of the same tab keeps the reading position and does not play the entrance again:
+ // status polls used to rebuild the list and snap it back to the top.
+ const oldMain=document.querySelector('.shell>main.main'),keep=S.renderedTab===S.tab&&oldMain?oldMain.scrollTop:null;
  const root=shell();header(root);const main=el('main','main pane-enter');root.append(main);
  if(S.tab==='live')livePage(main);else if(S.tab==='history')historyPage(main);else if(S.tab==='terminals')terminalsPage(main);else if(S.tab==='settings')settingsPage(main);else devicesPage(main);
+ if(keep!==null){main.classList.remove('pane-enter');main.scrollTop=keep;}
+ S.renderedTab=S.tab;
  const nav=el('nav','bottom-nav');nav.setAttribute('aria-label','主导航');
  const waiting=S.agents.filter(a=>a.agent_status==='blocked'||glanceAsks(a)).length;
  // 历史 reads the computer's own Claude/Codex transcripts; it does not need Herdr.
@@ -345,7 +353,7 @@ async function openAgent(a){
  if(ref?.record&&(ref.source==='manual'||!ref.stale||!remembered)){if(!ref.stale&&ref.source!=='manual')S.bindings.delete(bindingKey(a));S.chat.record=ref.record;if(ref.source==='manual')S.chat.manual=true;await fetchHistory(false,true);return;}
  if(remembered){S.chat.record=remembered;S.chat.manual=true;await fetchHistory(false,true);return;}
  const id=ref?.thread||(a.agent_session?.kind!=='path'?a.agent_session?.value:null);
- if(id&&ref?.status!=='pending'&&S.device){try{const r=await remote('catalog',{thread:id});if(epoch!==S.epoch)return;const rec=r.records.find(x=>x.provider===a.agent&&(!ref?.record_id||x.id===ref.record_id));if(rec){S.chat.record=rec;await fetchHistory(false,true);return;}}catch(e){if(epoch===S.epoch)error(e);}}
+ if(id&&ref?.status!=='pending'&&S.device){try{const r=await remote('catalog',{thread:id});if(epoch!==S.epoch)return;const rec=r.records.find(x=>x.provider===agentProvider(a)&&(!ref?.record_id||x.id===ref.record_id));if(rec){S.chat.record=rec;await fetchHistory(false,true);return;}}catch(e){if(epoch===S.epoch)error(e);}}
  if(epoch===S.epoch){S.chat.historyIssue=historyIssueText(ref);paintTimeline();if(a.agent_status==='working'||a.agent_status==='blocked')fetchTerminal(true);}}
 // Pane + terminal + kind: a session id Herdr reports later must not lose the pick.
 function bindingKey(a){return [S.session,a.pane_id,a.terminal_id||'',a.agent].join('/');}
@@ -475,7 +483,9 @@ function renderComposer(){
  const key=draftKey();let live=document.getElementById('live-state'),compose=footer.querySelector('.composer');
  if(!live||!compose||compose.dataset.key!==key){footer.replaceChildren();live=el('div','live-state');live.id='live-state';compose=buildComposer(key);footer.append(live,compose);}
  if(offline){live.replaceChildren(el('div','compose-note','正在连接 · 显示的是上次的缓存，连上后才能发送'));}else renderLiveState(live,a);
- const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=a.agent_status,later=!offline&&(st==='working'||st==='blocked');
+ // Effective state: a parent held by its sub-agents (kids.js) is not "working" here; a message
+ // goes straight in and Claude queues it for the next turn.
+ const input=compose.querySelector('textarea'),send=compose.querySelector('.send'),st=agentState(a),later=!offline&&(st==='working'||st==='blocked');
  input.placeholder=offline?'可以先写，连上再发':st==='working'?'写好会排队，停下就发':st==='blocked'?(qaPicker(a)?'写好会排队，选完再发':'写好会排队，确认完再发'):S.chat.noTranscript?'发给 '+providerName(a.agent)+'…'+(slashKnown(a)?'（/ 看命令）':''):'接着说点什么…（/ 看命令）';
  if(input.value!==(S.drafts.get(key)||'')){input.value=S.drafts.get(key)||'';compose.grow();}
  // Busy agent: the button says it will queue, so sending never looks like it failed.
@@ -509,7 +519,7 @@ function renderLiveState(live,a){
 // while a second Ctrl+C on an idle Claude would exit it. Ctrl+C stays in 终端按键.
 function interruptButton(a){
  // Esc is checked for Claude Code and Codex only; another agent may treat it differently, so say so.
- const what=hasTranscript(a.agent)?'让 '+titleOf(a)+' 停下手上的事（发送 Esc，不会退出）。':'给 '+titleOf(a)+' 发送 Esc。多数 Agent 会停下当前这一步，但 '+providerName(a.agent)+' 具体怎么处理不一定，之后看一眼终端。';
+ const what=hasTranscript(agentProvider(a))?'让 '+titleOf(a)+' 停下手上的事（发送 Esc，不会退出）。':'给 '+titleOf(a)+' 发送 Esc。多数 Agent 会停下当前这一步，但 '+providerName(a.agent)+' 具体怎么处理不一定，之后看一眼终端。';
  const b=btn('中断','secondary small',()=>confirmAction('中断 Agent？',what+'排队的消息会在它停下后接着发。','中断',async()=>{S.chat.interruptAt=Date.now();renderComposer();await sendKey('esc','Esc');setTimeout(()=>{if(S.chat)renderComposer();},4000);},true));
  b.disabled=!!S.chat?.interruptAt&&Date.now()-S.chat.interruptAt<4000;if(b.disabled)b.textContent='正在中断…';return b;}
 async function sendKey(key,label){const a=S.chat?.agent;if(!a)return;try{await remote('key',{session:S.session,target:a.pane_id,identity:a.identity,key,id:uuid()});toast(S.demo?'演示：未发送按键':'已发送 '+label);setTimeout(()=>{refreshStatus();fetchTerminal(true);},700);}catch(e){toast('按键未确认：'+e.message+'。不会自动重发。');}}
@@ -648,7 +658,7 @@ async function pickHistory(){
  if(targetAgent?.history_ref?.status==='retry'){list.append(el('p','fine','这次没读到窗格信息，还不知道历史在哪台电脑上。稍后再试。'));box.append(list);return;}
  let timer;box.append(searchBox('搜索历史记录',q=>{clearTimeout(timer);timer=setTimeout(()=>search(q),400);}),list);await search(targetAgent?.history_ref?.query||'');}
 function chooseHistory(rec,targetAgent){
- if(!targetAgent||targetAgent.agent_session?.value||rec.provider!==targetAgent.agent){openRecord(rec,true);return;}
+ if(!targetAgent||targetAgent.agent_session?.value||rec.provider!==agentProvider(targetAgent)){openRecord(rec,true);return;}
  const box=sheet('确认历史与在线会话对应');
  box.append(el('p','fine','没能自动确认这个窗格的会话。只有确定这段记录属于下面的在线 Agent 时才关联；不会恢复或新建会话。'));
  const pair=el('div','card pair');pair.append(el('div','card-meta','在线 Agent'),el('div','card-title',titleOf(targetAgent)+' · '+targetAgent.pane_id),el('div','card-meta','历史记录'),el('div','card-title',rec.title+' · '+rec.thread.slice(0,8)));box.append(pair);

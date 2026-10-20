@@ -67,6 +67,7 @@ await page.evaluate(()=>openAgent(fx.agent));
 await page.getByText('登录页在手机上错位了，你看下截图',{exact:true}).waitFor();
 // Reference lines turn into thumbnails; the text keeps only the person's words.
 assert.equal(await page.getByText(/herdr-pocket\/uploads|ch-file:/).count(),0,'reference lines are hidden');
+assert.equal(await page.getByText(/\[Image #\d+\]/).count(),0,'Claude picture markers are hidden');
 await page.waitForFunction(()=>document.querySelectorAll('.img-tile img').length>=4);
 await page.locator('.img-tile.broken').first().waitFor();
 assert.match(await page.locator('.img-tile.broken').first().textContent(),/已清理/);
@@ -169,8 +170,9 @@ await page.getByText('已送达 Agent',{exact:true}).waitFor();
 assert(await page.locator('.message.pending .img-tile img').count()>=2,'sent bubble shows the pictures');
 console.log('PASS: upload failure sends nothing; unknown outcome is never resent; send carries uploaded names');
 
-// The pending bubble settles once the transcript shows the prompt with its pictures.
-await page.evaluate(()=>{fx.messages.push({id:'900:0',kind:'user',text:'这两张是改之前的样子\n\n[图片] /home/yuki/.herdr-pocket/uploads/2026-10-15/'+'d'.repeat(64)+'.jpg',timestamp:new Date().toISOString(),title:'',call_id:''});fx.agent={...fx.agent,agent_status:'idle'};});
+// The pending bubble settles once the transcript shows the prompt with its pictures, in the form
+// Claude Code writes them: "[Image #1]" before the words and a bare "[图片]" line after them.
+await page.evaluate(()=>{fx.messages.push({id:'900:0',kind:'user',text:'[Image #1]这两张是改之前的样子\n[图片]',images:[{block:0},{block:1}],timestamp:new Date().toISOString(),title:'',call_id:''});fx.agent={...fx.agent,agent_status:'idle'};});
 await page.evaluate(()=>fetchHistory());
 await page.waitForFunction(()=>!document.querySelector('.message.pending:not(.failed)'));
 for(const width of [390,320]){await page.setViewportSize({width,height:width===320?640:844});await page.waitForTimeout(150);

@@ -59,12 +59,16 @@ function imgRef(ref){
 // A prompt's own words, and the pictures it carries (reference lines and embedded transcript pictures).
 // Claude Code wraps pasted blocks as <pasted_content id="…">…</pasted_content id="…">: show the words only.
 const PASTE_TAG=/<\/?pasted_content(?:\s+id="[^"]{0,40}")?\s*>/g;
-function cleanUserText(t){return String(t||'').replace(PASTE_TAG,'');}
+// Claude publishes pasted pictures as "[Image #1]" before the words (and a bare "[图片]" line);
+// the picture itself rides the same row. Hiding the markers keeps one copy of the message and
+// lets the optimistic bubble settle against the transcript's.
+const IMAGE_TAG=/\[Image #\d+\]/g;
+function cleanUserText(t){return String(t||'').replace(PASTE_TAG,'').replace(IMAGE_TAG,'');}
 // What two copies of one message share: the words without wrappers, picture/file lines or spacing.
 function msgSig(text){return cleanUserText(text).replace(/\s+/g,' ').trim();}
 function imgSplit(m){
  const specs=[],files=[];const rec=S.chat?.record;
- const text=cleanUserText(m.text).split('\n').filter(line=>{const f=fileLine(line);if(f){files.push(f);return false;}const x=line.match(IMG_LINE);const spec=x&&imgRef(x[1]);if(spec)specs.push(spec);return !spec;}).join('\n').replace(/\n{3,}/g,'\n\n').trim();
+ const text=cleanUserText(m.text).split('\n').filter(line=>{if(/^\[图片\]\s*$/.test(line))return false;const f=fileLine(line);if(f){files.push(f);return false;}const x=line.match(IMG_LINE);const spec=x&&imgRef(x[1]);if(spec)specs.push(spec);return !spec;}).join('\n').replace(/\n{3,}/g,'\n\n').trim();
  if(Array.isArray(m.images)&&rec)m.images.forEach(i=>specs.push({kind:'transcript',record_id:rec.id,item:m.id,block:i.block,...(rec.remote?{remote:rec.remote}:{})}));
  return {text,specs,files};}
 // Reassignable on purpose: offline tests serve fixture pictures.

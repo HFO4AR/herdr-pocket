@@ -53,6 +53,15 @@ def is_agent_process(argv, kind):
     return Path(argv[0]).name in SCRIPT_HOSTS and len(argv) > 1 and Path(argv[1]).name in names
 
 
+def agent_provider(agent):
+    """The conversation provider behind a Herdr row. Herdr 0.8.2 lists a ch pane as agent "ch"
+    with display_agent "claude"/"codex"; transcript history, sub-agents and remote reads are the
+    displayed agent's, while the transport (prompts, keys) stays the pane's own kind."""
+    kind = agent.get("agent")
+    shown = agent.get("display_agent")
+    return shown if kind == "ch" and shown in TRANSCRIPT_PROVIDERS else kind
+
+
 class BridgeError(Exception):
     pass
 
@@ -186,11 +195,11 @@ def agents(prefix, include_history=False, screens=False, links=None):
     global _remote_deadline
     _remote_deadline = time.monotonic() + 20
     _remote_results.clear()
-    live = [a for a in result if a.get("agent") in TRANSCRIPT_PROVIDERS]
-    probes = {a["pane_id"]: probe_pane(a, prefix, a["agent"]) for a in live}
-    prefetch_remote([(probes[a["pane_id"]]["route"], a["agent"]) for a in live if probes[a["pane_id"]]["route"]])
+    live = [a for a in result if agent_provider(a) in TRANSCRIPT_PROVIDERS]
+    probes = {a["pane_id"]: probe_pane(a, prefix, agent_provider(a)) for a in live}
+    prefetch_remote([(probes[a["pane_id"]]["route"], agent_provider(a)) for a in live if probes[a["pane_id"]]["route"]])
     catalog = transcript_catalog() if live else []
-    codex_index = (codex_thread_names(), codex_loaded_threads()) if any(a["agent"] == "codex" for a in live) else None
+    codex_index = (codex_thread_names(), codex_loaded_threads()) if any(agent_provider(a) == "codex" for a in live) else None
     for agent in live:
         probe = probes[agent["pane_id"]]
         ref = with_record(resolve_agent_history(agent, prefix, catalog, codex_index, probe), catalog)
@@ -387,7 +396,9 @@ def relay_pane(agent, prefix):
     "no longer the pane foreground process") although it lists the agent; input has to go to the
     pane itself. Decided before anything is written, from the process tree only."""
     if not agent.get("agent"): return False
-    probe = probe_pane(agent, prefix, agent["agent"])
+    # Probe as the displayed agent, never "ch": the ch executable itself would look like the pane's
+    # native agent and make a relay pane look local (which broke its input fallback).
+    probe = probe_pane(agent, prefix, agent_provider(agent))
     return bool(probe["ok"] and probe["route"] and not probe.get("native"))
 
 
@@ -749,7 +760,7 @@ def mark_screen_menus(prefix, found, state_dir):
     input box was on screen at least SCREEN_SETTLE seconds after Herdr's last state change for it
     is not read again until Herdr's state changes (a dialog only comes up after the agent worked);
     that note lives in the state folder. A failed read changes nothing."""
-    want = [a for a in found if a.get("agent") in ("claude", "codex") and a.get("agent_status") in ("idle", "done")
+    want = [a for a in found if agent_provider(a) in ("claude", "codex") and a.get("agent_status") in ("idle", "done")
             and isinstance(a.get("terminal_id"), str)]
     path = state_dir / SCREEN_MEMO if state_dir else None
     memo = {}
@@ -771,7 +782,7 @@ def mark_screen_menus(prefix, found, state_dir):
     def look(agent):
         try: raw = read_screen(prefix, agent, 0, ansi=True).get("text", "")
         except (BridgeError, OSError, ValueError): return None
-        return screen_input(raw, agent["agent"]) if isinstance(raw, str) and raw.strip() else None
+        return screen_input(raw, agent_provider(agent)) if isinstance(raw, str) and raw.strip() else None
     if len(todo) > 1:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool: seen = list(pool.map(lambda t: look(t[0]), todo))
@@ -781,7 +792,7 @@ def mark_screen_menus(prefix, found, state_dir):
         if result["box"] is not None: entry["box"] = now
         else:
             entry.pop("box", None)
-            if screen_dialog(result["menu"], agent["agent"]):
+            if screen_dialog(result["menu"], agent_provider(agent)):
                 agent.update(herdr_status=agent["agent_status"], agent_status="blocked", screen="menu")
                 if result["menu"].get("picker"): agent["picker"] = True
     # Forget terminals that are gone (the list is the whole session's).
@@ -827,9 +838,16 @@ def mutate(request, prefix, agent, state_dir):
     if not isinstance(req_id, str) or not re.fullmatch(r"[a-f0-9-]{36}", req_id):
         raise BridgeError("Mutation requires a UUID request id")
     digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    # A Claude blocked on a foreground sub-agent reads "working" in Herdr, but its input box takes a
+    # message (Claude queues it for after the current turn). Only then is the box read while working.
+    waiting_kid = False
+    if op == "prompt" and agent.get("agent_status") == "working" and agent_provider(agent) == "claude":
+        path = claude_agent_transcript(agent)
+        waiting_kid = bool(path and claude_waiting_on_kid(path))
     # The input box is read before the receipts database is locked (a screen read may take a while);
     # it only refuses below, after a request already handled has answered from its receipt.
-    view = herdr_box(prefix, agent) if op in ("prompt", "exitAgent") and agent.get("agent_status") in ("idle", "done") else None
+    view = herdr_box(prefix, agent) if op in ("prompt", "exitAgent") and (
+        agent.get("agent_status") in ("idle", "done") or waiting_kid) else None
     menu_up = bool(view and view["box"] is None and view["menu"])
     # The box is on screen (with colours): it is replaced and the submit is checked (box_send).
     boxed = bool(view and isinstance(view["box"], str))
@@ -850,7 +868,9 @@ def mutate(request, prefix, agent, state_dir):
         key = request.get("key")
         if op == "prompt":
             if agent.get("screen") == "menu": raise BridgeError(MENU_ON_SCREEN)
-            if agent.get("agent_status") not in ("idle", "done"):
+            # A parent waiting on a sub-agent is the one exception to "only idle/done takes a
+            # prompt"; its visible input box is required (no dialog, nothing unreadable).
+            if agent.get("agent_status") not in ("idle", "done") and not (waiting_kid and boxed):
                 raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
             images = request.get("images")
             files = request.get("files")
@@ -1104,7 +1124,7 @@ def matched(entry, source):
 
 def resolve_agent_history(agent, prefix, catalog, codex_index=None, probe=None):
     """Strongest evidence first; a weaker source never overrides a stronger one."""
-    provider = agent["agent"]
+    provider = agent_provider(agent)
     candidates = [x for x in catalog if x["provider"] == provider]
     roots = {}
     for x in candidates:  # catalog is newest first; keep the newest rollout per thread
@@ -1149,7 +1169,7 @@ def resolve_agent_history(agent, prefix, catalog, codex_index=None, probe=None):
 
 def remote_context(agent, prefix):
     return {"session": prefix[1] if len(prefix) > 1 else "default", "target": agent["pane_id"],
-            "identity": agent.get("identity", identity(agent)), "provider": agent["agent"]}
+            "identity": agent.get("identity", identity(agent)), "provider": agent_provider(agent)}
 
 
 def ch_relay_route(argv):
@@ -2511,6 +2531,51 @@ def kid_running(age, mtime, tail, parent):
     return opened and age < KIDS_OPEN
 
 
+def claude_waiting_on_kid(path):
+    """True while Claude Code itself is blocked on a sub-agent: its newest own row is an Agent /
+    Task tool_use and the result has not been written yet. Herdr keeps calling the pane "working"
+    during a foreground sub-agent. A background launch writes its tool_result ("Async agent
+    launched") at once and the parent's later rows follow, so the newest row is then something
+    else. Queue / input-only rows are skipped: them arriving does not mean the parent resumed."""
+    try:
+        size = Path(path).stat().st_size
+        with open(path, "rb") as stream:
+            stream.seek(max(0, size - KIDS_TAIL)); data = stream.read(KIDS_TAIL)
+    except OSError:
+        return False
+    for line in reversed(data.split(b"\n")):
+        if not line: continue
+        try: row = json.loads(line)
+        except (ValueError, UnicodeError): continue
+        if not isinstance(row, dict) or row.get("isSidechain"): continue
+        kind = row.get("type")
+        if kind not in ("user", "assistant"): continue
+        content = (row.get("message") or {}).get("content")
+        blocks = content if isinstance(content, list) else []
+        if kind == "assistant":
+            uses = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
+            return bool(uses) and any(b.get("name") in ("Agent", "Task") for b in uses)
+        # A user row (a tool result, a task notification or a new message) means the parent is not
+        # sitting inside the Agent call any more.
+        return False
+    return False
+
+
+def claude_agent_transcript(agent):
+    """The live Claude transcript for this pane, from Herdr's own session id (read-only), or None."""
+    value = (agent.get("agent_session") or {}).get("value")
+    if not isinstance(value, str) or not re.fullmatch(UUID_RE, value): return None
+    root = provider_root("claude")
+    if not root: return None
+    cwd = agent.get("foreground_cwd") or agent.get("cwd") or ""
+    if cwd:
+        path = claude_project_dir(root, cwd) / (value + ".jsonl")
+        if path.is_file() and not path.is_symlink(): return path
+    try: found = [p for p in root.glob("*/" + value + ".jsonl") if p.is_file() and not p.is_symlink()]
+    except OSError: return None
+    return found[0] if len(found) == 1 else None
+
+
 def kid_meta(provider, root, path, info):
     """Catalog metadata for a child, cached once its title is final (titles do not change)."""
     state = kids_state(); rel = str(path.relative_to(root))
@@ -2640,7 +2705,8 @@ def kids_report(path, provider, thread, now=None):
     # Same stamp = same answer: which sub-agents exist, which run, how the newest ones look.
     stamp = hashlib.sha256(json.dumps([path.stat().st_size, [(r["path"].name, r["running"]) for r in rows], [x.get("title") for x in items]],
                                       ensure_ascii=False).encode()).hexdigest()[:20]
-    return {"total": len(rows) + len(starting), "running": running, "items": items, "stamp": stamp}
+    waiting = provider == "claude" and running > 0 and claude_waiting_on_kid(path)
+    return {"total": len(rows) + len(starting), "running": running, "items": items, "stamp": stamp, "waiting": waiting}
 
 
 def kid_activity(path, provider):
@@ -3427,14 +3493,14 @@ def with_record(ref, catalog):
 
 
 def resolve_one(agent, prefix, links=None):
-    probe = probe_pane(agent, prefix, agent["agent"])
+    probe = probe_pane(agent, prefix, agent_provider(agent))
     catalog = []
     ref = resolve_probed(agent, prefix, probe, catalog)
     return settle_history(agent, prefix, ref, probe, links, catalog or None)
 
 
 def resolve_probed(agent, prefix, probe, catalog_out):
-    provider = agent["agent"]
+    provider = agent_provider(agent)
     # Fast path: a local Claude keeps its current runtime session directory open, which
     # already reflects /clear and /resume; locate just that file instead of scanning all.
     if provider == "claude" and not history_route(probe) and len(probe["active"]) == 1:
@@ -3462,8 +3528,8 @@ def link_history(request, prefix, links):
     if not isinstance(target, str) or not re.fullmatch(r"w[A-Za-z0-9]+:p[A-Za-z0-9]+", target): raise BridgeError("Invalid pane target")
     agent = next((a for a in agents(prefix) if a.get("pane_id") == target), None)
     if not agent or request.get("identity") != agent["identity"]: raise BridgeError("Agent changed or disappeared; reload the agent list")
-    if agent.get("agent") not in TRANSCRIPT_PROVIDERS: raise BridgeError("这个 Agent 没有可关联的对话记录")
-    probe = probe_pane(agent, prefix, agent["agent"])
+    if agent_provider(agent) not in TRANSCRIPT_PROVIDERS: raise BridgeError("这个 Agent 没有可关联的对话记录")
+    probe = probe_pane(agent, prefix, agent_provider(agent))
     key = link_key(prefix, agent)
     entry = dict(links.get(key) or {})
     if probe.get("run") and entry.get("run") and entry["run"] != probe["run"]: entry = {}
@@ -3483,7 +3549,7 @@ def link_history(request, prefix, links):
     else:
         if route: raise BridgeError("这个窗格的历史在远端电脑上，不能关联本机记录")
         records = [public_record(x) for x in transcript_catalog() if not x.get("parent")]
-    record = next((x for x in records if x["id"] == record_id and x.get("provider") == agent["agent"]), None)
+    record = next((x for x in records if x["id"] == record_id and x.get("provider") == agent_provider(agent)), None)
     if not record: raise BridgeError("没找到这条历史记录，请刷新后再选")
     links.put(key, dict(entry, manual={"record": record, "at": time.time()}, run=probe.get("run") or entry.get("run"), pane=agent["pane_id"], at=time.time()))
     links.save()
@@ -3496,7 +3562,7 @@ def follow_pane(request, prefix, links=None):
         raise BridgeError("Invalid pane target")
     agent = next((a for a in agents(prefix) if a.get("pane_id") == target), None)
     if agent:
-        if agent.get("agent") in TRANSCRIPT_PROVIDERS: agent["history_ref"] = resolve_one(agent, prefix, links)
+        if agent_provider(agent) in TRANSCRIPT_PROVIDERS: agent["history_ref"] = resolve_one(agent, prefix, links)
         state = "same" if agent["identity"] == request.get("identity") else "changed"
         return {"follow": True, "state": state, "agents": [agent], "pane": None}
     # No agent in the pane any more: tell "exited, the shell is still there" from "pane closed".
@@ -3781,7 +3847,9 @@ def with_menu(screen, agent, always=False):
     screen["agent_status"] = agent.get("agent_status")
     if agent.get("picker"): screen["picker"] = True
     if always or agent.get("agent_status") == "blocked":
-        screen["menu"] = parse_menu(screen.get("text", ""), agent.get("agent", ""))
+        # A ch pane shows the remote agent's own dialog: parse it as that agent (Claude's folder
+        # trust is an approval whose Esc is "No, exit"), not as the ch transport.
+        screen["menu"] = parse_menu(screen.get("text", ""), agent_provider(agent))
     return screen
 
 
@@ -3831,7 +3899,7 @@ class AnswerIO:
 
 def herdr_answer_io(prefix, agent):
     target = agent["pane_id"]
-    return AnswerIO(agent.get("agent", ""),
+    return AnswerIO(agent_provider(agent),
                     lambda: read_screen(prefix, agent, 80).get("text", ""),
                     lambda name: call(prefix + (["pane", "send-keys", target, name] if agent.get("relay") else ["agent", "send-keys", target, name])),
                     lambda text: call(prefix + ["pane", "send-text", target, text]))
@@ -4214,7 +4282,7 @@ def prompt_images(images, request, prefix, agent):
         if item.get("sha256") != match.group(2) or hashlib.sha256(path.read_bytes()).hexdigest() != match.group(2):
             raise BridgeError("没发出去：电脑上的图片和手机上的不一致，删掉重新选一下")
         files.append((path, match.group(2)))
-    probe = probe_pane(agent, prefix, agent.get("agent") or "")
+    probe = probe_pane(agent, prefix, agent_provider(agent) or "")
     if not probe["ok"]: raise BridgeError("没发出去：看不清这个窗格运行在哪台电脑上，刷新后再试")
     if probe["route"]: return [("remote", share_image(path, sha)) for path, sha in files]
     if probe["remote"] or request.get("remote"):
@@ -4580,7 +4648,7 @@ def view_roots(record, provider, workspace=None):
 
 def pane_place(request, prefix, agent):
     """'local' or the ch route; refuses panes whose files would mean nothing to the agent."""
-    probe = probe_pane(agent, prefix, agent.get("agent") or "")
+    probe = probe_pane(agent, prefix, agent_provider(agent) or "")
     if not probe["ok"]: raise BridgeError("没发出去：看不清这个窗格运行在哪台电脑上，刷新后再试")
     if probe["route"]: return probe["route"]
     if probe["remote"] or request.get("remote"):
@@ -6588,7 +6656,7 @@ def hidden_records(request, state_dir):
 def herdr_status(prefix, screens=False):
     """Cheap poll: Herdr state only, no process walk or history resolution (plus, with `screens`,
     a visible-screen look at idle/done Claude / Codex agents: mark_screen_menus)."""
-    fields = ("pane_id", "agent", "agent_status", "agent_session", "terminal_id", "terminal_title",
+    fields = ("pane_id", "agent", "display_agent", "agent_status", "agent_session", "terminal_id", "terminal_title",
               "terminal_title_stripped", "title", "cwd", "foreground_cwd", "workspace_id", "tab_id", "identity")
     extra = ("screen", "herdr_status", "picker")
     return [dict({k: a.get(k) for k in fields}, **{k: a[k] for k in extra if k in a}) for a in agents(prefix, screens=screens)]

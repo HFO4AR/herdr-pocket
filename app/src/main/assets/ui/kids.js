@@ -14,9 +14,15 @@ function kidsKey(a){return a?agentKey(a):'';}
 // A report older than the TTL (nothing polled it: offline, backgrounded) no longer counts as running.
 function kidsOf(a){const r=a?K.map.get(kidsKey(a)):null;return r&&Date.now()-r.seen<K.ttl?r:null;}
 function kidsRunning(a){const r=kidsOf(a);return r&&r.running>0?r.running:0;}
-// Herdr's state, except an idle/done parent whose sub-agents still run is "kids".
+// Bridge's `waiting`: the parent transcript's newest row is still an Agent/Task call, so Claude
+// itself is blocked on the sub-agent (Herdr keeps saying working). Only a local transcript counts:
+// the prompt gate re-reads that file before typing, which it cannot do for a ch pane's remote one,
+// so those keep the normal "working" queue behaviour.
+function kidsWaiting(a){const r=kidsOf(a);return !!(r&&r.waiting&&r.running>0&&!a?.history_ref?.remote);}
+// Herdr's state, except a parent held by its sub-agents is "kids": idle/done with some still
+// running, or working only because Claude waits inside a foreground Agent/Task call.
 // Background work that will wake it again (bg.js) holds it the same way, as 后台运行中.
-function agentState(a){const s=a?.agent_status||'';return (s==='idle'||s==='done')&&(kidsRunning(a)||bgHold(a))?'kids':s;}
+function agentState(a){const s=a?.agent_status||'';return ((s==='idle'||s==='done')&&(kidsRunning(a)||bgHold(a)))||(s==='working'&&kidsWaiting(a))?'kids':s;}
 function kidsLabel(a){return kidsRunning(a)?'子 Agent 运行中 · '+kidsRunning(a):bgLabel(a);}
 // The short form for badges.
 function kidsShort(a){return kidsRunning(a)?'子 Agent · '+kidsRunning(a):'后台 · '+bgHold(a);}
@@ -28,11 +34,11 @@ function kidsGlance(a,item){
  if(!item)return item;item.kids=true;const r=K.map.get(kidsKey(a));if(r?.stamp)item.kids_stamp=r.stamp;return bgGlance(a,item);}
 function kidsRemoteItem(a){
  const ref=a.history_ref,rec=ref?.record;if(S.demo||!ref||ref.status!=='matched')return null;
- const remote=rec?.remote||ref.remote,record_id=rec?.id||ref.record_id,thread=rec?.thread||ref.thread;
- if(!remote||!record_id||!thread||!['claude','codex'].includes(a.agent))return null;
+ const remote=rec?.remote||ref.remote,record_id=rec?.id||ref.record_id,thread=rec?.thread||ref.thread,provider=agentProvider(a);
+ if(!remote||!record_id||!thread||!['claude','codex'].includes(provider))return null;
  const k=kidsKey(a),busy=kidsRunning(a)||bgRunning(a)||['working','blocked'].includes(a.agent_status),last=K.ask.get(k)||0;
  if(Date.now()-last<(busy?10000:30000))return null;K.ask.set(k,Date.now());
- const item=kidsGlance(a,{key:k,provider:a.agent,thread,record_id,remote});
+ const item=kidsGlance(a,{key:k,provider,thread,record_id,remote});
  // A stopped Codex: also whether its async question waits (a stat there while nothing changed).
  if(a.agent==='codex'&&['idle','done'].includes(a.agent_status)){item.ask=true;const g=GL.map.get(k);if(g?.ask_stamp)item.ask_stamp=g.ask_stamp;}
  return item;}
@@ -52,18 +58,18 @@ function kidsWanted(a){return kidsRunning(a)>0||bgRunning(a)>0;}
 // What the background watcher (WatchService) asks before it says 做完了: the same glance item,
 // without the preview stamp. Only for agents whose record is known.
 function kidsWatchItem(a){
- const ref=a.history_ref,rec=ref?.record;if(!ref||ref.status!=='matched'||!['claude','codex'].includes(a.agent))return null;
+ const ref=a.history_ref,rec=ref?.record,provider=agentProvider(a);if(!ref||ref.status!=='matched'||!['claude','codex'].includes(provider))return null;
  const record_id=rec?.id||ref.record_id,thread=rec?.thread||ref.thread,remote=rec?.remote||ref.remote;if(!record_id||!thread)return null;
- return remote?{provider:a.agent,thread,record_id,remote,kids:true}:{provider:a.agent,thread,record_id,cwd:rec?.cwd||a.foreground_cwd||a.cwd||'',kids:true};}
+ return remote?{provider,thread,record_id,remote,kids:true}:{provider,thread,record_id,cwd:rec?.cwd||a.foreground_cwd||a.cwd||'',kids:true};}
 
 // A report arrived (glance or history). Returns nothing; repaints once per batch.
 function kidsTake(key,report){
  if(!report||typeof report!=='object')return;const old=K.map.get(key);
  if(report.same){if(old)old.seen=Date.now();return;}
  if(!Array.isArray(report.items))return;
- const next={total:report.total|0,running:report.running|0,items:report.items.filter(x=>x&&typeof x==='object'),stamp:report.stamp||'',seen:Date.now()};
+ const next={total:report.total|0,running:report.running|0,items:report.items.filter(x=>x&&typeof x==='object'),stamp:report.stamp||'',waiting:!!report.waiting,seen:Date.now()};
  K.map.set(key,next);
- if(!old||old.running!==next.running||old.total!==next.total||kidsSig(old)!==kidsSig(next))K.changed.add(key);
+ if(!old||old.running!==next.running||old.total!==next.total||old.waiting!==next.waiting||kidsSig(old)!==kidsSig(next))K.changed.add(key);
  if(!K.pending){K.pending=true;queueMicrotask(kidsApply);}}
 // A running sub-agent's step (bridge `activity`, its own tail) counts too: the rows say what it does.
 function kidsSig(r){return r.items.map(x=>(x.id||x.title)+(x.running?'+':'-')+(x.running&&x.activity?(x.activity.open?'o':'')+x.activity.kind+':'+(x.activity.text||''):'')).join(',');}

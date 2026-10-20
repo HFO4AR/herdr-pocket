@@ -370,7 +370,7 @@ function filesPreview(e,opts={}){
  const cacheable=kind!=='office',key=cacheable?fxPreviewKey(v.device,path,e,kind,tail):'',hit=cacheable?FX.pcache.get(key):null;
  if(FX.pv)fxStopTail();
  FX.pv={entry:e,path,name:e.name,size,mtime:e.mtime||0,kind,tail,wrap:false,mode:'',q:'',hits:[],hit:-1,
-  page:0,pageData:null,pages:0,pagesCache:new Map(),pdfSeq:0,pdfLoading:false,pdfError:'',pdfView:null,pdfPrefetching:new Set(),
+  page:0,pageData:null,pages:0,pagesCache:new Map(),pdfSeq:0,pdfLoading:false,pdfError:'',pdfView:null,pdfGhost:null,pdfPrefetching:new Set(),
   imgView:null,imgError:'',imgLoading:false,imgTry:0,cached:!!hit,fromCache:!!hit,loading:!hit,error:'',r:null,
   token:'pv'+uuid(),allowLarge:!!opts.large,prepared:false,keepScroll:undefined,keepBottom:false,slide:opts.slide||0};
  filesHintSeen();
@@ -435,7 +435,7 @@ function fxPrepare(r){
  p.encoding=r.encoding||'';p.binary=!!r.binary;p.truncated=!!r.truncated;p.tailResult=!!r.tail;
  p.pages=r.page?.pages||p.pages||0;p.page=r.page?.index??p.page??0;p.pageData=r.page||p.pageData||null;
  p.media=r.media||p.media||null;p.poster=typeof r.poster==='string'?r.poster:(p.poster||'');
- p.prettyText='';p.tableData=null;p.totalLines=0;p.lines=[];p.imgError='';p.pdfError='';p.pdfLoading=false;
+ p.prettyText='';p.tableData=null;p.totalLines=0;p.lines=[];p.imgError='';p.pdfError='';p.pdfLoading=false;p.pdfGhost=null;
  if(r.page){p.pages=r.page.pages||p.pages;p.page=r.page.index||0;p.pageData=r.page;fxPageCachePut(p,p.page,r.page);} if(!p.prepared){
   if(FX_MD.test(p.name))p.mode='rendered';
   else if(FX_CSV.test(p.name))p.mode='table';
@@ -856,6 +856,20 @@ function fxPageCachePut(p,page,data){
  const cache=p.pagesCache||(p.pagesCache=new Map());cache.delete(page);cache.set(page,data);
  while(cache.size>FX_PDF_CACHE)cache.delete(cache.keys().next().value);
 }
+// Turning a page keeps the previous page's own, already decoded <img> over the new stage until the
+// next one lands. Replacing the body with a spinner made every page change flash.
+function fxPdfGhostTake(p){
+ const v=p.pdfView;
+ if(!v?.img||!v.img.complete||!v.img.naturalWidth){p.pdfGhost=null;return;}
+ v.img.remove();p.pdfGhost=v.img;
+}
+function fxPdfBusy(p,on){
+ const stage=p.pdfView?.stage;if(!stage)return;
+ let chip=stage.querySelector('.fx-page-busy');
+ if(!on){chip?.remove();return;}
+ if(!chip){chip=el('div','fx-page-busy');chip.append(el('span','spinner'),el('span',''));stage.append(chip);}
+ chip.lastChild.textContent='正在翻到第 '+(p.page+1)+' 页…';
+}
 function fxPdfBody(body){
  const p=FX.pv,wrap=el('div','fx-pdf');wrap.id='fx-pdf';
  if(p.pdfError){
@@ -868,9 +882,12 @@ function fxPdfBody(body){
  if(!p.pageData){const l=el('div','fx-viewer-status');l.setAttribute('role','status');l.append(el('span','spinner'),el('span','','正在渲染第 '+(p.page+1)+' 页…'));wrap.append(l);body.append(wrap);return;}
  const stage=el('div','fx-stage fx-pdf-stage');stage.tabIndex=0;stage.setAttribute('role','group');stage.setAttribute('aria-label',p.name+' 第 '+(p.page+1)+' 页，可缩放');
  const zoom=el('div','fx-zoom');const img=el('img');img.alt=p.name+' 第 '+(p.page+1)+' 页';img.decoding='async';zoom.append(img);stage.append(zoom);
+ // The outgoing page stays on top (no spinner) and fades out once the incoming one is fitted.
+ const ghost=p.pdfGhost?el('div','fx-page-ghost'):null;if(ghost){ghost.append(p.pdfGhost);stage.append(ghost);p.pdfGhost=null;}
  const v={el:zoom,stage,img,naturalW:0,naturalH:0,rotation:0,scale:1,tx:0,ty:0,fit:1,min:.05,max:8};p.pdfView=v;
- const box=fxViewerLoading(stage,'正在显示这一页…');
- img.addEventListener('load',()=>{v.naturalW=img.naturalWidth;v.naturalH=img.naturalHeight;fxViewerFit(v);box.remove();p.pdfLoading=false;});
+ const box=ghost?null:fxViewerLoading(stage,'正在显示这一页…');
+ img.addEventListener('load',()=>{v.naturalW=img.naturalWidth;v.naturalH=img.naturalHeight;fxViewerFit(v);box?.remove();p.pdfLoading=false;fxPdfBusy(p,false);
+  if(ghost){ghost.classList.add('out');setTimeout(()=>ghost.remove(),180);}});
  img.addEventListener('error',()=>{p.pdfError='页面图片没有加载出来；可以重试或先下载。';p.pdfLoading=false;paintPreview();});
  wrap.append(stage);body.append(wrap);
  fxViewerBind(stage,v);
@@ -886,16 +903,23 @@ function fxPdfPrefetch(p,page){
 function fxPdfGo(i,force){
  const p=FX.pv;if(!p||!p.pages)return;const page=Math.max(0,Math.min(p.pages-1,i));
  if(page===p.page&&p.pageData&&!force)return;
- p.page=page;p.pdfError='';p.pdfLoading=true;p.pdfView=null;p.pdfSeq++;
+ p.page=page;p.pdfError='';p.pdfLoading=true;p.pdfSeq++;
  const seq=p.pdfSeq,cache=p.pagesCache||(p.pagesCache=new Map());
- if(!force&&cache.has(page)){p.pageData=cache.get(page);p.pdfLoading=false;paintPreview();fxPdfPrefetch(p,page+1);return;}
- p.pageData=null;paintPreview();
+ if(!force&&cache.has(page)){
+  p.pageData=cache.get(page);p.pdfLoading=false;fxPdfGhostTake(p);p.pdfView=null;paintPreview();fxPdfPrefetch(p,page+1);return;
+ }
+ p.pageData=null;
+ // Rendering a new page takes a moment: leave the page on screen with a small chip instead of
+ // clearing the body. The very first page (nothing shown yet) keeps the full loading state.
+ const keep=!!(p.pdfView&&p.pdfView.img&&p.pdfView.img.complete&&p.pdfView.img.naturalWidth);
+ if(keep){paintPreviewFoot();fxPdfBusy(p,true);}else{p.pdfView=null;paintPreview();}
  rpc('sftpPreviewPage',{key:p.r.key,page,width:fxPdfWidth()}).then(r=>{
   if(FX.pv!==p||seq!==p.pdfSeq)return;
-  p.pages=r.pages||p.pages;p.pageData=r;p.pdfLoading=false;p.pdfError='';fxPageCachePut(p,page,r);paintPreview();fxPdfPrefetch(p,page+1);
+  p.pages=r.pages||p.pages;p.pageData=r;p.pdfLoading=false;p.pdfError='';fxPageCachePut(p,page,r);
+  fxPdfGhostTake(p);p.pdfView=null;paintPreview();fxPdfPrefetch(p,page+1);
  }).catch(e=>{
   if(FX.pv!==p||seq!==p.pdfSeq)return;
-  p.pdfLoading=false;p.pdfError=(e.message||String(e));paintPreview();
+  p.pdfLoading=false;p.pdfError=(e.message||String(e));p.pdfGhost=null;p.pdfView=null;paintPreview();
  });
 }
 function paintPreviewFoot(){

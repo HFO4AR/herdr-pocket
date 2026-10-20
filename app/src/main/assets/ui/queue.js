@@ -22,6 +22,10 @@ const QUEUE_SETTLE=15000;// after a send whose start Herdr did not report, wait 
 function queueOf(key,make){let q=Q.get(key);if(!q&&make){q={items:[],paused:'',resumable:true,inflight:false,retryAt:0,ackAt:0,tries:0};Q.set(key,q);}return q;}
 function queueItems(key=draftKey()){return Q.get(key)?.items||[];}
 function queueTidy(key){const q=Q.get(key);if(q&&!q.items.length&&!q.inflight)Q.delete(key);}
+// A prompt can go in now: idle/done, or a parent held by its running sub-agents (kids.js). A new
+// message queues only while the agent itself works or waits for the person.
+function queueSendable(a){return ['idle','done','kids'].includes(agentState(a));}
+function queueWhy(a){const st=agentState(a);return st==='blocked'?(qaPicker(a)?'排好队了，选完就发':'排好队了，处理完确认就发'):st==='working'?'排好队了，它停下就发':'排在前面那条后面';}
 // Errors that prove nothing reached the pane (bridge NOT_SENT codes, uploads, and the bridge's own
 // status re-check, which runs before the request is recorded).
 function queueNotSent(msg){return /^没发出去/.test(msg)||/^Agent is busy or waiting for confirmation/.test(msg);}
@@ -30,19 +34,19 @@ function queueNotSent(msg){return /^没发出去/.test(msg)||/^Agent is busy or 
 // So does Claude still putting an earlier paste into its box ("Pasting…").
 function queueTransient(msg){return /停在一个提问或(授权|选择)框|还没准备好|还在处理上一次粘贴|^Agent is busy/.test(msg);}
 // New messages queue up while the agent is busy, and behind anything already waiting (order is kept).
-function queueWants(a,key){return !!a&&(['working','blocked'].includes(a.agent_status)||queueItems(key).length>0);}
+function queueWants(a,key){return !!a&&(['working','blocked'].includes(agentState(a))||queueItems(key).length>0);}
 function queueAdd(key,a,text,pics,opts={}){
  const q=queueOf(key,true);const qid='q'+(++qSeq);const item={qid,row:opts.row||qid,text,pics,docs:opts.docs||[],at:Date.now(),state:'queued',reason:opts.reason||'',record:S.chat?.record?.id||null,pane:a.pane_id,identity:a.identity,dev:S.demo?'':S.device?.id||''};
  if(opts.front)q.items.unshift(item);else q.items.push(item);return item;}
 // The composer's text and pictures move into the queue; the draft is cleared.
 function queueCompose(input,key,a,text,pics,docs=[]){
  queueAdd(key,a,text,pics,{docs});queueTakeDraft(input,key,text,pics,docs);
- toast(S.demo?'演示：排好队了，不会真的发':a.agent_status==='blocked'?(qaPicker(a)?'排好队了，选完就发':'排好队了，处理完确认就发'):a.agent_status==='working'?'排好队了，它停下就发':'排在前面那条后面');
+ toast(S.demo?'演示：排好队了，不会真的发':queueWhy(a));
  S.stick=true;paintTimeline();renderComposer();}
 // A message the app wrote itself (rename.js): queued the same way, the composer's draft untouched.
 function queueOwn(key,a,text){
  const it=queueAdd(key,a,text,[]);
- toast(a.agent_status==='blocked'?'排好队了，处理完确认就发':a.agent_status==='working'?'排好队了，它停下就发':'排在前面那条后面');
+ toast(queueWhy(a));
  S.stick=true;paintTimeline();renderComposer();return it;}
 function queueTakeDraft(input,key,text,pics,docs=[]){
  if(S.drafts.get(key)===text)S.drafts.delete(key);if(input&&input.value===text){input.value='';input.style.height='auto';}
@@ -89,7 +93,8 @@ async function queueNow(key,qid){
  if(S.demo){toast('演示：不会真的中断和发送');return;}
  q.items=[it,...q.items.filter(x=>x!==it)];q.paused='';q.tries=0;q.retryAt=0;q.ackAt=Date.now();it.record=c.record?.id||null;it.reason='';
  q.inflight=true;it.state='interrupting';paintTimeline();
- const busy=()=>!['idle','done'].includes(S.chat?.agent?.agent_status);
+ // A parent held by its sub-agents takes the message now (no Esc): Claude queues it itself.
+ const busy=()=>!queueSendable(S.chat?.agent);
  let handed=false;
  try{
   if(busy()){
@@ -103,7 +108,7 @@ async function queueNow(key,qid){
      if(!cur||cur.identity!==c.agent.identity){c.stale=true;break;}
      S.agents=S.agents.map(a=>a.pane_id===cur.pane_id?{...a,agent_status:cur.agent_status}:a);
      if(cur.agent_status!==c.agent.agent_status){const was=c.agent.agent_status;c.agent={...c.agent,agent_status:cur.agent_status};noteStatus([c.agent]);onAgentStatus(was,cur.agent_status);}
-     if(['idle','done'].includes(cur.agent_status))break;}
+     if(queueSendable(cur))break;}
     catch(_){}}
    if(S.chat!==c||c.stale||busy()){it.reason=c.stale?'窗格里的 Agent 变了，没发':'中断后它还没停下，消息没发。可以再点一次立即发送';return;}
   }
@@ -132,7 +137,7 @@ function queueBlock(c,key,q,force){
  if(switched||(head.record&&c.record&&head.record!==c.record.id)){queuePause(q,'窗格里换了一段对话，排队的先不发。看一眼再点继续',true);return 'paused';}
  if(c.switched&&Date.now()-c.switched.at<FOLLOW_SETTLE)return 'hold';
  if(!force&&q.paused)return 'paused';
- if(!['idle','done'].includes(c.agent.agent_status))return 'busy';
+ if(!queueSendable(c.agent))return 'busy';
  if(S.outbox.some(o=>o.key===key&&o.state==='sending'))return 'busy';
  if(force)return '';
  if(q.retryAt>Date.now())return 'wait';
@@ -158,7 +163,7 @@ async function queueStatusNow(c){if(c.agent.tmux)return tmuxStatusOne(c.agent);c
 // that confirmed it moments ago is reused: on a remote (ch) pane each one takes seconds, and racing
 // the follow poll for it used to keep a message queued indefinitely.
 // A tmux chat's own agent is the newest copy (its pane is read on every status beat).
-function queueStatusOk(c){const cur=c.agent.tmux?c.agent:S.agents.find(x=>x.pane_id===c.agent.pane_id);return S.chat===c&&!!cur&&cur.identity===c.agent.identity&&['idle','done'].includes(cur.agent_status)&&!c.stale&&!c.exited&&!c.following&&!c.unsure&&!c.followPending;}
+function queueStatusOk(c){const cur=c.agent.tmux?c.agent:S.agents.find(x=>x.pane_id===c.agent.pane_id);return S.chat===c&&!!cur&&cur.identity===c.agent.identity&&queueSendable(cur)&&!c.stale&&!c.exited&&!c.following&&!c.unsure&&!c.followPending;}
 async function queueVerify(c,force){
  if(!FOLLOW.supported)return queueStatusOk(c);
  for(let i=0;FOLLOW.busy&&i<120;i++)await new Promise(r=>setTimeout(r,250));
@@ -169,7 +174,7 @@ async function queueVerify(c,force){
  try{const r=await remote('agents',{session:S.session,target:c.agent.pane_id,identity:c.agent.identity});if(S.chat!==c)return false;
   if(!r||!r.follow){FOLLOW.supported=false;return queueStatusOk(c);}
   const before=c.record?.id;followApply(c,r);const a=r.agents?.[0];
-  const ok=S.chat===c&&!!a&&a.identity===c.agent.identity&&!c.stale&&!c.following&&!c.unsure&&!c.exited&&!c.followPending&&c.record?.id===before&&(!a.agent_status||['idle','done'].includes(a.agent_status));
+  const ok=S.chat===c&&!!a&&a.identity===c.agent.identity&&!c.stale&&!c.following&&!c.unsure&&!c.exited&&!c.followPending&&c.record?.id===before&&(!a.agent_status||queueSendable(a));
   if(ok)FOLLOW.okAt=Date.now();return ok;}
  // A slow or failed check: "现在发" (the person is looking at this chat) settles for the status check.
  catch(_){return !!force&&queueStatusOk(c);}
@@ -217,7 +222,7 @@ function queueLabel(c,q,it,i){
  if(q.checkFails>=2)return '排队中 · 窗格确认有点慢，可以点「立即发送」';
  if(q.why==='wait')return '排队中 · 等上一条被接收';
  if(q.why==='hold')return '排队中 · 正在确认窗格';
- const st=c?.agent?.agent_status;return st==='blocked'?(qaPicker(c.agent)?'排队中 · 选完再发':'排队中 · 处理完确认再发'):st==='working'?'排队中 · 等它停下再发':'排队中 · 马上发';}
+ const st=agentState(c?.agent);return st==='kids'?'排队中 · 马上发':st==='blocked'?(qaPicker(c.agent)?'排队中 · 选完再发':'排队中 · 处理完确认再发'):st==='working'?'排队中 · 等它停下再发':'排队中 · 马上发';}
 function queueTimeline(list){
  const key=draftKey(),q=Q.get(key);if(!q?.items.length)return;const c=S.chat;
  // The section and its rows are kept across repaints (timeline.js tlSendRow): a waiting message
@@ -230,15 +235,16 @@ function queueTimeline(list){
   kids.push(bar);}
  const live=!!(c?.agent&&!c.stale&&!c.exited);
  q.items.forEach((it,i)=>{
-  const busy=it.state==='checking'||it.state==='sending'||it.state==='interrupting',idle=['idle','done'].includes(c?.agent?.agent_status);
+  const busy=it.state==='checking'||it.state==='sending'||it.state==='interrupting',ready=queueSendable(c?.agent);
   const can=it.state==='queued'||it.state==='unknown',now=it.state==='queued'&&live&&!q.inflight;
   kids.push(tlSendRow(it.row||it.qid,{cls:'queued'+(it.state==='unknown'?' unknown':busy?' busy':''),label:queueLabel(c,q,it,i),spin:busy,text:it.text,
    images:it.pics.map(p=>({url:p.thumb})),files:(it.docs||[]).map(f=>({file:f.name,size:f.size})),at:it.at,
    reason:it.reason&&it.state!=='sending'?(it.state==='unknown'?it.reason:'上次'+it.reason):'',
-   acts:can?{sig:[it.state,live?1:0,now?1:0,now&&idle?1:0].join('|'),build:()=>{const acts=el('div','queue-actions');
+   acts:can?{sig:[it.state,live?1:0,now?1:0,now&&ready?1:0].join('|'),build:()=>{const acts=el('div','queue-actions');
     acts.append(btn('删掉','',()=>queueDrop(key,it.qid)));acts.append(btn(live?'修改':'复制','',()=>queueEdit(key,it.qid)));
-    // 立即发送: interrupts a busy agent first (see queueNow); an idle one just gets it now.
-    if(now){const b=btn('立即发送','now',()=>queueNowAsk(key,it.qid));b.title=idle?'现在就发':c?.agent?.agent_status==='blocked'?'先按 Esc 取消它在等的问题，再发这条':'先中断它正在做的事，再发这条';acts.append(b);}
+    // 立即发送: interrupts a busy agent first (see queueNow); an idle one (or a parent held by
+    // its sub-agents) just gets it now.
+    if(now){const b=btn('立即发送','now',()=>queueNowAsk(key,it.qid));b.title=ready?'现在就发':c?.agent?.agent_status==='blocked'?'先按 Esc 取消它在等的问题，再发这条':'先中断它正在做的事，再发这条';acts.append(b);}
     return acts;}}:null}));});
  // Patch in place: rows that stay are never detached.
  const want=new Set(kids);[...box.childNodes].forEach(n=>{if(!want.has(n))n.remove();});

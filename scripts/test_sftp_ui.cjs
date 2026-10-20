@@ -83,7 +83,7 @@ await page.addInitScript(()=>{
    else if(!['protect','settings','cacheGet','cachePut','setAlerts','watchState','activate'].includes(op))throw Error('unexpected native op '+op);
    if(op==='cacheGet')data={value:null};
   }catch(e){return fail(e.message);}
-  setTimeout(()=>nativeResult(id,{ok:true,data}),10);}};
+  setTimeout(()=>nativeResult(id,{ok:true,data}),(op==='sftpPreviewPage'&&fx.pageDelay)||10);}};
  function fxC(p){return fx.C[p]||'';}
  // Fake transfer progress: the test moves it by hand.
  window.fxStep=(id,done,state,extra={})=>{const t=fx.transfers.find(x=>x.id===id);t.done=done;if(state)t.state=state;Object.assign(t,extra);};
@@ -297,6 +297,19 @@ await page.locator('.fx-page-slider').evaluate(el=>{el.value='3';el.dispatchEven
 await page.waitForFunction(()=>FX.pv?.page===2&&FX.pv?.pageData?.index===2);
 assert.equal(await page.locator('.fx-page-input').inputValue(),'3');
 await page.getByRole('button',{name:'上一页',exact:true}).click();await page.waitForFunction(()=>FX.pv?.page===1);
+// A slow page stays readable while it renders: the previous page remains (no blank spinner) with
+// only a small busy chip; the outgoing image is reused, not reloaded.
+await page.waitForTimeout(250);
+await page.evaluate(async()=>{while(FX.pv.pdfPrefetching.size)await new Promise(r=>setTimeout(r,20));FX.pv.pagesCache.clear();fx.pageDelay=600;});
+await page.getByRole('button',{name:'下一页',exact:true}).click();
+await page.waitForTimeout(80);
+assert.equal(await page.locator('.fx-page-busy').count(),1,'a small busy chip while the page renders');
+assert((await page.locator('#fx-body .fx-pdf img').count())>=1,'the previous page stays on screen');
+assert.equal(await page.getByText(/正在渲染第/).count(),0,'no full-screen blank while turning pages');
+assert.equal(await page.locator('#fx-body .fx-viewer-status').count(),0,'no overlay replaces the document');
+await page.waitForFunction(()=>FX.pv?.page===2&&FX.pv?.pageData?.index===2);
+await page.waitForFunction(()=>!document.querySelector('.fx-page-busy'));
+await page.evaluate(()=>{fx.pageDelay=0;});
 await back();
 // Binary fallback keeps the useful actions and moves no bytes into the page.
 await row('blob.bin').locator('.file-row').click();await title('blob.bin');
