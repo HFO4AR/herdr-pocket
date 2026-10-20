@@ -1,6 +1,6 @@
 # 文件 preview phase 2: video/audio (2026-10-20)
 
-Validated source: `004adb1`.
+Validated source: `89eb603`.
 
 - Added whole-file video/audio caching over the device's existing SFTP session into a separate `cacheDir/media-preview` cache (1 GB LRU quota, 20 MB confirmation, 1 GB hard limit, free-space check) with real byte progress and cancellation. Metadata and a ≤ 512 px JPEG poster come from `MediaMetadataRetriever`; a JSON sidecar plus the original file extension keep name/MIME across process death.
 - Added the native `PlayerActivity` (`TextureView` + `MediaPlayer`): play/pause, seek bar, elapsed/total, mute, screen-on, audio focus, headphone-unplug pause, pause on `onPause`, release/pin-end on `onDestroy`, rotation/fullscreen/immersive, and a friendly fallback with 用其他应用打开/分享 for unsupported codecs. The file is pinned while the player is open, so prune and 清除缓存 cannot delete it. The WebView never creates a `<video>`/`<audio>` element and never receives a media URL.
