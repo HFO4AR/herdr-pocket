@@ -96,6 +96,12 @@ function filesWideSolo(){
  const de=document.documentElement;de.classList.add('wide-on');de.classList.remove('wide-split','wide-focus');}
 function renderFiles(){
  const v=FX.view;if(!v)return;filesIcons();
+ // render() (status polls, connection changes) rebuilds this screen: the list keeps its reading
+ // position instead of snapping to the top, the same as the tabs do, and closing a preview comes back
+ // to where the list was. A text preview keeps its own scroll the same way (a PDF keeps its anchor).
+ const oldMain=document.getElementById('files-main'),oldBody=document.getElementById('fx-body');
+ if(oldMain)v.listScroll={path:filesHere(),top:oldMain.scrollTop};
+ if(FX.pv&&oldBody&&oldBody.dataset.pv===FX.pv.token&&FX.pv.keepScroll===undefined)FX.pv.keepScroll=oldBody.scrollTop;
  filesWideSolo();
  if(FX.pv)return renderPreviewView();
  const root=shell();root.classList.add('files-shell');
@@ -107,7 +113,8 @@ function renderFiles(){
  const main=el('main','main files-main');main.id='files-main';const list=el('div','files-list');list.id='files-list';main.append(list);root.append(main);
  pullRefresh(main,()=>filesLoad(filesHere()||v.path));
  const dock=el('div','files-dock');dock.id='files-dock';root.append(dock);
- paintFiles();}
+ paintFiles();
+ if(v.listScroll&&v.list&&v.listScroll.path===filesHere())main.scrollTop=v.listScroll.top;}
 function paintFiles(){if(!FX.view)return;if(FX.pv){paintPreview();return;}if(!document.getElementById('files-list')){if(!S.chat&&!overlay.querySelector('.sheet')&&!(typeof T!=='undefined'&&T.view))renderFiles();return;}paintCrumbs();paintFileList();paintDock();}
 
 // "/ › home › yuki › src" with the home folder shown as 主目录; scrolled so the current folder shows.
@@ -489,7 +496,7 @@ function renderPreviewView(){
  find.append(input,count,prev,next,close);root.append(find);
  input.oninput=()=>{clearTimeout(fxFindTimer);fxFindTimer=setTimeout(fxRunSearch,120);};
  input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();fxFindGo(e.shiftKey?-1:1);}else if(e.key==='Escape')fxFindClose();};
- const body=el('div','fx-body'+(p.kind==='image'||p.kind==='pdf'?' fx-view-body':''));body.id='fx-body';root.append(body);
+ const body=el('div','fx-body'+(p.kind==='image'||p.kind==='pdf'?' fx-view-body':''));body.id='fx-body';body.dataset.pv=p.token;root.append(body);
  if(p.kind!=='image'&&p.kind!=='pdf'&&p.kind!=='office')fxBindSwipe(body);
  const foot=el('div','fx-foot');foot.id='fx-foot';root.append(foot);
  paintPreview();

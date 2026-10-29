@@ -245,6 +245,20 @@ assert.deepEqual(await page.locator('.fx-table th').allTextContents(),['name','s
 assert.equal(await page.locator('.fx-table tbody tr').count(),2);
 await page.getByRole('button',{name:'源码',exact:true}).click();await page.locator('.fx-code').waitFor();
 await back();
+// A repaint (status polls call render()) keeps the list where it was; closing a preview comes back there.
+await page.setViewportSize({width:390,height:420});
+const listTop=await page.evaluate(()=>{const m=document.getElementById('files-main');m.scrollTop=m.scrollHeight;return m.scrollTop;});
+assert(listTop>0,'the list scrolls at this height');
+await page.evaluate(()=>render());
+assert.equal(await page.evaluate(()=>document.getElementById('files-main').scrollTop),listTop,'render() keeps the file list position');
+await row('notes.md').locator('.file-row').evaluate(b=>b.click());await title('notes.md');
+await page.locator('.fx-md').waitFor();
+await page.evaluate(()=>{const b=document.getElementById('fx-body');b.scrollTop=40;render();});
+assert.equal(await page.evaluate(()=>document.getElementById('fx-body').scrollTop),await page.evaluate(()=>Math.min(40,document.getElementById('fx-body').scrollHeight-document.getElementById('fx-body').clientHeight)),'render() keeps a text preview position');
+await back();
+assert.equal(await page.evaluate(()=>document.getElementById('files-main').scrollTop),listTop,'closing a preview returns to the same list position');
+await page.setViewportSize({width:390,height:844});
+console.log('PASS: render() and closing a preview keep the file list position');
 // Image: the original cache file is served by URL (never data:), decoded at full width.
 await row('shot.png').locator('.file-row').click();await title('shot.png');await page.locator('.fx-zoom img').waitFor();
 await page.waitForFunction(()=>{const i=document.querySelector('.fx-zoom img');return i&&i.complete&&i.naturalWidth>2000;});

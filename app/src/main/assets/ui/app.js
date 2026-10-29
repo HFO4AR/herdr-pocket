@@ -570,6 +570,10 @@ let sendSeq=0;
 function sendPulse(b){if(!b)return;b.classList.remove('fired');void b.offsetWidth;b.classList.add('fired');setTimeout(()=>b.classList.remove('fired'),400);}
 function scrollBottom(){const n=document.getElementById('chat-scroll');if(n)n.scrollTop=n.scrollHeight;}
 // A pending bubble disappears once the transcript shows the same user text.
+// A delivered one also settles when the transcript copy ends with its words after a little more
+// (something left in the agent's input box got joined in front, e.g. a stray "+"): the message did
+// arrive once, and keeping the bubble showed it twice for three minutes.
+function outboxJoined(u,o,s){return o.state==='sent'&&s.length>=2&&u.at>=o.at-120000&&u.sig.length>s.length&&u.sig.length-s.length<=200&&u.sig.endsWith(s);}
 function settleOutbox(){if(!S.outbox.length)return false;const count=S.outbox.length;
  const users=S.messages.filter(m=>m.kind==='user').slice(-8).map(m=>{const x=imgSplit(m);return {id:m.id,sig:msgSig(x.text)+'\u0000'+(x.specs.length?1:0),at:toDate(m.timestamp)?.getTime()||0};});
  const sig=o=>msgSig(o.text)+'\u0000'+(o.images?.length?1:0);
@@ -581,7 +585,7 @@ function settleOutbox(){if(!S.outbox.length)return false;const count=S.outbox.le
   const q=Q.get(o.key),dup=q?.items.find(it=>it.state==='queued'&&it.text.trim()===o.text.trim());
   if(dup){dup.reason='和刚送到的那条一样，确认还要再发吗';queuePause(q,'排队里有一条和刚送到的消息一样，先停下。不需要就删掉，要发再点继续',true);}}
  // The transcript copy takes the bubble's place without an entrance of its own (timeline.js tlArrivals).
- S.outbox=S.outbox.filter(o=>{const u=o.state==='sent'&&users.find(u=>u.sig===sig(o));if(u){TL_HANDOFF.add(u.id);return false;}return Date.now()-o.at<180000;});return S.outbox.length!==count;}
+ S.outbox=S.outbox.filter(o=>{const s=sig(o),u=o.state==='sent'&&(users.find(u=>u.sig===s)||users.find(u=>outboxJoined(u,o,s)));if(u){TL_HANDOFF.add(u.id);return false;}return Date.now()-o.at<180000;});return S.outbox.length!==count;}
 // A finish only counts when Herdr itself reported working → stopped just now;
 // the optimistic "working" set after sending must not flash "做完了".
 function onAgentStatus(was,now){

@@ -135,6 +135,16 @@ assert.deepEqual(await page.evaluate(()=>{const h='a'.repeat(64);const t='<paste
  ['终端界面，没有颜色，不好看',true,1,false]);
 console.log('PASS: pasted-content wrappers are hidden and do not block settling');
 
+// Something left in the agent's input box joined in front of a delivered message ("+在文件…"): the
+// pending bubble still settles once. An undelivered one, or an older transcript line, does not.
+assert.deepEqual(await page.evaluate(()=>{const at=Date.now(),u=(t,dt=0)=>({sig:msgSig(t),at:at+dt});
+ return [outboxJoined(u('+在文件页面里会跳到顶部'),{state:'sent',at},msgSig('在文件页面里会跳到顶部')),
+  outboxJoined(u('+在文件页面里会跳到顶部'),{state:'failed',at},msgSig('在文件页面里会跳到顶部')),
+  outboxJoined(u('+在文件页面里会跳到顶部',-600000),{state:'sent',at},msgSig('在文件页面里会跳到顶部')),
+  outboxJoined(u('在文件页面里会跳到顶部，另外一件事'),{state:'sent',at},msgSig('在文件页面里会跳到顶部'))];}),
+ [true,false,false,false]);
+console.log('PASS: a delivered message with leftover box text joined in front settles its bubble');
+
 // Herdr says "stopped" before the reply reaches the transcript: the header says it is reading the
 // reply (not 已完成) and history is read fast until the reply arrives.
 await page.evaluate(async()=>{Q.clear();S.outbox=[];fx.list=fx.list.map(a=>({...a,agent_status:'done'}));S.statusBusy=false;await refreshStatus();
