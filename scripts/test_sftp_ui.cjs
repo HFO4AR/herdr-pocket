@@ -71,12 +71,12 @@ await page.addInitScript(()=>{
      fx.previews.push(a);const key='a'.repeat(40),name=base(p),mime=/\.pdf$/.test(p)?'application/pdf':/\.png$/.test(p)?'image/png':'text/plain';
      const result={key,name,mime,size:e.size,mtime:e.mtime,cached:false,complete:true,path:p};
      if(a.kind==='image'){setTimeout(()=>window.nativeProgress(id,String(Math.floor(e.size/2))),8);setTimeout(()=>nativeResult(id,{ok:true,data:{...result,url:fx.IMG,width:2400,height:3200,origWidth:2400,origHeight:3200}}),fx.previewDelay);return;}
-     if(a.kind==='pdf'){setTimeout(()=>window.nativeProgress(id,String(Math.floor(e.size/2))),8);setTimeout(()=>nativeResult(id,{ok:true,data:{...result,page:{url:fx.PAGE,width:3200,height:2400,index:0,pages:3}}}),fx.previewDelay);return;}
+     if(a.kind==='pdf'){setTimeout(()=>window.nativeProgress(id,String(Math.floor(e.size/2))),8);setTimeout(()=>nativeResult(id,{ok:true,data:{...result,page:{url:fx.PAGE,width:3200,height:2400,index:0,pages:3},sizes:[[600,800],[800,600],[600,800]]}}),fx.previewDelay);return;}
      const txt=fxC(p),binary=/\.bin$/.test(p);
      setTimeout(()=>window.nativeProgress(id,String(Math.floor(e.size/2))),10);
      setTimeout(()=>window.nativeProgress(id,String(e.size)),Math.max(40,Math.round(fx.previewDelay*.75)));
      setTimeout(()=>nativeResult(id,{ok:true,data:binary?{...result,binary:true,shown:0,truncated:false,tail:false,offset:0}:{...result,binary:false,text:txt,encoding:'UTF-8',shown:txt.length,truncated:false,tail:!!a.tail,offset:0}}),fx.previewDelay);return;}
-    else if(op==='sftpPreviewPage'){fx.previewPages.push(a);data={url:fx.PAGE,width:3200,height:2400,index:Math.max(0,Math.min(2,a.page)),pages:3};}
+    else if(op==='sftpPreviewPage'){fx.previewPages.push(a);if(fx.pageFail===a.page){fx.pageFail=-1;return fail('这页 PDF 渲染不了','preview_pdf');}data={url:fx.PAGE,width:3200,height:2400,index:Math.max(0,Math.min(2,a.page)),pages:3};}
     else if(op==='sftpPreviewOpen'){fx.previewOpened.push(a);data={};}
     else if(op==='sftpPreviewCancel'){fx.previewCancelled.push(a.token);data={};}
     else throw Error('unexpected '+op);}
@@ -270,54 +270,68 @@ assert.equal(await page.evaluate(()=>{const i=document.querySelector('.fx-zoom i
 assert.doesNotMatch(await page.locator('.fx-zoom').getAttribute('style'),/scale\(/,'zoom sizes the image; no huge scaled layer');
 await page.getByRole('button',{name:'适应屏幕',exact:true}).click();
 await back();
-// PDF: high-resolution page URLs, page input/slider, rotate/fit, reset on page change.
+// PDF: every page in one vertical scroll (no page turning), rendered natively at screen density as
+// it comes near; buttons, page input and slider scroll to a page; zoom resizes the pages.
 await row('report.pdf').locator('.file-row').click();await title('report.pdf');
-await page.locator('.fx-pdf img').waitFor();
-await page.waitForFunction(()=>{const i=document.querySelector('.fx-pdf img');return i&&i.complete&&i.naturalWidth>2000;});
-const pdfSrc=await page.locator('.fx-pdf img').getAttribute('src');
+await page.locator('.fx-pdf-page img').first().waitFor();
+await page.waitForFunction(()=>{const i=document.querySelector('.fx-pdf-page img');return i&&i.complete&&i.naturalWidth>2000;});
+const pdfSrc=await page.locator('.fx-pdf-page img').first().getAttribute('src');
 assert.match(pdfSrc,/^https:\/\/pocket\.invalid\/preview\/page\/[0-9a-f]{40}$/);
 assert.equal((await page.evaluate(()=>[...document.querySelectorAll('#fx-body img')].filter(i=>i.src.startsWith('data:image')).length)),0,'PDF pages never use data:');
+assert.equal(await page.locator('.fx-pdf-page').count(),3,'all pages are laid out in one scroll');
 assert.equal(await page.locator('.fx-page-input').inputValue(),'1');
+assert.equal(await page.getByRole('button',{name:'旋转 90 度',exact:true}).count(),0,'no single-page rotate in the continuous view');
 const pdfWidth=(await calls('sftpPreview')).filter(a=>a.kind==='pdf').at(-1).width;
-assert(pdfWidth>=1200&&pdfWidth<=3000,'PDF requests about 2× the device-pixel width, not 4×/4096: '+pdfWidth);
-// The page must fit the screen, not be clipped by a stage sized to the image's natural width.
-const pdfFit=await page.evaluate(()=>{const v=FX.pv.pdfView,r=v.stage.getBoundingClientRect(),z=v.el.getBoundingClientRect();return {stageW:r.width,zoomW:z.width,stageH:r.height,zoomH:z.height,scale:v.scale,fit:v.fit,innerW:innerWidth};});
-assert(pdfFit.stageW<=pdfFit.innerW+1,'PDF stage fits the screen: '+JSON.stringify(pdfFit));
-assert(pdfFit.zoomW<=pdfFit.stageW+1&&pdfFit.zoomH<=pdfFit.stageH+1,'the page fits the stage: '+JSON.stringify(pdfFit));
-assert(Math.abs(pdfFit.scale-pdfFit.fit)<.001,'opened at fit');
-// The page is laid out at its on-screen size (rasterized at display resolution), not a 2400 px layer scaled down.
-assert.equal(await page.evaluate(()=>{const i=document.querySelector('.fx-pdf .fx-zoom img');return i.offsetWidth<=FX.pv.pdfView.stageW+1&&getComputedStyle(document.querySelector('.fx-pdf .fx-zoom')).willChange!=='transform';}),true,'PDF page laid out at display size');
+assert(pdfWidth>=1200&&pdfWidth<=3000,'PDF pages render at the device-pixel width, not 4×/4096: '+pdfWidth);
+// Pages fit the screen width and keep their own shapes (portrait, landscape, portrait) before they render.
+const pdfLay=await page.evaluate(()=>{const s=document.querySelector('.fx-pdf-scroll').getBoundingClientRect();
+ return {sw:s.width,innerW:innerWidth,pages:[...document.querySelectorAll('.fx-pdf-page')].map(g=>{const r=g.getBoundingClientRect();return [r.width,r.height];}),style:[...document.querySelectorAll('.fx-pdf-page')].map(g=>g.getAttribute('style')).join(';')};});
+assert(pdfLay.sw<=pdfLay.innerW+1,'PDF scroll fits the screen: '+JSON.stringify(pdfLay));
+assert(pdfLay.pages.every(([w])=>w<=pdfLay.sw&&w>=pdfLay.sw-24),'pages fill the width: '+JSON.stringify(pdfLay));
+assert(Math.abs(pdfLay.pages[0][1]-pdfLay.pages[0][0]*4/3)<2&&Math.abs(pdfLay.pages[1][1]-pdfLay.pages[1][0]*3/4)<2,'each page keeps its own size: '+JSON.stringify(pdfLay));
+assert.doesNotMatch(pdfLay.style,/scale\(/,'pages are sized, never a scaled layer');
+await page.waitForFunction(()=>document.querySelectorAll('.fx-pdf-page img').length===3);
+assert.deepEqual((await page.evaluate(()=>fx.previewPages.map(a=>a.page))).sort(),[1,2],'the other pages are rendered once each, page 1 came with the preview');
 await page.setViewportSize({width:320,height:640});
 assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'PDF preview fits 320 px');
 assert.equal(await page.evaluate(()=>{const n=document.querySelector('.fx-pager');return !n||n.scrollWidth<=n.clientWidth+1;}),true,'page controls fit 320 px');
+await page.waitForFunction(()=>{const s=document.querySelector('.fx-pdf-scroll'),g=document.querySelector('.fx-pdf-page');return g.getBoundingClientRect().width<=s.clientWidth;});
 await shot('preview-pdf-320');
 await page.setViewportSize({width:390,height:844});
-await page.getByRole('button',{name:'旋转 90 度',exact:true}).click();
-assert.match(await page.locator('.fx-zoom').getAttribute('style'),/rotate\(90deg\)/);
-await page.getByRole('button',{name:'适应屏幕',exact:true}).click();
+// Pager: buttons, input and slider scroll to the page; scrolling by hand updates the number.
 await page.getByRole('button',{name:'下一页',exact:true}).click();
-await page.waitForFunction(()=>FX.pv?.page===1&&FX.pv?.pageData?.index===1);
+await page.waitForFunction(()=>FX.pv?.page===1);
 assert.equal(await page.locator('.fx-page-input').inputValue(),'2');
-assert.doesNotMatch(await page.locator('.fx-zoom').getAttribute('style'),/rotate\((?:90|180|270)deg\)/,'page change resets rotation');
-assert((await page.evaluate(()=>fx.previewPages.length))>0);
-assert((await page.evaluate(()=>fx.previewPages)).some(a=>a.page===1&&a.width>=1200),'page render width is high-DPI');
+assert(await page.evaluate(()=>{const s=document.querySelector('.fx-pdf-scroll'),g=document.querySelectorAll('.fx-pdf-page')[1];return g.getBoundingClientRect().top<s.getBoundingClientRect().bottom;}),'page 2 is on screen');
 await page.locator('.fx-page-slider').evaluate(el=>{el.value='3';el.dispatchEvent(new Event('change'));});
-await page.waitForFunction(()=>FX.pv?.page===2&&FX.pv?.pageData?.index===2);
+await page.waitForFunction(()=>FX.pv?.page===2);
 assert.equal(await page.locator('.fx-page-input').inputValue(),'3');
+assert.equal(await page.getByRole('button',{name:'下一页',exact:true}).isDisabled(),true,'下一页 stops at the last page');
 await page.getByRole('button',{name:'上一页',exact:true}).click();await page.waitForFunction(()=>FX.pv?.page===1);
-// A slow page stays readable while it renders: the previous page remains (no blank spinner) with
-// only a small busy chip; the outgoing image is reused, not reloaded.
-await page.waitForTimeout(250);
-await page.evaluate(async()=>{while(FX.pv.pdfPrefetching.size)await new Promise(r=>setTimeout(r,20));FX.pv.pagesCache.clear();fx.pageDelay=600;});
-await page.getByRole('button',{name:'下一页',exact:true}).click();
-await page.waitForTimeout(80);
-assert.equal(await page.locator('.fx-page-busy').count(),1,'a small busy chip while the page renders');
-assert((await page.locator('#fx-body .fx-pdf img').count())>=1,'the previous page stays on screen');
-assert.equal(await page.getByText(/正在渲染第/).count(),0,'no full-screen blank while turning pages');
-assert.equal(await page.locator('#fx-body .fx-viewer-status').count(),0,'no overlay replaces the document');
-await page.waitForFunction(()=>FX.pv?.page===2&&FX.pv?.pageData?.index===2);
-await page.waitForFunction(()=>!document.querySelector('.fx-page-busy'));
-await page.evaluate(()=>{fx.pageDelay=0;});
+await page.locator('.fx-pdf-scroll').evaluate(s=>{s.scrollTop=0;});
+await page.waitForFunction(()=>FX.pv?.page===0);
+assert.equal(await page.locator('.fx-page-input').inputValue(),'1','scrolling updates the page number');
+// Zoom: 100% is the fitted width; + resizes the pages; past 140% the visible pages get a sharper render.
+const w0=await page.evaluate(()=>document.querySelector('.fx-pdf-page').getBoundingClientRect().width);
+await page.getByRole('button',{name:'放大',exact:true}).click();
+assert.equal(await page.locator('#fx-zoom-pct').innerText(),'125%');
+const w1=await page.evaluate(()=>document.querySelector('.fx-pdf-page').getBoundingClientRect().width);
+assert(Math.abs(w1-w0*1.25)<2,'zoom resizes the pages: '+w0+' → '+w1);
+assert(await page.evaluate(()=>document.querySelector('.fx-pdf-scroll').scrollWidth>document.querySelector('.fx-pdf-scroll').clientWidth),'a zoomed page pans sideways');
+await page.getByRole('button',{name:'放大',exact:true}).click();
+await page.waitForFunction(w=>fx.previewPages.some(a=>a.width>w),pdfWidth);
+await page.getByRole('button',{name:'适应屏幕',exact:true}).click();
+assert.equal(await page.locator('#fx-zoom-pct').innerText(),'100%');
+await back();
+// A page that fails to render says so in place with 重试; the rest of the document still shows.
+await page.evaluate(()=>{fx.pageFail=1;});
+await row('report.pdf').locator('.file-row').click();await title('report.pdf');
+await page.locator('.fx-pdf-ph.err').waitFor();
+assert.match(await page.locator('.fx-pdf-ph.err').innerText(),/第 2 页没渲染出来/);
+assert((await page.locator('.fx-pdf-page img').count())>=1,'other pages still show');
+await page.locator('.fx-pdf-ph.err').getByRole('button',{name:'重试',exact:true}).click();
+await page.waitForFunction(()=>document.querySelectorAll('.fx-pdf-page')[1].querySelector('img'));
+assert.equal(await page.locator('.fx-pdf-ph.err').count(),0);
 await back();
 // Binary fallback keeps the useful actions and moves no bytes into the page.
 await row('blob.bin').locator('.file-row').click();await title('blob.bin');

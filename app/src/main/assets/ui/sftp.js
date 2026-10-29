@@ -17,7 +17,7 @@ const FX={view:null,transfers:[],states:new Map(),want:0,sort:'name',hidden:fals
 const FX_BIG=200e6;// downloads above this ask first (mobile data, phone storage)
 const FX_MEDIA_MAX=20_000_000;// mirrors Previews.MEDIA_MAX / MediaPreview.CONFIRM_MAX: large previews ask first
 const FX_PLAY_MAX=1_000_000_000;// mirrors MediaPreview.HARD_MAX: one cached video/audio file
-const FX_MAX_LINES=4000,FX_SYNTAX_LINES=2500,FX_SEARCH_LINES=20000,FX_PCACHE=12,FX_PDF_CACHE=5;const FX_IMG=/\.(png|jpe?g|gif|webp|bmp|avif|heic|heif)$/i,FX_PDF=/\.pdf$/i;
+const FX_MAX_LINES=4000,FX_SYNTAX_LINES=2500,FX_SEARCH_LINES=20000,FX_PCACHE=12;const FX_IMG=/\.(png|jpe?g|gif|webp|bmp|avif|heic|heif)$/i,FX_PDF=/\.pdf$/i;
 // Videos/audio are cached whole and played by the native PlayerActivity; the WebView never gets a media element.
 const FX_AUDIO=/\.(mp3|m4a|aac|wav|flac|ogg|oga|opus|wma|amr|mid|midi|aiff|aif|mka)$/i;
 const FX_MEDIA=/\.(mp4|m4v|mov|mkv|webm|avi|3gp|m2ts|mpg|mpeg|flv|wmv|mp3|m4a|aac|wav|flac|ogg|oga|opus|wma|amr|mid|midi|aiff|aif|mka)$/i;
@@ -370,7 +370,7 @@ function filesPreview(e,opts={}){
  const cacheable=kind!=='office',key=cacheable?fxPreviewKey(v.device,path,e,kind,tail):'',hit=cacheable?FX.pcache.get(key):null;
  if(FX.pv)fxStopTail();
  FX.pv={entry:e,path,name:e.name,size,mtime:e.mtime||0,kind,tail,wrap:false,mode:'',q:'',hits:[],hit:-1,
-  page:0,pageData:null,pages:0,pagesCache:new Map(),pdfSeq:0,pdfLoading:false,pdfError:'',pdfView:null,pdfGhost:null,pdfPrefetching:new Set(),
+  page:0,pages:0,pdfData:new Map(),pdfFail:new Map(),pdfMiss:new Map(),pdfBusy:false,pdfDoc:null,pdfZoom:1,pdfAnchor:null,pdfFirst:null,pdfNote:'',pdfError:'',
   imgView:null,imgError:'',imgLoading:false,imgTry:0,cached:!!hit,fromCache:!!hit,loading:!hit,error:'',r:null,
   token:'pv'+uuid(),allowLarge:!!opts.large,prepared:false,keepScroll:undefined,keepBottom:false,slide:opts.slide||0};
  filesHintSeen();
@@ -433,10 +433,11 @@ function fxPrepare(r){
  const p=FX.pv;if(!p)return;
  p.rawText=typeof r.text==='string'?r.text:'';
  p.encoding=r.encoding||'';p.binary=!!r.binary;p.truncated=!!r.truncated;p.tailResult=!!r.tail;
- p.pages=r.page?.pages||p.pages||0;p.page=r.page?.index??p.page??0;p.pageData=r.page||p.pageData||null;
+ p.pages=r.page?.pages||p.pages||0;
  p.media=r.media||p.media||null;p.poster=typeof r.poster==='string'?r.poster:(p.poster||'');
- p.prettyText='';p.tableData=null;p.totalLines=0;p.lines=[];p.imgError='';p.pdfError='';p.pdfLoading=false;p.pdfGhost=null;
- if(r.page){p.pages=r.page.pages||p.pages;p.page=r.page.index||0;p.pageData=r.page;fxPageCachePut(p,p.page,r.page);} if(!p.prepared){
+ p.prettyText='';p.tableData=null;p.totalLines=0;p.lines=[];p.imgError='';p.pdfError='';
+ if(r.page){p.pdfFirst=r.page;const got=p.pdfData.get(r.page.index||0)||{};if(!got.lo){got.lo=r.page;p.pdfData.set(r.page.index||0,got);}}
+ if(!p.prepared){
   if(FX_MD.test(p.name))p.mode='rendered';
   else if(FX_CSV.test(p.name))p.mode='table';
   else if(FX_JSON.test(p.name))p.mode='pretty';
@@ -462,14 +463,13 @@ function fxParseCsv(text,sep){
   else if(c!=='\r')cell+=c;}
  if(cell!==''||row.length){row.push(cell);rows.push(row);}
  return rows.map(r=>r.slice(0,50));}
-// Render at the device's real pixel density, not a 1600 CSS-pixel clamp: a page then stays sharp at
-// 1:1 and while pinching on a 2–3× display. Native applies its own 4096/total-pixel ceiling.
-function fxPdfWidth(){
- const body=document.getElementById('fx-body');const css=Math.max(240,(body?.clientWidth||innerWidth)-24);
+// Pages are rendered at the screen's real pixel density for fitting the width, which is sharp at
+// 100% and keeps each decoded page around 2 MP. Past FX_PDF_HI zoom the pages on screen are swapped
+// for a 2.5× render (~10 MP each), so only those get it. Native applies its own pixel ceiling.
+function fxPdfWidth(hi){
+ const body=document.getElementById('fx-body');const css=Math.max(240,(body?.clientWidth||innerWidth)-2*FX_PDF_GAP);
  const dpr=Math.max(1,Math.min(4,window.devicePixelRatio||1));
- // 2× the device-pixel width is sharp at fit and at 1:1 and still allows some zoom; asking for
- // 4× (up to 4096) decoded ~10 MP per page and made turning pages slow and janky.
- return Math.min(3000,Math.max(1200,Math.round(css*dpr*2)));
+ return Math.min(3000,Math.max(1200,Math.round(css*dpr*(hi?2.5:1))));
 }
 
 // ─── Preview screen ─────────────────────────────────────────────────────────
@@ -517,7 +517,7 @@ function paintPreview(){
  else if(p.error&&!p.r)body.append(fxPreviewError());
  else if(p.kind==='image'&&p.r&&!p.binary&&p.r.url)fxImageBody(body);
  else if(p.kind==='media'&&p.r&&!p.binary)fxMediaBody(body);
- else if(p.kind==='pdf'&&p.r&&!p.binary&&(p.pageData||p.pdfError||p.r.page))fxPdfBody(body); else if(p.kind==='text'&&p.r&&!p.binary)fxTextBody(body);
+ else if(p.kind==='pdf'&&p.r&&!p.binary&&(p.pdfError||p.r.page))fxPdfBody(body); else if(p.kind==='text'&&p.r&&!p.binary)fxTextBody(body);
  else fxFallbackBody(body);
  if(p.keepScroll!==undefined){body.scrollTop=p.keepScroll;p.keepScroll=undefined;}
  else if(scroll&&p.kind!=='image')body.scrollTop=Math.min(scroll,Math.max(0,body.scrollHeight-body.clientHeight));
@@ -535,13 +535,20 @@ function paintPreviewTools(n){
   if(FX_JSON.test(p.name))n.append(chip(p.mode==='pretty'?'原始':'格式化',()=>fxToggleMode('pretty'),'fSort',p.mode==='pretty'));
   if(FX_CSV.test(p.name))n.append(chip(p.mode==='table'?'源码':'表格',()=>fxToggleMode('table'),'fSort',p.mode==='table'));
  }
- if(p.kind==='image'||p.kind==='pdf'){
-  n.append(chip('−',()=>fxViewerZoomBy(p.kind==='image'?p.imgView:p.pdfView,.8),'fMinus',false,'缩小'));
-  n.append(chip('+',()=>fxViewerZoomBy(p.kind==='image'?p.imgView:p.pdfView,1.25),'plus',false,'放大'));
+ if(p.kind==='image'){
+  n.append(chip('−',()=>fxViewerZoomBy(p.imgView,.8),'fMinus',false,'缩小'));
+  n.append(chip('+',()=>fxViewerZoomBy(p.imgView,1.25),'plus',false,'放大'));
   const pct=el('span','pill fx-chip-static fx-zoom-pct','100%');pct.id='fx-zoom-pct';n.append(pct);
-  n.append(chip('适应',()=>fxViewerFit(p.kind==='image'?p.imgView:p.pdfView),'fFit',false,'适应屏幕'));
-  n.append(chip('1:1',()=>fxViewerOne(p.kind==='image'?p.imgView:p.pdfView),'fSelect',false,'按原像素显示'));
-  n.append(chip('旋转',()=>fxViewerRotate(p.kind==='image'?p.imgView:p.pdfView),'refresh',false,'旋转 90 度'));
+  n.append(chip('适应',()=>fxViewerFit(p.imgView),'fFit',false,'适应屏幕'));
+  n.append(chip('1:1',()=>fxViewerOne(p.imgView),'fSelect',false,'按原像素显示'));
+  n.append(chip('旋转',()=>fxViewerRotate(p.imgView),'refresh',false,'旋转 90 度'));
+ }
+ if(p.kind==='pdf'){
+  // 100% is the page width fitted to the screen, the way a phone document viewer opens.
+  n.append(chip('−',()=>fxPdfZoom(p,p.pdfZoom/1.25),'fMinus',false,'缩小'));
+  n.append(chip('+',()=>fxPdfZoom(p,p.pdfZoom*1.25),'plus',false,'放大'));
+  const pct=el('span','pill fx-chip-static fx-zoom-pct',Math.round(p.pdfZoom*100)+'%');pct.id='fx-zoom-pct';n.append(pct);
+  n.append(chip('适应',()=>fxPdfZoom(p,1),'fFit',false,'适应屏幕'));
  }
  if(p.kind==='media'&&p.media?.durationMs>0)n.append(el('span','pill fx-chip-static',fxDuration(p.media.durationMs)));
  n.append(chip('下载',()=>fileDownload(p.entry,false),'download',false,'下载到手机'));
@@ -767,7 +774,9 @@ function fxViewerCycle(v){
  if(next===v.fit){v.scale=v.fit;v.tx=0;v.ty=0;fxViewerApply(v);}else fxViewerZoomAt(v,next);
 }
 function fxViewerResize(){
- const p=FX.pv;if(!p)return;const v=p.kind==='image'?p.imgView:p.pdfView;if(!v)return;
+ const p=FX.pv;if(!p)return;
+ if(p.kind==='pdf'){const d=p.pdfDoc,a=p.pdfAnchor;if(!d)return;fxPdfLayout(p);if(a)fxPdfToAnchor(p,a);fxPdfOnScroll(p);return;}
+ const v=p.imgView;if(!v)return;
  const atFit=Math.abs(v.scale-v.fit)<.01;if(!fxViewerMetrics(v))return;
  if(atFit){v.scale=v.fit;v.tx=0;v.ty=0;}else fxViewerClamp(v);
  fxViewerApply(v);
@@ -861,24 +870,15 @@ function fxMediaPlay(){
   .catch(e=>{if(FX.pv!==p)return;p.playBusy=false;p.playError=e.message||String(e);paintPreview();});
 }
 
-// ─── PDF: one page at a time, rendered natively (the WebView never parses a PDF) ───
-function fxPageCachePut(p,page,data){
- const cache=p.pagesCache||(p.pagesCache=new Map());cache.delete(page);cache.set(page,data);
- while(cache.size>FX_PDF_CACHE)cache.delete(cache.keys().next().value);
-}
-// Turning a page keeps the previous page's own, already decoded <img> over the new stage until the
-// next one lands. Replacing the body with a spinner made every page change flash.
-function fxPdfGhostTake(p){
- const v=p.pdfView;
- if(!v?.img||!v.img.complete||!v.img.naturalWidth){p.pdfGhost=null;return;}
- v.img.remove();p.pdfGhost=v.img;
-}
-function fxPdfBusy(p,on){
- const stage=p.pdfView?.stage;if(!stage)return;
- let chip=stage.querySelector('.fx-page-busy');
- if(!on){chip?.remove();return;}
- if(!chip){chip=el('div','fx-page-busy');chip.append(el('span','spinner'),el('span',''));stage.append(chip);}
- chip.lastChild.textContent='正在翻到第 '+(p.page+1)+' 页…';
+// ─── PDF: every page in one vertical scroll, like a phone's document viewer ───
+// Pages are rendered natively one at a time (the WebView never parses a PDF), only near the screen,
+// and far-away pages drop their image so a long document stays light. All pages are laid out up front
+// from their sizes, so scrolling never jumps. Zoom resizes the pages themselves (no scaled layer, see
+// fxViewerApply) around the pinch point; native scrolling does the panning.
+const FX_PDF_GAP=8,FX_PDF_ZMIN=.5,FX_PDF_ZMAX=5,FX_PDF_HI=1.4;
+function fxPdfAspect(p,i){
+ const s=p.r?.sizes?.[i];if(s&&s[0]>0&&s[1]>0)return s[1]/s[0];
+ const f=p.pdfFirst;return f&&f.width>0&&f.height>0?f.height/f.width:1.414;
 }
 function fxPdfBody(body){
  const p=FX.pv,wrap=el('div','fx-pdf');wrap.id='fx-pdf';
@@ -889,65 +889,152 @@ function fxPdfBody(body){
   if(p.r?.complete)acts.append(btn('用其他应用打开','secondary',()=>fxPreviewOpen(false),'file'));
   box.append(acts);wrap.append(box);body.append(wrap);return;
  }
- if(!p.pageData){const l=el('div','fx-viewer-status');l.setAttribute('role','status');l.append(el('span','spinner'),el('span','','正在渲染第 '+(p.page+1)+' 页…'));wrap.append(l);body.append(wrap);return;}
- const stage=el('div','fx-stage fx-pdf-stage');stage.tabIndex=0;stage.setAttribute('role','group');stage.setAttribute('aria-label',p.name+' 第 '+(p.page+1)+' 页，可缩放');
- const zoom=el('div','fx-zoom');const img=el('img');img.alt=p.name+' 第 '+(p.page+1)+' 页';img.decoding='async';zoom.append(img);stage.append(zoom);
- // The outgoing page stays on top (no spinner) and fades out once the incoming one is fitted.
- const ghost=p.pdfGhost?el('div','fx-page-ghost'):null;if(ghost){ghost.append(p.pdfGhost);stage.append(ghost);p.pdfGhost=null;}
- const v={el:zoom,stage,img,naturalW:0,naturalH:0,rotation:0,scale:1,tx:0,ty:0,fit:1,min:.05,max:8};p.pdfView=v;
- const box=ghost?null:fxViewerLoading(stage,'正在显示这一页…');
- img.addEventListener('load',()=>{v.naturalW=img.naturalWidth;v.naturalH=img.naturalHeight;fxViewerFit(v,true);box?.remove();p.pdfLoading=false;fxPdfBusy(p,false);
-  if(ghost){ghost.classList.add('out');setTimeout(()=>ghost.remove(),180);}});
- img.addEventListener('error',()=>{p.pdfError='页面图片没有加载出来；可以重试或先下载。';p.pdfLoading=false;paintPreview();});
- wrap.append(stage);body.append(wrap);
- fxViewerBind(stage,v);
- img.src=p.pageData.url;
- if(img.complete&&img.naturalWidth)setTimeout(()=>{if(v.naturalW===0)img.dispatchEvent(new Event('load'));},0);
-}
-function fxPdfRetry(){const p=FX.pv;if(!p)return;p.pdfError='';fxPdfGo(p.page,true);}
-function fxPdfPrefetch(p,page){
- if(!p||page<0||page>=p.pages)return;const cache=p.pagesCache||(p.pagesCache=new Map());
- if(cache.has(page)||p.pdfPrefetching.has(page))return;p.pdfPrefetching.add(page);
- rpc('sftpPreviewPage',{key:p.r.key,page,width:fxPdfWidth()}).then(r=>{if(FX.pv===p&&r?.url)fxPageCachePut(p,page,r);}).catch(()=>{}).finally(()=>p.pdfPrefetching.delete(page));
-}
-function fxPdfGo(i,force){
- const p=FX.pv;if(!p||!p.pages)return;const page=Math.max(0,Math.min(p.pages-1,i));
- if(page===p.page&&p.pageData&&!force)return;
- p.page=page;p.pdfError='';p.pdfLoading=true;p.pdfSeq++;
- const seq=p.pdfSeq,cache=p.pagesCache||(p.pagesCache=new Map());
- if(!force&&cache.has(page)){
-  p.pageData=cache.get(page);p.pdfLoading=false;fxPdfGhostTake(p);p.pdfView=null;paintPreview();fxPdfPrefetch(p,page+1);return;
+ const sc=el('div','fx-pdf-scroll');sc.tabIndex=0;sc.setAttribute('role','document');sc.setAttribute('aria-label',p.name+'，共 '+p.pages+' 页，可缩放');
+ const doc=el('div','fx-pdf-doc');sc.append(doc);
+ const d={sc,doc,pages:[],tops:[],hs:[],w:0,raf:0,goTo:null,goTop:0};
+ for(let i=0;i<p.pages;i++){
+  const pg=el('div','fx-pdf-page');pg.setAttribute('aria-label','第 '+(i+1)+' 页');
+  pg.append(el('div','fx-pdf-ph',String(i+1)));doc.append(pg);d.pages.push({el:pg,img:null,tier:''});
  }
- p.pageData=null;
- // Rendering a new page takes a moment: leave the page on screen with a small chip instead of
- // clearing the body. The very first page (nothing shown yet) keeps the full loading state.
- const keep=!!(p.pdfView&&p.pdfView.img&&p.pdfView.img.complete&&p.pdfView.img.naturalWidth);
- if(keep){paintPreviewFoot();fxPdfBusy(p,true);}else{p.pdfView=null;paintPreview();}
- rpc('sftpPreviewPage',{key:p.r.key,page,width:fxPdfWidth()}).then(r=>{
-  if(FX.pv!==p||seq!==p.pdfSeq)return;
-  p.pages=r.pages||p.pages;p.pageData=r;p.pdfLoading=false;p.pdfError='';fxPageCachePut(p,page,r);
-  fxPdfGhostTake(p);p.pdfView=null;paintPreview();fxPdfPrefetch(p,page+1);
- }).catch(e=>{
-  if(FX.pv!==p||seq!==p.pdfSeq)return;
-  p.pdfLoading=false;p.pdfError=(e.message||String(e));p.pdfGhost=null;p.pdfView=null;paintPreview();
+ p.pdfDoc=d;wrap.append(sc);body.append(wrap);
+ fxPdfLayout(p);
+ if(p.pdfAnchor)fxPdfToAnchor(p,p.pdfAnchor);
+ for(const i of p.pdfFail.keys())fxPdfPageError(p,i);
+ sc.addEventListener('scroll',()=>fxPdfOnScroll(p),{passive:true});
+ fxPdfBindZoom(p,d);
+ fxPdfAttach(p);fxPdfPump(p);
+}
+function fxPdfLayout(p){
+ const d=p.pdfDoc;if(!d)return;
+ d.w=Math.max(1,Math.round((d.sc.clientWidth-2*FX_PDF_GAP)*p.pdfZoom));let y=FX_PDF_GAP;
+ d.pages.forEach((pg,i)=>{const h=Math.max(1,Math.round(d.w*fxPdfAspect(p,i)));d.tops[i]=y;d.hs[i]=h;pg.el.style.width=d.w+'px';pg.el.style.height=h+'px';y+=h+FX_PDF_GAP;});
+ const pct=document.getElementById('fx-zoom-pct');if(pct)pct.textContent=Math.round(p.pdfZoom*100)+'%';
+}
+function fxPdfAt(d,y){let lo=0,hi=d.tops.length-1;while(lo<hi){const m=(lo+hi+1)>>1;if(d.tops[m]<=y)lo=m;else hi=m-1;}return Math.max(0,lo);}
+function fxPdfLeft(d){return FX_PDF_GAP+Math.max(0,(d.sc.clientWidth-2*FX_PDF_GAP-d.w)/2);}
+// The document point under a screen point, as a page and fractions of it: survives a zoom or resize.
+function fxPdfAnchor(p,vx,vy){
+ const d=p.pdfDoc,y=d.sc.scrollTop+vy,x=d.sc.scrollLeft+vx,i=fxPdfAt(d,y);
+ return {i,fy:(y-d.tops[i])/Math.max(1,d.hs[i]),fx:(x-fxPdfLeft(d))/Math.max(1,d.w),vx,vy};
+}
+function fxPdfToAnchor(p,a){
+ const d=p.pdfDoc;if(!d||!d.pages.length)return;const i=Math.min(a.i,d.pages.length-1);
+ d.sc.scrollTop=d.tops[i]+a.fy*d.hs[i]-a.vy;d.sc.scrollLeft=fxPdfLeft(d)+a.fx*d.w-a.vx;
+}
+function fxPdfZoom(p,z,vx,vy){
+ const d=p?.pdfDoc;if(!d)return;z=Math.max(FX_PDF_ZMIN,Math.min(FX_PDF_ZMAX,z));if(!isFinite(z))return;
+ if(vx===undefined){vx=d.sc.clientWidth/2;vy=d.sc.clientHeight/2;}
+ const a=fxPdfAnchor(p,vx,vy);p.pdfZoom=z;fxPdfLayout(p);fxPdfToAnchor(p,a);fxPdfOnScroll(p);
+}
+function fxPdfOnScroll(p){
+ const d=p.pdfDoc;if(!d||d.raf)return;
+ d.raf=requestAnimationFrame(()=>{
+  d.raf=0;if(FX.pv!==p||p.pdfDoc!==d)return;const sc=d.sc;
+  p.pdfAnchor=fxPdfAnchor(p,0,0);
+  // The current page covers the upper third of the screen. A jump to a page that cannot reach the
+  // top (the last ones) keeps the page that was asked for until the reader scrolls.
+  let cur=fxPdfAt(d,sc.scrollTop+sc.clientHeight/3);
+  if(d.goTo!==null){if(Math.abs(sc.scrollTop-d.goTop)<2)cur=d.goTo;else d.goTo=null;}
+  if(cur!==p.page){p.page=cur;fxPdfFootSync(p);}
+  fxPdfAttach(p);fxPdfPump(p);
  });
+}
+// Pages from `before` screens above to `after` screens below the visible area.
+function fxPdfRange(d,before,after){const sc=d.sc,h=sc.clientHeight;return [fxPdfAt(d,sc.scrollTop-before*h),fxPdfAt(d,sc.scrollTop+h+after*h)];}
+function fxPdfAttach(p){
+ const d=p.pdfDoc;if(!d)return;const [a,b]=fxPdfRange(d,2,3),hi=p.pdfZoom>FX_PDF_HI;
+ d.pages.forEach((pg,i)=>{
+  if(i<a||i>b){if(pg.img){pg.el.querySelectorAll('img').forEach(x=>x.remove());pg.img=null;pg.tier='';}return;}
+  const got=p.pdfData.get(i);if(!got)return;
+  const tier=hi&&got.hi?'hi':got.lo?'lo':got.hi?'hi':'';if(!tier||pg.tier===tier)return;
+  // The new image goes over the old one, which leaves only once the new one is decoded (no flash).
+  const img=el('img');img.alt=p.name+' 第 '+(i+1)+' 页';img.decoding='async';img.draggable=false;
+  img.onload=()=>{if(pg.img===img)pg.el.querySelectorAll('img').forEach(x=>{if(x!==img)x.remove();});};
+  img.onerror=()=>{
+   if(pg.img!==img)return;img.remove();pg.img=null;pg.tier='';delete got[tier];
+   // A cached page file can be pruned natively; ask again once, then show the page's own error.
+   const n=(p.pdfMiss.get(i)||0)+1;p.pdfMiss.set(i,n);
+   if(n>2){p.pdfFail.set(i,'页面图片没有加载出来');fxPdfPageError(p,i);}else fxPdfPump(p);
+  };
+  img.src=got[tier].url;pg.el.append(img);pg.img=img;pg.tier=tier;
+ });
+}
+function fxPdfPump(p){
+ const d=p.pdfDoc;if(!d||p.pdfBusy||FX.pv!==p||!p.r?.key)return;
+ const [a,b]=fxPdfRange(d,1,2),[va,vb]=fxPdfRange(d,0,0);
+ const order=[];for(let i=a;i<=b;i++)order.push(i);order.sort((x,y)=>Math.abs(x-p.page)-Math.abs(y-p.page));
+ let job=null;
+ for(const i of order){const got=p.pdfData.get(i);if(!p.pdfFail.has(i)&&!got?.lo&&!got?.hi){job={i,tier:'lo'};break;}}
+ if(!job&&p.pdfZoom>FX_PDF_HI)for(let i=va;i<=vb;i++){const got=p.pdfData.get(i);if(got&&!got.hi&&!got.noHi&&!p.pdfFail.has(i)){job={i,tier:'hi'};break;}}
+ if(!job)return;
+ p.pdfBusy=true;
+ rpc('sftpPreviewPage',{key:p.r.key,page:job.i,width:fxPdfWidth(job.tier==='hi')}).then(r=>{
+  if(FX.pv!==p)return;const got=p.pdfData.get(job.i)||{};got[job.tier]=r;p.pdfData.set(job.i,got);
+  if(r.note&&!p.pdfNote){p.pdfNote=r.note;paintPreviewFoot();}
+ }).catch(e=>{
+  if(FX.pv!==p)return;
+  if(e?.code==='preview_gone'){p.pdfError=e.message||String(e);p.pdfBusy=false;paintPreview();return;}
+  if(job.tier==='hi'){const got=p.pdfData.get(job.i);if(got)got.noHi=true;return;}
+  p.pdfFail.set(job.i,e?.message||String(e));fxPdfPageError(p,job.i);
+ }).finally(()=>{if(FX.pv!==p)return;p.pdfBusy=false;fxPdfAttach(p);fxPdfPump(p);});
+}
+function fxPdfPageError(p,i){
+ const pg=p.pdfDoc?.pages[i];if(!pg)return;const ph=pg.el.querySelector('.fx-pdf-ph');if(!ph)return;
+ ph.classList.add('err');
+ ph.replaceChildren(el('span','','第 '+(i+1)+' 页没渲染出来'),btn('重试','secondary small',()=>{
+  p.pdfFail.delete(i);p.pdfMiss.delete(i);ph.classList.remove('err');ph.replaceChildren(String(i+1));fxPdfPump(p);},'refresh'));
+}
+function fxPdfBindZoom(p,d){
+ const sc=d.sc;let pinch=null,want=null,raf=0,tap=null,lastTap=0;
+ const dist=t=>Math.max(1,Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY));
+ sc.addEventListener('touchstart',e=>{if(e.touches.length===2){pinch={d:dist(e.touches),z:p.pdfZoom};tap=null;}},{passive:true});
+ sc.addEventListener('touchmove',e=>{
+  if(!pinch||e.touches.length<2)return;if(e.cancelable)e.preventDefault();
+  const r=sc.getBoundingClientRect(),t=e.touches;
+  want={z:pinch.z*dist(t)/pinch.d,x:(t[0].clientX+t[1].clientX)/2-r.left,y:(t[0].clientY+t[1].clientY)/2-r.top};
+  if(!raf)raf=requestAnimationFrame(()=>{raf=0;if(want&&p.pdfDoc===d)fxPdfZoom(p,want.z,want.x,want.y);});
+ },{passive:false});
+ sc.addEventListener('touchend',e=>{if(e.touches.length<2)pinch=null;});
+ sc.addEventListener('touchcancel',()=>{pinch=null;});
+ // Double tap: fitted width ↔ 2× at the tapped point.
+ sc.addEventListener('pointerdown',e=>{if(e.isPrimary)tap={x:e.clientX,y:e.clientY,at:Date.now()};});
+ sc.addEventListener('pointercancel',()=>{tap=null;});
+ sc.addEventListener('pointerup',e=>{
+  if(!tap||!e.isPrimary)return;const moved=Math.abs(e.clientX-tap.x)+Math.abs(e.clientY-tap.y),dur=Date.now()-tap.at;tap=null;
+  if(moved>9||dur>380)return;const now=Date.now();
+  if(now-lastTap<360){lastTap=0;const r=sc.getBoundingClientRect();fxPdfZoom(p,p.pdfZoom>1.05?1:2,e.clientX-r.left,e.clientY-r.top);}else lastTap=now;
+ });
+ sc.addEventListener('wheel',e=>{if(!e.ctrlKey)return;e.preventDefault();const r=sc.getBoundingClientRect();fxPdfZoom(p,p.pdfZoom*(e.deltaY<0?1.12:.89),e.clientX-r.left,e.clientY-r.top);},{passive:false});
+}
+function fxPdfRetry(){const p=FX.pv;if(!p)return;p.pdfError='';p.pdfFail.clear();p.pdfMiss.clear();p.pdfData.clear();p.pdfDoc=null;fxFetchPreview();}
+function fxPdfGo(i){
+ const p=FX.pv,d=p?.pdfDoc;if(!d||!p.pages)return;const page=Math.max(0,Math.min(p.pages-1,i));
+ d.sc.scrollTop=d.tops[page]-FX_PDF_GAP;d.goTo=page;d.goTop=d.sc.scrollTop;
+ p.page=page;fxPdfFootSync(p);fxPdfOnScroll(p);
+}
+function fxPdfFootSync(p){
+ const n=document.getElementById('fx-foot');if(!n||FX.pv!==p)return;
+ const input=n.querySelector('.fx-page-input');if(input&&document.activeElement!==input)input.value=String(p.page+1);
+ const slider=n.querySelector('.fx-page-slider');if(slider)slider.value=String(p.page+1);
+ const prev=n.querySelector('[data-pdf="prev"]'),next=n.querySelector('[data-pdf="next"]');
+ if(prev)prev.disabled=p.page<=0;if(next)next.disabled=p.page>=p.pages-1;
 }
 function paintPreviewFoot(){
  const n=document.getElementById('fx-foot');const p=FX.pv;if(!n||!p)return;n.replaceChildren();
  if(p.kind==='office'&&typeof officePaintFoot==='function'){officePaintFoot(n);return;}
  const prev=document.getElementById('fx-find');if(prev&&p.mode!=='source'&&FX_MD.test(p.name)){/* find stays available */}
  if(p.kind==='pdf'&&p.pages){
-  const bar=el('div','fx-pager');const prev=btn('上一页','secondary small',()=>fxPdfGo(p.page-1),'back');prev.disabled=p.page<=0;bar.append(prev);
+  const bar=el('div','fx-pager');const prev=btn('上一页','secondary small',()=>fxPdfGo(p.page-1),'back');prev.dataset.pdf='prev';prev.disabled=p.page<=0;bar.append(prev);
   const edit=el('label','fx-page-edit','第 ');
   const input=el('input','fx-page-input');input.type='number';input.min='1';input.max=String(p.pages);input.value=String(p.page+1);
   input.setAttribute('aria-label','页码');input.enterKeyHint='go';
   input.onchange=()=>{const v=Math.round(Number(input.value));if(Number.isFinite(v))fxPdfGo(v-1);else input.value=String(p.page+1);};
   input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();input.blur();}};
   edit.append(input,el('span','',' / '+p.pages+' 页'));bar.append(edit);
-  const nx=btn('下一页','secondary small',()=>fxPdfGo(p.page+1),'chevron');nx.disabled=p.page>=p.pages-1;bar.append(nx);n.append(bar);
+  const nx=btn('下一页','secondary small',()=>fxPdfGo(p.page+1),'chevron');nx.dataset.pdf='next';nx.disabled=p.page>=p.pages-1;bar.append(nx);n.append(bar);
   const sliderRow=el('div','fx-slider-row');const slider=el('input','fx-page-slider');slider.type='range';slider.min='1';slider.max=String(p.pages);slider.value=String(p.page+1);
   slider.setAttribute('aria-label','页面滑块');slider.onchange=()=>fxPdfGo(Number(slider.value)-1);sliderRow.append(slider);n.append(sliderRow);
-  if(p.pageData?.note)n.append(el('p','fine center',p.pageData.note));
+  if(p.pdfNote)n.append(el('p','fine center',p.pdfNote));
  }else if(p.kind==='image'){
   n.append(el('p','fine center','双指缩放 · 双击 2×/4× · 拖动 · 旋转 · 左右滑动切换文件'));
  }else if(p.kind==='media'){

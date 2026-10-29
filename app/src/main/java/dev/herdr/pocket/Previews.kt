@@ -16,6 +16,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import com.jcraft.jsch.SftpProgressMonitor
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -62,6 +63,7 @@ object Previews {
     val DERIVED_MIME = setOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp")
     internal const val IMAGE_MAX_PIXELS = 12_000_000L
     internal const val PDF_MAX_PIXELS = 10_000_000L
+    private const val PDF_SIZES_MAX = 2000
     private const val CACHE_CAP = 250_000_000L
     private const val DERIVED_CAP = 120_000_000L
     private const val PASS_BYTES = 36_000_000L
@@ -110,7 +112,10 @@ object Previews {
         when (kind) {
             "text" -> text(got, kind == "text" && req.optBoolean("tail"), out)
             "image" -> image(context, got, out)
-            "pdf" -> out.put("page", pdfPage(context, got.key, got.file, 0, req.optInt("width", 1080)))
+            "pdf" -> {
+                out.put("page", pdfPage(context, got.key, got.file, 0, req.optInt("width", 1080)))
+                pdfSizes(got.file)?.let { out.put("sizes", it) }
+            }
         }
         return out
     }
@@ -394,6 +399,23 @@ object Previews {
         } catch (e: Friendly) { throw e }
         catch (e: SecurityException) { throw Friendly("preview_pdf", "这个 PDF 有密码，预览不了；可以下载后用其他应用打开") }
         catch (e: Exception) { throw Friendly("preview_pdf", "这个 PDF 打不开预览（可能已损坏）；可以下载后用其他应用打开") }
+    }
+
+    /**
+     * Every page's size in PDF points, [[w, h], …], so the continuous view can lay out all pages
+     * before any is rendered (no jumps while scrolling). Opening a page only reads its box. Very long
+     * documents skip this and the UI assumes the first page's shape for the rest.
+     */
+    private fun pdfSizes(file: File): JSONArray? = synchronized(pdfLock) {
+        try {
+            ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+                val r = PdfRenderer(fd)
+                try {
+                    if (r.pageCount > PDF_SIZES_MAX) return@synchronized null
+                    JSONArray().also { a -> for (i in 0 until r.pageCount) r.openPage(i).use { pg -> a.put(JSONArray().put(pg.width).put(pg.height)) } }
+                } finally { r.close() }
+            }
+        } catch (_: Exception) { null }
     }
 
     private fun pdfWidth(requested: Int, pageW: Int, pageH: Int, cap: Long): Int {
