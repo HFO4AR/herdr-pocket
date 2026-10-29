@@ -736,7 +736,12 @@ function fxViewerClamp(v){
 }
 function fxViewerApply(v,instant){
  if(!v?.el)return;
- v.el.style.transform='translate3d('+v.tx+'px,'+v.ty+'px,0) rotate('+v.rotation+'deg) scale('+v.scale+')';
+ // Zoom by sizing the <img> itself, not with transform:scale(). A scaled 2400 px page is a huge
+ // composited layer that the WebView rasterizes at full size; past its tile budget it simply skips
+ // tiles, so the page showed up half-drawn (black blocks). Laid out at display size, it rasterizes
+ // only what is on screen at the right sharpness. The transform is left with pan and rotation.
+ if(v.img&&v.naturalW>0&&v.naturalH>0){v.img.style.width=(v.naturalW*v.scale)+'px';v.img.style.height=(v.naturalH*v.scale)+'px';}
+ v.el.style.transform='translate3d('+v.tx+'px,'+v.ty+'px,0) rotate('+v.rotation+'deg)';
  v.el.style.transition=instant||fxReduced()?'none':'transform .18s var(--ease-out)';
  const pct=document.getElementById('fx-zoom-pct');if(pct)pct.textContent=Math.round(v.scale*100)+'%';
 }
@@ -759,7 +764,7 @@ function fxViewerRotate(v){
 function fxViewerCycle(v){
  if(!v)return;const levels=[v.fit,Math.min(v.max,v.fit*2),Math.min(v.max,v.fit*4)];
  const next=levels.find(x=>x>v.scale+.01)??v.fit;
- if(next===v.fit){v.scale=v.fit;v.tx=0;v.ty=0;}else fxViewerZoomAt(v,next);
+ if(next===v.fit){v.scale=v.fit;v.tx=0;v.ty=0;fxViewerApply(v);}else fxViewerZoomAt(v,next);
 }
 function fxViewerResize(){
  const p=FX.pv;if(!p)return;const v=p.kind==='image'?p.imgView:p.pdfView;if(!v)return;

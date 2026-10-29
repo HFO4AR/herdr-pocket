@@ -266,7 +266,8 @@ assert.match(await page.locator('.fx-zoom').getAttribute('style'),/translate3d\(
 await page.getByRole('button',{name:'旋转 90 度',exact:true}).click();
 assert.match(await page.locator('.fx-zoom').getAttribute('style'),/rotate\(90deg\)/);
 await page.getByRole('button',{name:'按原像素显示',exact:true}).click();
-assert.match(await page.locator('.fx-zoom').getAttribute('style'),/scale\(1\)/,'1:1 shows native pixels');
+assert.equal(await page.evaluate(()=>{const i=document.querySelector('.fx-zoom img');return i.offsetWidth===i.naturalWidth&&i.offsetHeight===i.naturalHeight;}),true,'1:1 shows native pixels');
+assert.doesNotMatch(await page.locator('.fx-zoom').getAttribute('style'),/scale\(/,'zoom sizes the image; no huge scaled layer');
 await page.getByRole('button',{name:'适应屏幕',exact:true}).click();
 await back();
 // PDF: high-resolution page URLs, page input/slider, rotate/fit, reset on page change.
@@ -284,6 +285,8 @@ const pdfFit=await page.evaluate(()=>{const v=FX.pv.pdfView,r=v.stage.getBoundin
 assert(pdfFit.stageW<=pdfFit.innerW+1,'PDF stage fits the screen: '+JSON.stringify(pdfFit));
 assert(pdfFit.zoomW<=pdfFit.stageW+1&&pdfFit.zoomH<=pdfFit.stageH+1,'the page fits the stage: '+JSON.stringify(pdfFit));
 assert(Math.abs(pdfFit.scale-pdfFit.fit)<.001,'opened at fit');
+// The page is laid out at its on-screen size (rasterized at display resolution), not a 2400 px layer scaled down.
+assert.equal(await page.evaluate(()=>{const i=document.querySelector('.fx-pdf .fx-zoom img');return i.offsetWidth<=FX.pv.pdfView.stageW+1&&getComputedStyle(document.querySelector('.fx-pdf .fx-zoom')).willChange!=='transform';}),true,'PDF page laid out at display size');
 await page.setViewportSize({width:320,height:640});
 assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'PDF preview fits 320 px');
 assert.equal(await page.evaluate(()=>{const n=document.querySelector('.fx-pager');return !n||n.scrollWidth<=n.clientWidth+1;}),true,'page controls fit 320 px');
