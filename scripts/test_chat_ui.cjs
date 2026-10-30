@@ -205,11 +205,11 @@ await page.evaluate(async()=>{
  S.paused=true;S.epoch++;S.messages=[];await fetchHistory(false,true);});
 await page.getByText('接上文',{exact:false}).waitFor();
 assert.equal(await page.getByText('跑完全部测试',{exact:true}).count(),0);
-const pagesBefore=await page.evaluate(()=>fx.history);
-await page.getByRole('button',{name:'加载更早消息',exact:true}).click();
+// Count the reads of this tap's own job: once it ends, being near the top may start the usual
+// automatic read upwards on the next frame, which is a separate job.
+const tapReads=await page.evaluate(async()=>{const before=fx.history;document.querySelector('.older-btn').click();const job=HQ.older;if(!job)return -1;await job.p;return fx.history-before;});
+assert.equal(tapReads,8,'one tap read the 8 pages up to the prompt, then stopped');
 await page.getByText('跑完全部测试',{exact:true}).first().waitFor({timeout:15000});
-await page.getByRole('button',{name:'加载更早消息',exact:true}).waitFor();
-assert.equal(await page.evaluate(()=>fx.history)-pagesBefore,8,'one tap read the 8 pages up to the prompt, then stopped');
 assert(await page.evaluate(()=>S.messages.some(m=>m.id===fx.prompt2)&&S.more),'the turn start is in and more is still available');
 await page.evaluate(()=>{fx.pager=null;});
 console.log('PASS: one tap loads a long unfinished turn back to its prompt and stops there');

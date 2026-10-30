@@ -183,9 +183,10 @@ await title('budget.xlsx');
 await page.locator('.fx-xl').waitFor();
 assert.deepEqual(await page.locator('.fx-xl-tab').allTextContents(),['数据','汇总']);
 assert.deepEqual((await page.locator('.fx-xl-ch').allTextContents()).slice(0,3),['A','B','C']);
-const firstCell=page.locator('.fx-xl-cell').filter({hasText:'项目'}).first();
-assert.equal(await firstCell.evaluate(n=>getComputedStyle(n).fontWeight),'700');
-assert.equal(await firstCell.evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(255, 255, 0)');
+// The grid redraws its row window: find the cell afresh when reading its style (a node read just after
+// a redraw is detached and has no computed style).
+await page.waitForFunction(()=>{const c=[...document.querySelectorAll('.fx-xl-cell')].find(n=>n.textContent.includes('项目'));
+ if(!c)return false;const s=getComputedStyle(c);return s.fontWeight==='700'&&s.backgroundColor==='rgb(255, 255, 0)';},null,{timeout:5000});
 const merged=page.locator('.fx-xl-cell.merged').filter({hasText:'合计'}).first();
 await merged.waitFor();
 assert.ok((await merged.evaluate(n=>n.style.height)).includes('60'),'merged cell spans two rows');
