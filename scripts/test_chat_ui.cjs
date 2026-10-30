@@ -39,7 +39,7 @@ await page.addInitScript(()=>{
    if(a.op==='sessions')data={sessions:[{name:'fx',running:true}]};
    else if(a.op==='agents')data=a.target?{follow:true,state:'same',agents:[fx.A1],pane:null}:{agents:[fx.A1]};
    else if(a.op==='status'){const {history_ref,...rest}=fx.A1;data={agents:[rest]};}
-   else if(a.op==='history'){fx.history++;data=a.before===undefined?{record:r1,messages:fx.newer,before:5,has_more:true,children:[]}:{record:r1,messages:fx.older,before:0,has_more:false,children:[]};}
+   else if(a.op==='history'){fx.history++;data=fx.pager?fx.pager(a):a.before===undefined?{record:r1,messages:fx.newer,before:5,has_more:true,children:[]}:{record:r1,messages:fx.older,before:0,has_more:false,children:[]};}
    else if(a.op==='read')data={text:'$ '};
    else if(a.op==='prompt'){fx.prompt=(fx.prompt||[]);fx.prompt.push(a);data={sent:true,receipt:'r'};}
    else if(a.op==='catalog')data={records:[],total:0,next:null};
@@ -189,5 +189,29 @@ await box().fill('第一行');await box().press('Shift+Enter');await box().type(
 assert.equal(await box().inputValue(),'第一行\n第二行');
 assert.equal(await page.evaluate(()=>fx.prompt.length),1,'Shift+Enter sends nothing');
 console.log('PASS: hardware keyboard Enter sends; Shift+Enter keeps a newline');
+
+// 11. A long unfinished turn (one prompt, 150 commands = 300 rows) after an earlier turn, as seen live
+// on a ch pane: one tap on 加载更早消息 keeps loading while the pages land inside that turn, and
+// stops on the page that brings its prompt (not at the cap), instead of an invisible page per tap.
+await page.evaluate(async()=>{
+ const now=Date.now()/1000,iso=s=>new Date((now-s)*1000).toISOString();let n=0;
+ const row=(kind,text,extra={})=>({id:(++n)+':0',kind,text,title:'',call_id:'',timestamp:iso(9000-n),...extra});
+ const rows=[row('user','先看一下现有的参考方案')];
+ for(let i=0;i<60;i++)rows.push(row('assistant','早先的说明 '+i));
+ rows.push(row('user','跑完全部测试'));
+ for(let i=0;i<150;i++)rows.push(row('tool','make test '+i,{title:'Bash',call_id:'c'+i}),row('result','ok',{title:'执行结果',call_id:'c'+i}));
+ fx.prompt2=rows[61].id;
+ fx.pager=a=>{const end=a.before===undefined?rows.length:a.before,start=Math.max(0,end-35);return {record:S.chat.record,messages:rows.slice(start,end),before:start,has_more:start>0,children:[]};};
+ S.paused=true;S.epoch++;S.messages=[];await fetchHistory(false,true);});
+await page.getByText('接上文',{exact:false}).waitFor();
+assert.equal(await page.getByText('跑完全部测试',{exact:true}).count(),0);
+const pagesBefore=await page.evaluate(()=>fx.history);
+await page.getByRole('button',{name:'加载更早消息',exact:true}).click();
+await page.getByText('跑完全部测试',{exact:true}).first().waitFor({timeout:15000});
+await page.getByRole('button',{name:'加载更早消息',exact:true}).waitFor();
+assert.equal(await page.evaluate(()=>fx.history)-pagesBefore,8,'one tap read the 8 pages up to the prompt, then stopped');
+assert(await page.evaluate(()=>S.messages.some(m=>m.id===fx.prompt2)&&S.more),'the turn start is in and more is still available');
+await page.evaluate(()=>{fx.pager=null;});
+console.log('PASS: one tap loads a long unfinished turn back to its prompt and stops there');
 await browser.close();
 })().catch(e=>{console.error(e);process.exit(1);});

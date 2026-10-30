@@ -381,12 +381,24 @@ function olderSet(epoch,state,error=''){if(epoch!==S.epoch)return;HQ.epoch=epoch
 function olderReady(){const c=S.chat;return !!(c?.record&&S.more&&S.messages.length&&!c.cached&&!c.waiting&&!c.historyLoading&&S.chatMode!=='terminal');}
 // Reading near the top pulls in the previous page by itself (not after an error: that waits for 重试).
 function olderNear(n){return !!n&&!S.stick&&n.scrollTop<Math.max(320,n.clientHeight*.6)&&olderReady()&&!olderPending()&&!(HQ.epoch===S.epoch&&HQ.state==='error');}
+// A page holds ~35 rows and every tool call and result is one, so in a long turn an earlier page
+// lands inside the turn already shown ("接上文") and only its counts change: the tap looked like it
+// did nothing (seen live: a 30-minute ch turn had 6 pages, 210 rows, before its prompt). While a
+// page adds nothing visible above (same number of turns, the oldest still continued), keep reading,
+// up to OLDER_CHAIN pages per tap, with the spinner up the whole time. Commands view shows every row.
+const OLDER_CHAIN=12;
+function olderShape(){const t=buildTurns(S.messages,false);return t.length+':'+(t[0]?.partial?1:0);}
 function historyOlder(){
  const epoch=S.epoch;if(olderPending())return HQ.older.p;if(!olderReady())return Promise.resolve();
  const job={epoch};HQ.older=job;olderSet(epoch,'loading');
  job.p=(async()=>{
-  try{while(histBusy()&&epoch===S.epoch)await new Promise(r=>setTimeout(r,40));
-   if(epoch===S.epoch&&olderReady())await historyRead(true,false);}
+  const shape=olderShape();
+  try{for(let n=0;n<OLDER_CHAIN;n++){
+    while(histBusy()&&epoch===S.epoch)await new Promise(r=>setTimeout(r,40));
+    if(epoch!==S.epoch||!olderReady())break;
+    if(n)olderSet(epoch,'loading');
+    await historyRead(true,false);
+    if(epoch!==S.epoch||HQ.epoch===epoch&&HQ.state==='error'||!S.more||S.chatMode!=='conversation'||olderShape()!==shape)break;}}
   finally{if(HQ.older===job)HQ.older=null;if(HQ.epoch===epoch&&HQ.state==='loading')olderSet(epoch,'');
    if(HQ.again&&HQ.againEpoch===S.epoch&&!histBusy()){const init=HQ.again===2;HQ.again=0;fetchHistory(false,init);}}})();
  return job.p;}
