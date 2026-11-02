@@ -35,6 +35,10 @@
  --term-ansi:#3a3936 #f0716d #8cc98a #e8b45f #7aa6e0 #cf94d8 #6cc3bd #d4d1ca #7a776f #ff8f88 #a8dca5 #f5cd82 #9cc0f0 #e2b0ea #8ed8d2 #f4f3ef;
  --press:#ffffff12;--spinner-track:#45423d;--spinner-head:#f39a72;--toast-bg:#3a3936;--toast-ink:#f4f3ef;--seg-on:#45433f;--backdrop:#000000a3;--knob:#f4f3ef;
  color-scheme:dark}
+/* 终端屏幕 can be light whatever the page wears (data-term, settings.js). Dark is the default above. */
+:root[data-term="light"]{
+ --terminal:#fff;--terminal-ink:#1c1b19;--terminal-line:#00000017;--terminal-muted:#6a6860;--term-rule:#00000012;--term-accent:#9d552d;--term-live:#0b7a5e;--term-selection:#f57b4a40;--term-scrollbar:#00000033;
+ --term-ansi:#2e2d2a #c0342f #2b7a2f #8a6200 #2c64b8 #8f3fa6 #0e7673 #6b6962 #77746c #cf3a35 #2c8132 #93680a #3470c8 #9f4ab6 #0f7f7c #4a4945}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg)}
 button,input,textarea,select{font:inherit;color:inherit}

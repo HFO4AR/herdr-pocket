@@ -340,7 +340,7 @@ async function refreshStatus(){
  finally{S.statusBusy=false;}}
 
 // ─── Chat ───────────────────────────────────────────────────────────────────
-function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.terminalAnsi='';S.activity='';actForget();S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;}
+function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.terminalAnsi='';S.activity='';actForget();S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;lookApply();}
 async function openAgent(a){
  S.unread.delete(agentKey(a));S.chatStack=[];resetChat({agent:a,record:null,title:titleOf(a),provider:a.agent});
  // No transcript reader for this kind: the terminal is the conversation. Say so once, calmly.

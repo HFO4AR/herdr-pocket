@@ -46,7 +46,7 @@ await page.getByText('2.4 MB · 7 项',{exact:true}).waitFor();
 await page.screenshot({path:path.join(folder,'settings-light.png'),fullPage:true});
 
 // Theme: native resolves it; the page switches at once.
-await page.getByRole('radio',{name:'深色',exact:true}).click();
+await page.getByRole('radiogroup',{name:'主题',exact:true}).getByRole('radio',{name:'深色',exact:true}).click();
 await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
 assert.equal(await page.evaluate(()=>getComputedStyle(document.body).backgroundColor),'rgb(21, 21, 20)');
 await page.screenshot({path:path.join(folder,'settings-dark.png'),fullPage:true});

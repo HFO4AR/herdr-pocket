@@ -203,7 +203,7 @@
 .fx-table-wrap .fx-notice{padding:8px 12px 4px;margin:0;background:var(--bg)}
 
 /* Images / PDF pages: one transform model (translate, rotate, scale) with clamped panning. */
-.fx-stage,.fx-pdf{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:none;background:var(--terminal);padding:10px}
+.fx-stage,.fx-pdf{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:none;background:#1c1b19;padding:10px}
 :root[data-theme="dark"] .fx-stage{background:#0b0b0a}
 .fx-pdf{flex-direction:column;padding:0;background:var(--bg);width:100%;min-width:0;touch-action:pan-x pan-y}
 /* PDF: all pages in one vertical scroll. Pages are sized, never scaled, so the WebView rasterizes

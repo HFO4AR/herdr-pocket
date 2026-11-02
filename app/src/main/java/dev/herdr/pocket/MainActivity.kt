@@ -74,6 +74,8 @@ class MainActivity : Activity() {
     private var shot: File? = null
     // Paints the strips behind the status and navigation bars (edge-to-edge, see SystemBars).
     private val bars = BarsBackground()
+    // A page wearing its own look (a terminal page, 设置 · 外观) tells the strips; null = the app theme.
+    @Volatile private var pageDark: Boolean? = null
     // A tablet keyboard case / Bluetooth keyboard: the on-screen dock is redundant. Virtual
     // (soft) keyboards never count. The listener only reports the state to the page.
     private val inputListener = object : InputManager.InputDeviceListener {
@@ -289,7 +291,8 @@ class MainActivity : Activity() {
     /** System bars and the WebView backdrop follow the page theme, so nothing flashes light in dark mode. */
     @Suppress("DEPRECATION")
     private fun applyBars() {
-        val dark = dark()
+        val appDark = dark()
+        val dark = pageDark ?: appDark
         val bg = if (dark) Color.rgb(21, 21, 20) else Color.rgb(251, 250, 246)
         val nav = if (dark) Color.rgb(31, 30, 28) else Color.WHITE
         if (Build.VERSION.SDK_INT < 30) { window.statusBarColor = bg; window.navigationBarColor = nav }
@@ -297,7 +300,7 @@ class MainActivity : Activity() {
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(bg))
         if (::web.isInitialized) {
             web.setBackgroundColor(bg)
-            if (started) web.evaluateJavascript("window.applyTheme && window.applyTheme(${if (dark) "'dark'" else "'light'"})", null)
+            if (started) web.evaluateJavascript("window.applyTheme && window.applyTheme(${if (appDark) "'dark'" else "'light'"})", null)
         }
         if (Build.VERSION.SDK_INT >= 30) {
             val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
@@ -311,6 +314,7 @@ class MainActivity : Activity() {
 
     private fun prefs(): JSONObject = JSONObject()
         .put("theme", core.settings.getString("theme", "system")).put("dark", dark())
+        .put("termScreen", core.settings.getString("termScreen", "dark")).put("termLook", core.settings.getString("termLook", "screen"))
         .put("textZoom", core.settings.getInt("textZoom", 100))
         .put("secureScreen", core.settings.getBoolean("secureScreen", false))
         .put("autoUpdate", core.settings.getBoolean("autoUpdate", true))
@@ -417,11 +421,18 @@ class MainActivity : Activity() {
                             runOnUiThread { applySecure() }
                             success(id, JSONObject())
                         }
+                        "pageBars" -> {
+                            pageDark = if (req.isNull("dark")) null else req.getBoolean("dark")
+                            runOnUiThread { applyBars() }
+                            success(id, JSONObject())
+                        }
                         "settings" -> success(id, prefs())
                         "setSetting" -> {
                             val edit = core.settings.edit()
                             when (req.getString("key")) {
                                 "theme" -> edit.putString("theme", req.getString("value").also { require(it in setOf("system", "light", "dark")) { "不支持的主题" } })
+                                "termScreen" -> edit.putString("termScreen", req.getString("value").also { require(it in setOf("app", "light", "dark")) { "不支持的终端屏幕配色" } })
+                                "termLook" -> edit.putString("termLook", req.getString("value").also { require(it in setOf("screen", "app", "light", "dark")) { "不支持的终端控件配色" } })
                                 "textZoom" -> edit.putInt("textZoom", req.getInt("value").also { require(it in setOf(90, 100, 115, 130)) { "不支持的字号" } })
                                 "secureScreen" -> edit.putBoolean("secureScreen", req.getBoolean("value"))
                                 "autoUpdate" -> edit.putBoolean("autoUpdate", req.getBoolean("value"))

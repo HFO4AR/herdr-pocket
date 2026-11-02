@@ -5,6 +5,8 @@
 // too: the WebView itself never reaches the network.
 const SET={prefs:null,checking:false,download:null,needPermission:false,cache:null,error:''};
 const THEMES=[['system','跟随系统'],['light','浅色'],['dark','深色']];
+const TERM_SCREENS=[['app','跟随主题'],['light','浅色'],['dark','深色']];
+const TERM_LOOKS=[['screen','跟随屏幕'],['app','跟随主题'],['light','浅色'],['dark','深色']];
 const ZOOMS=[[90,'小'],[100,'标准'],[115,'大'],[130,'特大']];
 // 后台保持连接: minutes the background service keeps the SSH session (0 = until 断开).
 const KEEPS=[[15,'15 分钟'],[60,'1 小时'],[240,'4 小时'],[0,'一直保持']];
@@ -13,8 +15,23 @@ function keepText(m){return (KEEPS.find(k=>k[0]===m)||KEEPS[1])[1];}
 // (Function declarations are hoisted across the bundle, so this wraps onboard.js's netEvent.)
 {const base=netEvent;netEvent=function(e){if(e&&e.type==='disconnected'){if(S.device&&!S.demo)disconnect().then(()=>toast('已断开和电脑的连接')).catch(()=>{});return;}return base(e);};}
 
-window.applyTheme=t=>{document.documentElement.dataset.theme=t==='dark'?'dark':'light';};
-async function settingsLoad(){try{const p=await rpc('settings');SET.prefs=p;S.alerts=p.alerts!==false;if(S.version!==p.version&&p.version)S.version=p.version;return p;}catch(_){return null;}}
+// The terminal screen has its own light / dark (data-term), and a terminal page its own look: while
+// one is on screen the whole page, sheets and system bars included, wears it. LOOK.app keeps the app theme.
+const LOOK={app:null,bars:null};
+function lookApp(){return LOOK.app||document.documentElement.dataset.theme;}
+function termScreenTheme(){const t=SET.prefs?.termScreen||'dark';return t==='app'?lookApp():t;}
+function termPageLook(){const t=SET.prefs?.termLook||'screen';return t==='screen'?termScreenTheme():t==='app'?lookApp():t;}
+function lookApply(){
+ const root=document.documentElement,on=typeof T!=='undefined'&&!!T.view&&!S.chat;
+ if(on&&LOOK.app===null)LOOK.app=root.dataset.theme;
+ const app=lookApp(),screen=termScreenTheme(),look=on?termPageLook():app;
+ if(root.dataset.term!==screen)root.dataset.term=screen;
+ if(root.dataset.theme!==look)root.dataset.theme=look;
+ if(!on)LOOK.app=null;
+ const bars=look!==app?look==='dark':null;
+ if(bars!==LOOK.bars){LOOK.bars=bars;rpc('pageBars',{dark:bars}).catch(()=>{});}}
+window.applyTheme=t=>{t=t==='dark'?'dark':'light';if(LOOK.app!==null)LOOK.app=t;else document.documentElement.dataset.theme=t;lookApply();};
+async function settingsLoad(){try{const p=await rpc('settings');SET.prefs=p;lookApply();S.alerts=p.alerts!==false;if(S.version!==p.version&&p.version)S.version=p.version;return p;}catch(_){return null;}}
 async function settingsSet(key,value){try{const p=await rpc('setSetting',{key,value});SET.prefs=p;window.applyTheme(p.dark?'dark':'light');return p;}catch(e){error(e);return null;}}
 function updateInfo(){return SET.prefs?.update||null;}
 function updateAvailable(){const u=updateInfo();return !!(u&&u.available&&u.latest&&u.latest.code>(SET.prefs?.versionCode||0));}
@@ -56,6 +73,8 @@ function toggle(title,detail,checked,change){
  box.onchange=async()=>{box.disabled=true;try{const ok=await change(box.checked);if(ok===false)box.checked=!box.checked;}finally{box.disabled=false;}};
  const t=el('span','grow');t.append(el('strong','',title),el('small','',detail));row.append(t,box,el('span','switch'));return row;}
 function linkRow(label,value,fn,name){const b=btn('','set-link',fn);b.append(el('span','grow set-label',label));if(value)b.append(el('span','set-value',value));b.append(icon(name||'chevron'));return b;}
+// 设置 · 外观 and 终端选项 show the same two choices.
+function termLookSegs(box){const p=SET.prefs||{};box.append(seg('终端屏幕',TERM_SCREENS,p.termScreen||'dark',v=>settingsSet('termScreen',v)),seg('终端按键和控件',TERM_LOOKS,p.termLook||'screen',v=>settingsSet('termLook',v),true));}
 function group(main,label){main.append(el('span','section-label',label));const card=el('section','card set-card');main.append(card);return card;}
 
 function settingsPage(main){
@@ -69,6 +88,7 @@ function settingsPage(main){
  const look=group(left,'外观');
  look.append(seg('主题',THEMES,p.theme,v=>settingsSet('theme',v)));
  look.append(seg('文字大小',ZOOMS,p.textZoom,v=>settingsSet('textZoom',v)));
+ termLookSegs(look);
 
  const conn=group(left,'连接');
  conn.append(toggle('启动时自动重连','打开 App 时自动连上关掉前连着的电脑',p.autoResume!==false,async on=>{const r=await settingsSet('autoResume',on);if(!r)return false;if(!on)resumeStop();toast(on?'下次打开会自动连上这次连着的电脑':'下次打开不再自动连接');return true;}));

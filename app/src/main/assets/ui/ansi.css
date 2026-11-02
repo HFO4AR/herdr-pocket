@@ -1,5 +1,5 @@
 /* Colored read-only screens (ansi.js): the chat 「终端」 card and the confirm panel. Colors of the
- * text come from the agent (inline, contrast-checked against the dark card); layout lives here. */
+ * text come from the agent (inline, contrast-checked against the card); layout lives here. */
 .ansi{--ansi-pad:14px}
 .confirm-screen.ansi{--ansi-pad:12px}
 .ansi .ansi-line{white-space:pre-wrap;overflow-wrap:anywhere;min-height:1lh}

@@ -57,7 +57,7 @@ function ansiPalette(){const cs=getComputedStyle(document.documentElement);const
 function ansiLum(c){const f=v=>{v/=255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4);};return .2126*f(c[0])+.7152*f(c[1])+.0722*f(c[2]);}
 function ansiContrast(a,b){const x=ansiLum(a),y=ansiLum(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);}
 function ansiMix(a,b,t){return a.map((v,i)=>Math.round(v+(b[i]-v)*t));}
-// The card is dark in both themes: a color too dark to read on it is lifted toward the ink.
+// A color too close to the card (light or dark, 终端屏幕) to read is pulled toward the ink.
 function ansiReadable(fg,bg,ink,min){let c=fg;for(let k=1;k<=10&&ansiContrast(c,bg)<min;k++)c=ansiMix(fg,ink,k/10);return c;}
 function ansiColor(v,P){return v===undefined?undefined:typeof v==='number'?(P.pal[v]||P.fg):v;}
 function ansiCss(c){return 'rgb('+c.join(',')+')';}

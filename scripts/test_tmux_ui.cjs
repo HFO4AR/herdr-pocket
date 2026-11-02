@@ -34,7 +34,7 @@ await page.addInitScript(()=>{
     if(!p||p.identity!==a.identity)throw Error('这个 tmux 窗格已经关了或换了，回到列表刷新一下');const ansi=fx.screen[a.target]||'$ ';data={text:ansi.replace(/\x1b\[[0-9;]*m/g,''),ansi,pane:p};}
    else if(a.op==='tmuxSend'){fx.sends.push(a);if(fx.sendFail)throw Error(fx.sendFail);data={sent:true,receipt:a.id};}
    else throw Error('unexpected remote op '+a.op);}
-  else if(['watchState','protect','setAlerts','settings','cachePut','dropImages'].includes(op))data={};
+  else if(['watchState','protect','setAlerts','settings','cachePut','dropImages','pageBars'].includes(op))data={};
   else if(op==='cacheGet')data={value:null};
   else if(op==='inputInfo')data={physicalKeyboard:false};
   else{fx.unexpected.push(op);data={};}

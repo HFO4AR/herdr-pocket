@@ -11,7 +11,7 @@ const HWKB=window.HWKB={physical:false,forceShow:false,asked:false};
 function hwKeyboardHide(){return HWKB.physical&&!HWKB.forceShow&&innerWidth>=600;}
 function hwKeyboardProbe(){if(HWKB.asked)return;HWKB.asked=true;try{rpc('inputInfo').then(r=>{const p=!!r?.physicalKeyboard;if(p!==HWKB.physical){HWKB.physical=p;if(T.view)renderTerminal();}}).catch(()=>{});}catch(_){}}
 Object.assign(paths,{keyboard:'M3 7a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zM7 10h.01M11 10h.01M15 10h.01M8 14h8',enterKey:'M19 6v5a3 3 0 0 1-3 3H6M9 10l-4 4 4 4',textCursor:'M9 4h6M9 20h6M12 4v16M7 9H4v6h3M17 9h3v6h-3'});
-function leaveTerminal(){const v=T.view;T.view=null;T.generation++;v?.stopGlide?.();if(v?.kind==='attach')attachClose(v);}
+function leaveTerminal(){const v=T.view;T.view=null;T.generation++;v?.stopGlide?.();if(v?.kind==='attach')attachClose(v);lookApply();}
 function clearTerminals(){leaveTerminal();if(T.shell){T.shell.observer?.disconnect();T.shell.term.dispose();}T.shell=null;T.panes=[];}
 // The SSH session was rebuilt: PTY channels did not survive it.
 function termReconnected(){for(const e of [T.shell,T.view])if(e&&(e.kind==='ssh'||e.kind==='attach')&&!e.ended&&!e.demo){e.ended=true;
@@ -30,7 +30,7 @@ function paneTitle(p){const i=paneInfo(p);return i.idle?'Shell · '+i.dir:i.titl
 // The home directory as the bridge last reported it for this computer (createInfo / tmuxInfo).
 function shortPath(p){const home=NEW.info?.home||NEW.homes.get(S.device?.id||'')||'';p=String(p||'');return home&&(p===home||p.startsWith(home+'/'))?'~'+p.slice(home.length):p.replace(/^\/(home|Users)\/[^/]+(?=\/|$)/,'~');}
 
-// ─── Look: colours come from the app tokens, so the terminal follows the light / dark theme ───
+// ─── Look: colours come from the app tokens, so the terminal follows its light / dark setting ───
 function termToken(name){return getComputedStyle(document.documentElement).getPropertyValue(name).trim();}
 function termTheme(){
  const ansi=termToken('--term-ansi').split(/\s+/);const at=i=>ansi[i]||undefined;
@@ -39,8 +39,11 @@ function termTheme(){
   scrollbarSliderBackground:termToken('--term-scrollbar'),scrollbarSliderHoverBackground:termToken('--term-scrollbar'),scrollbarSliderActiveBackground:termToken('--term-scrollbar'),
   black:at(0),red:at(1),green:at(2),yellow:at(3),blue:at(4),magenta:at(5),cyan:at(6),white:at(7),
   brightBlack:at(8),brightRed:at(9),brightGreen:at(10),brightYellow:at(11),brightBlue:at(12),brightMagenta:at(13),brightCyan:at(14),brightWhite:at(15)};}
-// Theme switches (settings, system dark mode via window.applyTheme) repaint the live shell.
-new MutationObserver(()=>{if(T.shell&&!T.shell.disposed)T.shell.term.options.theme=termTheme();}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+// Theme switches (settings, system dark mode via window.applyTheme) repaint the live screens.
+new MutationObserver(()=>{
+ for(const e of new Set([T.shell,T.view]))if(e&&isPty(e)&&!e.disposed)e.term.options.theme=termTheme();
+ const box=document.getElementById('pane-screen');if(box&&T.view&&!isPty(T.view))screenUpdate(box,T.view);
+}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','data-term']});
 function termDefaultFont(){return innerWidth<360?12:13;}
 function termFontSize(){return T.font||termDefaultFont();}
 // Read-only screens (chat 「终端」, the confirm panel) use the same size, a step smaller.
@@ -137,7 +140,7 @@ function termWhere(entry){
  if(entry.kind==='tmux'||entry.kind==='attach')return tmuxSub(entry);
  return 'Herdr 窗格 · '+(entry.pane.workspace_label?entry.pane.workspace_label+' · ':'')+entry.pane.pane_id;}
 function renderTerminal(){
- const entry=T.view;if(!entry)return;S.chat=null;termFontVar();hwKeyboardProbe();const root=shell();root.classList.add('terminal-shell');root.classList.toggle('hw-kb',hwKeyboardHide());
+ const entry=T.view;if(!entry)return;S.chat=null;lookApply();termFontVar();hwKeyboardProbe();const root=shell();root.classList.add('terminal-shell');root.classList.toggle('hw-kb',hwKeyboardHide());
  const head=el('header','chat-head term-head');head.append(ib('back',entry.kind==='tmux'||entry.kind==='attach'||S.tab==='live'?'返回列表':'返回终端列表',()=>{leaveTerminal();render();}));
  const [st,stLabel]=termState(entry);
  const av=el('div','avatar term-av'+(entry.kind==='ssh'?' ssh':''));av.append(icon(entry.kind==='ssh'?'globe':'terminal'),el('span','status-dot '+(st==='ok'?'ok':st==='warn'?'work':'')));head.append(av);
@@ -148,7 +151,7 @@ function renderTerminal(){
  // tmux: snapshot ⇄ live attach, one tap in the header.
  if((entry.kind==='tmux'||entry.kind==='attach')&&typeof tmuxLiveButton==='function'){const b=tmuxLiveButton(entry);if(b)head.append(b);}
  head.append(ib('copy','复制屏幕内容',()=>terminalCopy(entry)),ib('more','终端选项',terminalMenu));root.append(head);
- // The screen: a dark card on the warm page in light theme, a deeper well in dark theme.
+ // The screen, in its own light / dark (settings.js).
  const stage=el('div','term-stage');const surface=el('div','term-surface');surface.id='term-surface';surface.classList.toggle('is-off',!!entry.ended);
  if(isPty(entry)){surface.append(entry.host);requestAnimationFrame(()=>{if(!entry.disposed){entry.fit.fit();termJump(entry);if(hwKeyboardHide())entry.term.focus();}});}
  else{const output=el('pre','pane-screen');output.id='pane-screen';output.tabIndex=0;output.setAttribute('aria-label',entry.kind==='tmux'?'tmux 窗格输出':'Herdr 窗格输出');screenUpdate(output,entry);
@@ -339,6 +342,7 @@ function terminalMenu(){const entry=T.view;const box=sheet('终端选项');
  const size=el('div','term-size');const cur=el('span','grow','字号 · '+termFontSize());
  const step=d=>{const at=TERM_FONTS.indexOf(termFontSize());const i=Math.max(0,Math.min(TERM_FONTS.length-1,(at<0?2:at)+d));termFont(TERM_FONTS[i]);cur.textContent='字号 · '+TERM_FONTS[i];};
  size.append(cur,btn('A−','secondary small',()=>step(-1)),btn('A+','secondary small',()=>step(1)));size.querySelectorAll('button')[0].setAttribute('aria-label','字号小一点');size.querySelectorAll('button')[1].setAttribute('aria-label','字号大一点');box.append(size);
+ termLookSegs(box);
  menuItem(box,isPty(entry)&&entry.term.hasSelection()?'复制选中内容':'复制屏幕内容',()=>terminalCopy(entry),'copy');
  menuItem(box,'选择文字',()=>terminalSelect(entry),'textCursor','长按选择任意一段，含往上的历史');
  menuItem(box,'自定义按键…',()=>tkEditSheet(),'edit','选哪些键显示、怎么排');

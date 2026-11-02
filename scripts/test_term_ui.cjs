@@ -21,7 +21,8 @@ async function fresh(width,height,theme){
  await page.goto(require('./ui_bundle.cjs').url(html));
  await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
  await page.getByText('离线演示 · 示例数据，不连接电脑',{exact:true}).first().waitFor();
- await page.evaluate(t=>window.applyTheme(t),theme);
+ // Here the page follows the app theme; test_termlook_ui.cjs covers the terminal's own look.
+ await page.evaluate(t=>{SET.prefs={...(SET.prefs||{}),termLook:'app'};window.applyTheme(t);},theme);
  return page;}
 const token=(page,name)=>page.evaluate(n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim(),name);
 const rgb=hex=>{const h=hex.replace('#','');return 'rgb('+[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)).join(', ')+')';};
