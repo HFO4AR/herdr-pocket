@@ -270,7 +270,7 @@ class SshTransport : AutoCloseable {
                 val name = "${picture.sha256}.${picture.ext}"
                 put(sftp, "$folder/$name", picture.bytes)
                 put(sftp, "$folder/${picture.sha256}.thumb.jpg", picture.thumb)
-                return JSONObject().put("name", "$day/$name").put("sha256", picture.sha256).put("bytes", picture.bytes.size)
+                return JSONObject().put("name", "$day/$name").put("sha256", picture.sha256).put("bytes", picture.size)
             } finally { sftp.disconnect() }
         } finally { release(ssh) }
     }
@@ -411,12 +411,12 @@ class SshTransport : AutoCloseable {
         under.asReversed().forEach { it.disconnect() }
     }
 
-    fun request(value: JSONObject): JSONObject {
+    fun request(value: JSONObject, waitMs: Long = 0L): JSONObject {
         val (ssh, gen) = acquire()
-        try { return exec(ssh, gen, value) } finally { release(ssh) }
+        try { return exec(ssh, gen, value, waitMs) } finally { release(ssh) }
     }
 
-    private fun exec(ssh: Session, gen: Long, value: JSONObject): JSONObject {
+    private fun exec(ssh: Session, gen: Long, value: JSONObject, waitMs: Long = 0L): JSONObject {
         if (!ssh.isConnected) throw NotSent(gen, true, IllegalStateException("SSH 已断开"))
         val err = ByteArrayOutputStream()
         val input = (value.put("v", 1).toString() + "\n").byteInputStream()
@@ -431,7 +431,8 @@ class SshTransport : AutoCloseable {
             try { channel.connect(OPEN_TIMEOUT_MS) } catch (e: JSchException) { throw NotSent(gen, !ssh.isConnected, e) }
             val buffer = ByteArrayOutputStream()
             val chunk = ByteArray(8192)
-            val deadline = System.nanoTime() + 35_000_000_000L
+            val waitSeconds = maxOf(35L, waitMs / 1000)
+            val deadline = System.nanoTime() + waitSeconds * 1_000_000_000L
             while (true) {
                 while (output.available() > 0) {
                     val n = output.read(chunk)
@@ -440,7 +441,7 @@ class SshTransport : AutoCloseable {
                     check(buffer.size() <= 2_000_000) { "服务器响应过大" }
                 }
                 if (channel.isClosed && output.available() == 0) break
-                check(System.nanoTime() < deadline) { "等了 35 秒还没有回应；请求已经发出，结果未知。先刷新看看，别直接重发。" }
+                check(System.nanoTime() < deadline) { "等了 $waitSeconds 秒还没有回应；请求已经发出，结果未知。先刷新看看，别直接重发。" }
                 Thread.sleep(30)
             }
             // Closed without an exit status: the connection died after the request was sent.

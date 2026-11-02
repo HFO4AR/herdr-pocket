@@ -102,7 +102,6 @@ const finish=page=>page.evaluate(()=>{const r=fx.kids.r2;r.items.forEach(x=>{x.r
  await rowOf(page,'整理串口日志解析').click();
  await page.locator('#chat-meta .meta-state',{hasText:'子 Agent 运行中 · 2'}).waitFor();
  assert.equal(await page.$eval('#chat-dot',n=>n.className),'status-dot work');
- assert.equal(await page.$eval('#child-count',n=>n.textContent+'/'+n.className),'2/icon-count kids-on');
  await page.getByRole('button',{name:'切换 Agent',exact:true}).click();
  await page.locator('.kids-sheet-head',{hasText:'这段对话的子 Agent · 3'}).waitFor();
  await page.locator('.kids-sheet-head .badge',{hasText:'2 个运行中'}).waitFor();
@@ -126,6 +125,53 @@ const finish=page=>page.evaluate(()=>{const r=fx.kids.r2;r.items.forEach(x=>{x.r
  await page.locator('#chat-meta .meta-state',{hasText:'空闲'}).waitFor();
  await noInput(page);
  await page.context().close();}
+
+// 2b. Running sub-agents stay out of the conversation: the header's control carries the number and
+// opens what each does, live while open; it goes when they finish, and 切换 Agent gets its number back.
+{const page=await fresh();
+ await rowOf(page,'整理串口日志解析').click();
+ const run=page.locator('#kids-run-btn:not(.hidden)');await run.waitFor();
+ assert.equal(await run.getAttribute('aria-label'),'子 Agent 在跑 · 2');
+ assert.equal(await page.$eval('#kids-run-btn .icon-count',n=>n.textContent+'/'+n.className),'2/icon-count kids-on');
+ assert.ok(await page.$eval('#child-count',n=>n.classList.contains('hidden')),'one number in the header');
+ assert.equal(await page.locator('#chat-scroll .act-kid').count(),0,'nothing in the conversation');
+ assert.equal(await page.locator('#act').count(),0,'no card in the conversation');
+ const size=await run.boundingBox();assert.ok(size.width>=44&&size.height>=44,'touch target: '+JSON.stringify(size));
+ await run.click();
+ assert.deepEqual(await page.locator('#kids-run .act-kid-title').allTextContents(),['补接口回归用例','检查暗色模式对比度']);
+ assert.equal(await page.locator('.sheet-head h2').textContent(),'子 Agent 在跑 · 2');
+ await page.screenshot({path:path.join(folder,'kids-run-390.png')});
+ // One finishes: the open sheet and the control follow.
+ await page.evaluate(()=>{const r=fx.kids.r2;r.items[1].running=false;r.items[1].state='done';r.running=1;r.stamp='one';fetchHistory();});
+ await page.locator('.sheet-head h2',{hasText:'子 Agent 在跑 · 1'}).waitFor();
+ assert.deepEqual(await page.locator('#kids-run .act-kid-title').allTextContents(),['检查暗色模式对比度']);
+ assert.equal(await run.getAttribute('aria-label'),'子 Agent 在跑 · 1');
+ // A row opens the record, read-only, and the sheet goes.
+ await page.locator('#kids-run .act-kid').first().click();
+ await page.locator('#chat-meta',{hasText:'子 Agent · Claude · 历史只读'}).waitFor();
+ assert.equal(await page.locator('.sheet').count(),0,'sheet closed');
+ await page.getByRole('button',{name:'返回列表',exact:true}).click();await run.waitFor();
+ // All done while it is open: it says so, and the control hands the number back.
+ await run.click();await page.locator('#kids-run .act-kid').first().waitFor();
+ await finish(page);await page.evaluate(()=>fetchHistory());
+ await page.locator('.sheet-head h2',{hasText:'子 Agent 都跑完了'}).waitFor();
+ await page.locator('#kids-run-btn').waitFor({state:'hidden'});
+ assert.equal(await page.$eval('#child-count',n=>n.textContent+'/'+n.className),'3/icon-count');
+ await page.getByRole('button',{name:'看全部子 Agent，含已结束的',exact:true}).click();
+ await page.locator('.kids-sheet-head',{hasText:'这段对话的子 Agent · 3'}).waitFor();
+ await noInput(page);
+ await page.context().close();}
+for(const [w,h,dark] of [[320,640,false],[390,844,true],[320,640,true]]){
+ const page=await fresh(w,h,{dark});await rowOf(page,'整理串口日志解析').click();
+ const run=page.locator('#kids-run-btn:not(.hidden)');await run.waitFor();
+ assert.ok(await overflow(page)<=0,'header overflow at '+w);
+ const title=await page.$eval('#chat-head h2',n=>n.getBoundingClientRect().width);assert.ok(title>=100,'the title keeps its room at '+w+': '+title);
+ await page.screenshot({path:path.join(folder,'kids-run-head-'+w+(dark?'-dark':'')+'.png')});
+ await run.click();await page.locator('#kids-run .act-kid').first().waitFor();await page.waitForTimeout(300);
+ assert.deepEqual(await page.evaluate(()=>[...document.querySelectorAll('#kids-run *')].filter(n=>n.getBoundingClientRect().right>innerWidth+1).map(n=>n.className)),[],'sheet fits '+w);
+ await page.screenshot({path:path.join(folder,'kids-run-'+w+(dark?'-dark':'')+'.png')});
+ await page.context().close();}
+console.log('PASS: running sub-agents stay out of the conversation; the header control opens them live');
 
 // 3. Small and dark: no overflow at 320, the chip and list read well in dark.
 for(const [w,h,dark] of [[320,640,false],[390,844,true],[320,640,true]]){

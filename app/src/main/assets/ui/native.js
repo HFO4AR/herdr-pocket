@@ -8,14 +8,13 @@
 
 // ─── Share ──────────────────────────────────────────────────────────────────
 const SHARE={item:null,preparing:false,asked:false,loaded:false};
-// Called by MainActivity: {preparing:true} first, then {text,images,files,failed,reason,extra}.
+// Called by MainActivity: {preparing:true} first, then {text,images,files,failed,reason}.
 window.pocketShare=p=>{
  if(p?.preparing){SHARE.preparing=true;shareTick();return;}
  SHARE.preparing=false;
  const item={text:String(p?.text||''),images:Array.isArray(p?.images)?p.images:[],files:Array.isArray(p?.files)?p.files:[],at:Date.now()};
  const empty=!item.text.trim()&&!item.images.length&&!item.files.length;
  if(p?.failed)toast(empty?'分享的内容读不到'+(p.reason?'：'+p.reason:''):p.failed+' 个文件没加上'+(p.reason?'：'+p.reason:''));
- else if(p?.extra)toast('一条消息最多带 4 个文件，多的没加');
  if(empty){if(!p?.failed)toast('没有可以发送的内容');shareTick();return;}
  // A newer share replaces one still waiting.
  if(SHARE.item)shareRelease(SHARE.item);
@@ -93,7 +92,7 @@ function shareApply(a){
  const pics=it.images;
  if(pics.length)imgSet(key,imgAttached(key).concat(pics));
  const have=fileAttached(key),docs=[];
- for(const f of it.files){if(have.length+docs.length<FILE_MAX&&!have.concat(docs).some(x=>x.name===f.name&&x.size===f.size))docs.push(f);}
+ for(const f of it.files){if(!have.concat(docs).some(x=>x.name===f.name&&x.size===f.size))docs.push(f);}
  if(docs.length)fileSet(key,have.concat(docs));
  const left={images:it.images.filter(x=>!pics.includes(x)),files:it.files.filter(x=>!docs.includes(x))};
  shareRelease(left);

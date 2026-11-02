@@ -5,7 +5,8 @@
 // history op while a chat is open; ch panes through the remote helper). Here that becomes:
 //  · an effective state "kids" — 子 Agent 运行中 · N — grouped with 执行中, never 已完成/空闲;
 //  · a chip under the row (子 Agent 3 · 1 运行中) that expands the sub-agents in place;
-//  · the chat's 切换 Agent sheet listing them running-first, updating while it is open.
+//  · the chat's 切换 Agent sheet listing them running-first, updating while it is open;
+//  · never in the conversation: while some run the header has a control, its sheet says what each does.
 // Read-only: opening a sub-agent shows its transcript; nothing is ever sent to it.
 // Text nodes only. Loaded before app.js; functions here call app.js helpers at run time.
 const K={map:new Map(),rec:new Map(),open:new Set(),ask:new Map(),ttl:300000,pending:false,changed:new Set()};
@@ -164,12 +165,22 @@ function kidsFillSheet(wrap){
  list.replaceChildren(...shortList.map(x=>kidsRow(x,true)));
  if(shortList.length<items.length){const all=btn('显示全部 '+items.length+' 个','link-btn',()=>{all.remove();wrap.dataset.all='1';list.replaceChildren(...items.map(x=>kidsRow(x,true)));});wrap.append(all);}
  if(wrap.dataset.all)list.replaceChildren(...items.map(x=>kidsRow(x,true)));}
-function kidsPaintSheet(){const w=document.getElementById('kids-sheet');if(w)kidsFillSheet(w);}
-// The header's 切换 Agent button: how many sub-agents, amber while any runs.
+function kidsPaintSheet(){const w=document.getElementById('kids-sheet');if(w)kidsFillSheet(w);const r=document.getElementById('kids-run');if(r)actKidsFill(r);}
+// The header's 子 Agent control: there while some run, the turning flower of the activity line.
+function kidsRunButton(){
+ const b=btn('','icon-btn with-count head-act kids-run-btn hidden',kidsRunOpen);b.id='kids-run-btn';
+ const glyph=el('span','act-glyph'),count=el('span','icon-count kids-on');glyph.setAttribute('aria-hidden','true');count.setAttribute('aria-hidden','true');b.append(glyph,count);return b;}
+function kidsRunOpen(){
+ const box=sheet('子 Agent 在跑'),list=el('div','kids-run');list.id='kids-run';
+ box.append(list,btn('看全部子 Agent，含已结束的','link-btn kids-run-all',agentSwitcher));actKidsFill(list);}
+// The header's 切换 Agent button says how many sub-agents; while some run the number moves to the 子 Agent control.
 function kidsPaintHead(){
  const b=document.getElementById('child-count');if(!b||!S.chat)return;const rep=kidsChat(),items=kidsChatItems();
  const total=Math.max(items.length,rep?.total||0),running=items.filter(x=>x.running).length;
- b.textContent=String(running||total);b.classList.toggle('hidden',!total);b.classList.toggle('kids-on',running>0);
+ const live=actKids().length;
+ b.textContent=String(running||total);b.classList.toggle('hidden',!total||live>0);b.classList.toggle('kids-on',running>0);
+ const run=document.getElementById('kids-run-btn');
+ if(run){const label='子 Agent 在跑 · '+live;run.classList.toggle('hidden',!live);run.querySelector('.icon-count').textContent=String(live);run.setAttribute('aria-label',label);run.title=label;}
  const sw=b.closest('button');if(sw){const label='切换 Agent';sw.title=running?label+' · '+running+' 个子 Agent 运行中':label;}
  const c=S.chat;if(!c.agent&&c.record?.parent){const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(c.kidRunning?'work':'muted');}}
 function kidsForget(){K.map.clear();K.rec.clear();K.ask.clear();bgForget();}

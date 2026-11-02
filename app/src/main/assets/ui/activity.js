@@ -7,9 +7,9 @@
 //     transcript; thinking / output from the agent's own status line on its screen, bridge `read`
 //     → `activity` {verb, seconds, tokens, dir, thinking, line});
 //   · 收尾中，正在读取回复…   Herdr says it stopped, the reply is not in the transcript yet;
-//   · 子 Agent 在跑 · N   the agent rests while its sub-agents work (kids.js), each with its step;
 //   · 状态有一会儿没更新了   no status for a while: the animation stops and it says so.
-// It goes away on idle / done / blocked (the question card or 「做完了」 take over). A running
+// It goes away on idle / done / blocked (the question card or 「做完了」 take over), and stays away
+// while the agent rests on its sub-agents: those live behind the header's control (kids.js). A running
 // sub-agent's own record shows the same line (read-only), polled faster while it runs.
 // Text nodes only. Loaded right after foot.js; functions here call app.js helpers at run time.
 const ACT={node:null,kind:'',screen:null,readAt:0,tokens:-1,grow:0,said:'',io:null,seen:false,wantRead:0};
@@ -48,7 +48,6 @@ function actInfo(){
  if(c.stale||c.exited||(!S.device&&!S.demo))return null;
  const a=c.agent,st=a.agent_status,rec=S.since.get(agentKey(a)),now=Date.now(),sent=c.sentAt||0;
  const fresh=S.demo||a.tmux||now-Math.max(S.liveAt||0,ACT.readAt||0,ACT.resumeAt||0,c.sentAt||0)<ACT_STALE;
- const kids=kidsRunning(a);
  if(st==='blocked')return null;
  if(st==='working'){
   // Optimistic "working" right after a send (app.js sendMessage) until Herdr or the screen says so.
@@ -59,12 +58,12 @@ function actInfo(){
   // Elapsed: the agent's own count when its screen shows one, else since Herdr said working / the send.
   const at=s&&ACT.base?ACT.base:statusSince(a)||sent||0;
   const open=c.noTranscript?null:actOpenTool();
-  if(open){const t=actToolText(open);return {kind:'tool',label:'正在执行',tool:t,at,words:actWords(),kids};}
-  if(s?.thinking)return {kind:'think',label:'正在思考',at,words:actWords(),kids};
-  if(s&&ACT.grow&&now-ACT.grow<6000)return {kind:'write',label:'正在输出',at,words:actWords(),kids};
-  return {kind:'think',label:s?'正在思考':'正在工作',at,words:actWords(),kids};}
+  if(open){const t=actToolText(open);return {kind:'tool',label:'正在执行',tool:t,at,words:actWords()};}
+  if(s?.thinking)return {kind:'think',label:'正在思考',at,words:actWords()};
+  if(s&&ACT.grow&&now-ACT.grow<6000)return {kind:'write',label:'正在输出',at,words:actWords()};
+  return {kind:'think',label:s?'正在思考':'正在工作',at,words:actWords()};}
  if(st==='idle'||st==='done'){
-  if(kids)return {kind:'kids',label:'子 Agent 在跑 · '+kids,at:0,kids};
+  if(kidsRunning(a))return null;
   // It worked and stopped after the send: the reply is on its way. Otherwise it has not started.
   // "Not started yet" only for a send from this phone; anything else waiting for its reply is the tail.
   // Any state change seen since the send means it got going (it may have stopped again already).
@@ -95,7 +94,7 @@ function actNode(){
  const text=el('div','act-text');const line=el('div','act-line');line.append(el('strong','act-label'),el('span','act-time'));
  const live=el('span','sr-only act-live');live.setAttribute('role','status');live.setAttribute('aria-live','polite');
  text.append(line,el('div','act-tool'),el('div','act-words'),el('div','act-note'));main.append(mark,text);
- n.append(main,el('div','act-kids'),live);ACT.node=n;
+ n.append(main,live);ACT.node=n;
  if(typeof IntersectionObserver!=='undefined'){ACT.io=new IntersectionObserver(es=>{const v=es.some(e=>e.isIntersecting);if(v!==ACT.seen){ACT.seen=v;actSeen();}},{threshold:.6});ACT.io.observe(n);}
  return n;}
 // The rail's 「执行中」 drops its own timer while this line is in view (no second clock on screen).
@@ -111,20 +110,17 @@ function actFill(info){
  set('.act-words',info.words?providerName(S.chat.provider)+'：'+info.words:'');
  const note=set('.act-note',info.note||'');
  if(info.term&&!note.querySelector('button')){note.append(' ',btn('看终端','link-btn act-term',()=>{S.chatMode='terminal';S.stick=true;S.epoch++;renderChat();fetchTerminal();}));}
- actKidsFill(n.querySelector('.act-kids'),info);
  // Screen readers hear the state when it changes, never the ticking clock.
  const say=info.label+(info.tool?'：'+info.tool.verb+' '+info.tool.target:'');if(ACT.said!==say){ACT.said=say;n.querySelector('.act-live').textContent=say;}}
-// Running sub-agents under the line: what each does right now; finished ones fade out.
+// Running sub-agents, in the sheet behind the header's control (kids.js): what each does right now.
 function actKids(){const c=S.chat;if(!c?.agent||c.stale)return [];return kidsChatItems().filter(x=>x.running||x.state==='starting');}
-function actKidsFill(box,info){
- const items=info.kid?[]:actKids(),shown=items.slice(0,3);
- const sig=shown.map(x=>(x.id||x.title)+'|'+actKidState(x).text+'|'+(x.activity?.text||'')).join('\n')+'|'+items.length;
- box.classList.toggle('hidden',!items.length);
+function actKidsFill(box){
+ const items=actKids();
+ const sig=items.map(x=>(x.id||x.title)+'|'+actKidState(x).text+'|'+(x.activity?.text||'')).join('\n');
  if(box.dataset.sig===sig){box.querySelectorAll('[data-at]').forEach(s=>{s.textContent=dur(Date.now()-Number(s.dataset.at));});return;}
- box.dataset.sig=sig;box.replaceChildren();if(!items.length)return;
- const head=el('div','act-kids-head');head.append(el('span','',items.length+' 个子 Agent 在跑'));box.append(head);
- for(const x of shown)box.append(actKidRow(x));
- if(items.length>shown.length){const more=btn('还有 '+(items.length-shown.length)+' 个 · 全部看','link-btn act-kids-more',agentSwitcher);box.append(more);}}
+ box.dataset.sig=sig;box.replaceChildren(...items.map(x=>actKidRow(x)));
+ const title=items.length?'子 Agent 在跑 · '+items.length:'子 Agent 都跑完了',sh=box.closest('.sheet');
+ if(sh){sh.setAttribute('aria-label',title);sh.querySelector('.sheet-head h2').textContent=title;}}
 // What one sub-agent is doing: its open tool call, the note it just wrote, or just that it runs.
 function actKidState(x){
  const a=x.activity;if(x.state==='starting')return {cls:'start',text:'正在启动'};
@@ -134,7 +130,7 @@ function actKidState(x){
  return {cls:'think',text:'运行中'};}
 function actKidRow(x){
  const st=actKidState(x),can=!!x.id;
- const b=btn('','act-kid s-'+st.cls,()=>{if(can)openRecord(x,true);});if(!can)b.disabled=true;
+ const b=btn('','act-kid s-'+st.cls,()=>{if(can){closeSheet();openRecord(x,true);}});if(!can)b.disabled=true;
  b.append(el('span','kid-dot on'));
  const body=el('span','act-kid-body');const top=el('span','act-kid-top');top.append(el('span','act-kid-title',kidsTitle(x)));
  top.append(el('span','act-kid-state',st.text));
@@ -155,6 +151,7 @@ function actTick(){
  if(!!info!==has||(info&&!has)){if(document.getElementById('chat-scroll'))paintTimeline();}
  else if(info)actFill(info);
  ACT.kind=info?.kind||'';
+ const run=document.getElementById('kids-run');if(run)actKidsFill(run);
  // Waiting for it to start: look at its screen too (the spinner shows before Herdr's state flips).
  if(info?.kind==='sent'&&S.chat?.agent&&!S.demo&&Date.now()-ACT.wantRead>2400){ACT.wantRead=Date.now();fetchTerminal(true);}
  // The rail's working line says the same thing in a few words.

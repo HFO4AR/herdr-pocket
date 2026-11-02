@@ -47,8 +47,8 @@ private const val SAVE_AS = 47
 private const val MAX_UPLOAD_PICK = 50
 
 // Keep in sync with scripts/ui_bundle.cjs (browser tests). app.js is last: it boots the UI.
-private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/files.css", "ui/queue.css", "ui/dirpick.css", "ui/create.css", "ui/slash.css", "ui/panel.css", "ui/rename.css", "ui/close.css", "ui/settings.css", "ui/ccswitch.css", "ui/keys.css", "ui/onboard.css", "ui/resume.css", "ui/hops.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/termkeys.css", "ui/glyphs.css", "ui/ansi.css", "ui/kids.css", "ui/bg.css", "ui/mode.css", "ui/foot.css", "ui/activity.css", "ui/tmux.css", "ui/hpanes.css", "ui/pickup.css", "ui/guard.css", "ui/sftp.css", "ui/office.css", "ui/layout.css")
-private val UI_JS = listOf("ui/markdown.js", "ui/ansi.js", "ui/timeline.js", "ui/images.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/dirpick.js", "ui/create.js", "ui/slash.js", "ui/panel.js", "ui/rename.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/ccswitch.js", "ui/keys.js", "ui/hops.js", "ui/onboard.js", "ui/resume.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/bg.js", "ui/mode.js", "ui/foot.js", "ui/activity.js", "ui/termkeys.js", "ui/app.js", "ui/tmux.js", "ui/hpanes.js", "ui/pickup.js", "ui/guard.js", "ui/sftp.js", "ui/office.js", "ui/layout.js")
+private val UI_CSS = listOf("ui/vendor/xterm.css", "ui/app.css", "ui/chat.css", "ui/timeline.css", "ui/markdown.css", "ui/follow.css", "ui/answer.css", "ui/images.css", "ui/imgedit.css", "ui/files.css", "ui/queue.css", "ui/dirpick.css", "ui/create.css", "ui/slash.css", "ui/panel.css", "ui/rename.css", "ui/close.css", "ui/settings.css", "ui/ccswitch.css", "ui/keys.css", "ui/onboard.css", "ui/resume.css", "ui/hops.css", "ui/native.css", "ui/lists.css", "ui/help.css", "ui/find.css", "ui/terminals.css", "ui/termkeys.css", "ui/glyphs.css", "ui/ansi.css", "ui/kids.css", "ui/bg.css", "ui/mode.css", "ui/foot.css", "ui/activity.css", "ui/tmux.css", "ui/hpanes.css", "ui/pickup.css", "ui/guard.css", "ui/sftp.css", "ui/office.css", "ui/layout.css")
+private val UI_JS = listOf("ui/markdown.js", "ui/ansi.js", "ui/timeline.js", "ui/images.js", "ui/imgedit.js", "ui/files.js", "ui/answer.js", "ui/demo.js", "ui/follow.js", "ui/queue.js", "ui/dirpick.js", "ui/create.js", "ui/slash.js", "ui/panel.js", "ui/rename.js", "ui/close.js", "ui/cache.js", "ui/settings.js", "ui/ccswitch.js", "ui/keys.js", "ui/hops.js", "ui/onboard.js", "ui/resume.js", "ui/native.js", "ui/glance.js", "ui/help.js", "ui/find.js", "ui/fileview.js", "ui/kids.js", "ui/bg.js", "ui/mode.js", "ui/foot.js", "ui/activity.js", "ui/termkeys.js", "ui/app.js", "ui/tmux.js", "ui/hpanes.js", "ui/pickup.js", "ui/guard.js", "ui/sftp.js", "ui/office.js", "ui/layout.js")
 
 /** Bundled offline UI only. No web navigation or remote resource can reach the native bridge. */
 class MainActivity : Activity() {
@@ -91,6 +91,7 @@ class MainActivity : Activity() {
         // Terminal output arrived after the page read everything: it reads again at once (terminals.js ptyLoop).
         core.shellWake = shellWake
         super.onCreate(savedInstanceState)
+        ImagePrep.init(java.io.File(noBackupFilesDir, "outgoing-pictures"))
         core.init(this)
         if (core.alertsEnabled) WatchService.ensureChannels(this)
         applySecure()
@@ -514,12 +515,15 @@ class MainActivity : Activity() {
                             for (i in 0 until ids.length()) ImagePrep.drop(ids.optString(i))
                             success(id, JSONObject())
                         }
+                        // The editor (imgedit.js): the picture itself, and the edited picture in its place.
+                        "imageEditSource" -> success(id, ImagePrep.editSource(req.getString("id")))
+                        "imageEditSave" -> success(id, ImagePrep.describe(ImagePrep.replace(req.getString("id"), android.util.Base64.decode(req.getString("data"), android.util.Base64.DEFAULT))))
                         "uploadImage" -> {
                             val picture = ImagePrep.get(req.getString("id")) ?: error("这张图片已失效，删掉重新选一下")
                             val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
                             success(id, core.upload(dev(req), picture, day))
                         }
-                        "pickFiles" -> runOnUiThread { pickFiles(id, req.optInt("max", FileAttach.MAX_FILES).coerceIn(1, FileAttach.MAX_FILES)) }
+                        "pickFiles" -> runOnUiThread { pickFiles(id) }
                         "dropFiles" -> {
                             val ids = req.optJSONArray("ids") ?: JSONArray()
                             for (i in 0 until ids.length()) FileAttach.drop(ids.optString(i))
@@ -599,10 +603,12 @@ class MainActivity : Activity() {
                         }
                         "remote" -> {
                             check(req.optString("op") in setOf("sessions", "agents", "status", "read", "prompt", "key", "answer", "catalog", "history", "account", "panes", "paneRead", "paneRun", "paneText", "paneKey", "stageFile", "fileInfo", "fileView", "dirList", "bgOutput", "createInfo", "create", "commands", "closeInfo", "closePane", "exitAgent", "panelTour", "hidden", "doctor", "glance", "hello", "tmux", "tmuxRead", "tmuxSend", "tmuxInfo", "tmuxNew", "tmuxKill", "herdrHealth", "herdrStart", "guardPlan", "guardSet", "ccswitch", "providers", "ccswitchSwitch")) { "不支持的操作" }
-                            // `device` picks the computer; it is not part of the bridge request.
+                            // `device` picks the computer and `waitMs` how long to wait for a big file (only
+                            // stageFile, which never reaches an agent); neither is part of the bridge request.
                             val device = dev(req)
-                            req.remove("device")
-                            success(id, core.request(device, req))
+                            val wait = if (req.optString("op") == "stageFile") req.optLong("waitMs", 0L) else 0L
+                            req.remove("device"); req.remove("waitMs")
+                            success(id, core.request(device, req, wait))
                         }
                         else -> error("不支持的操作")
                     }
@@ -649,12 +655,12 @@ class MainActivity : Activity() {
     }
 
     /** System document picker (Storage Access Framework): any type, several at once, no storage permission. */
-    private fun pickFiles(id: String, max: Int) {
+    private fun pickFiles(id: String) {
         if (pickId != null) { failure(id, IllegalStateException("正在选文件，先把上一个选完")); return }
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
-            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, max > 1)
+            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         try {
-            pickId = id; pickMax = max
+            pickId = id; pickMax = Int.MAX_VALUE
             startActivityForResult(intent, PICK_FILES)
         } catch (e: ActivityNotFoundException) {
             pickId = null

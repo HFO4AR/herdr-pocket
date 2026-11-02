@@ -79,7 +79,7 @@ object ShareIn {
     /** Pictures go through [ImagePrep] (upright, small, no EXIF); anything else is a file chip. */
     fun read(resolver: ContentResolver, intent: Intent): JSONObject {
         val images = JSONArray(); val files = JSONArray()
-        var failed = 0; var reason = ""; var extra = 0
+        var failed = 0; var reason = ""
         for (uri in uris(intent)) {
             val mime = try { resolver.getType(uri) } catch (_: Exception) { null } ?: ""
             var done = false
@@ -87,11 +87,10 @@ object ShareIn {
                 try { images.put(ImagePrep.describe(ImagePrep.prepare(resolver, uri))); done = true } catch (_: Throwable) {}
             }
             if (done) continue
-            if (files.length() >= FileAttach.MAX_FILES) { extra++; continue }
             try { files.put(FileAttach.describe(FileAttach.describe(resolver, uri))) }
             catch (e: Exception) { failed++; reason = e.message ?: "" }
         }
         return JSONObject().put("text", text(intent)).put("images", images).put("files", files)
-            .put("failed", failed).put("reason", reason).put("extra", extra)
+            .put("failed", failed).put("reason", reason)
     }
 }

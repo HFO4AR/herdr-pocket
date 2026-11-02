@@ -6,7 +6,6 @@
 //    then staged for the pane (copied to the other computer for a ch route), then one prompt names
 //    them. Any failure before the prompt means nothing reached the agent.
 //  · History: "[文件] <…/.herdr-pocket/uploads/<day>/<prefix>/<name>>" lines show as file chips.
-const FILE_MAX=4,FILE_LIMIT=25e6;
 const FILES=new Map();// draft key → [{id,name,size,mime,up?:{name,sha256}}]
 function fileAttached(key=draftKey()){return FILES.get(key)||[];}
 function fileSet(key,list){if(list.length)FILES.set(key,list);else FILES.delete(key);}
@@ -14,17 +13,16 @@ function fileSet(key,list){if(list.length)FILES.set(key,list);else FILES.delete(
 function attCount(key=draftKey()){return imgAttached(key).length+fileAttached(key).length;}
 async function filePick(key){
  if(S.demo){toast('演示模式：不能添加文件');return;}
- const left=FILE_MAX-fileAttached(key).length;if(left<=0){toast('一条消息最多带 4 个文件');return;}
- try{const r=await rpc('pickFiles',{max:left});const have=fileAttached(key);const keep=[],drop=[];
-  for(const f of r.files||[]){if(have.length+keep.length>=FILE_MAX||have.concat(keep).some(x=>x.name===f.name&&x.size===f.size))drop.push(f);else keep.push(f);}
+ try{const r=await rpc('pickFiles');const have=fileAttached(key);const keep=[],drop=[];
+  for(const f of r.files||[]){if(have.concat(keep).some(x=>x.name===f.name&&x.size===f.size))drop.push(f);else keep.push(f);}
   if(drop.length)rpc('dropFiles',{ids:drop.map(f=>f.id)}).catch(()=>{});
   if(keep.length)fileSet(key,have.concat(keep));
   if(r.failed)toast((r.failed>1?r.failed+' 个文件没加上：':'没加上：')+(r.reason||'读不到'));
-  else if(r.extra||drop.length)toast(drop.some(f=>have.some(x=>x.name===f.name))?'有文件已经加过了':'一条消息最多带 4 个文件');
+  else if(drop.length)toast('有文件已经加过了');
   renderComposer();}
  catch(e){error(e);}}
 function fileRemove(key,id){fileSet(key,fileAttached(key).filter(f=>f.id!==id));rpc('dropFiles',{ids:[id]}).catch(()=>{});renderComposer();}
-function fileSize(n){if(!(n>=0))return '';if(n<1000)return n+' B';if(n<1e6)return Math.round(n/1e3)+' KB';return (n/1e6).toFixed(n<1e7?1:0)+' MB';}
+function fileSize(n){if(!(n>=0))return '';if(n<1000)return n+' B';if(n<1e6)return Math.round(n/1e3)+' KB';if(n<1e9)return (n/1e6).toFixed(n<1e7?1:0)+' MB';return (n/1e9).toFixed(1)+' GB';}
 function fileExt(name){const m=String(name).match(/\.([A-Za-z0-9]{1,5})$/);return m?m[1].toUpperCase():'';}
 // The square on the left of a chip: the extension when there is a short one, else a page icon.
 function fileBadge(name){const b=el('span','file-badge');const x=fileExt(name);if(x){b.classList.add('ext');b.append(el('b','',x));}else b.append(icon('file'));return b;}
@@ -39,8 +37,11 @@ function fileTray(compose,key){
  list.forEach(f=>{const chip=el('div','file-chip');chip.setAttribute('role','listitem');chip.append(fileBadge(f.name),fileText(f.name,fileSize(f.size)));
   const x=ib('x','删掉文件 '+f.name,()=>fileRemove(key,f.id));x.classList.add('file-x');chip.append(x);tray.append(chip);});
  const total=list.reduce((s,f)=>s+Math.max(0,f.size||0),0);
- tray.append(el('span','att-note',list.length+'/'+FILE_MAX+' 个'+(total?' · '+fileSize(total):'')));}
+ tray.append(el('span','att-note',list.length+' 个'+(total?' · '+fileSize(total):'')));}
 
+// How long the phone waits for the computer to hash a file and, for a ch route, copy it over a link of
+// at least 256 kB/s (the bridge gives the copy the same time); neither ever reaches an agent.
+function fileWait(size,far){return 35e3+Math.max(0,size||0)/(far?256:20e3);}
 // Uploads (once per attachment) and stages every file for this pane. Throws "没发出去：…" on any
 // failure: the prompt has not been sent then.
 async function fileUpload(list,a,progress){
@@ -52,7 +53,7 @@ async function fileUpload(list,a,progress){
    catch(e){throw new Error('没发出去：「'+f.name+'」没传上去（'+e.message+'）');}}
   // Cheap for a local pane; for a ch route it copies the file to the other computer (again on every send).
   progress((far?'正在把文件传到远端电脑':'正在核对文件')+n+'…');
-  try{await remote('stageFile',{session:S.session,target:a.pane_id,identity:a.identity,name:f.up.name,sha256:f.up.sha256,remote:far});}
+  try{await remote('stageFile',{session:S.session,target:a.pane_id,identity:a.identity,name:f.up.name,sha256:f.up.sha256,remote:far,waitMs:fileWait(f.size,far)});}
   catch(e){throw new Error(/^没发出去/.test(e.message)?e.message:'没发出去：「'+f.name+'」没交给 Agent（'+e.message+'）');}}
  return list.map(f=>({name:f.up.name,sha256:f.up.sha256}));}
 

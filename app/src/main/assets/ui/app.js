@@ -461,7 +461,7 @@ function updateChatMeta(){
  if(n&&c){n.replaceChildren();const a=c.agent&&!c.stale?c.agent:null;
   if(!a)n.append(chatSubtitle());
   // Just sent and not started yet (activity.js): say that, not 执行中 or 正在读取回复.
-  else if(actHeadText()||awaitingReply())n.append(el('span','meta-state work',actHeadText()||'正在读取回复…'),' · '+(projectOf(a)?projectOf(a)+' · ':'')+providerName(a.agent));
+  else if(actHeadText()||awaitingReply()&&!kidsRunning(a))n.append(el('span','meta-state work',actHeadText()||'正在读取回复…'),' · '+(projectOf(a)?projectOf(a)+' · ':'')+providerName(a.agent));
   else{const st=el('span','meta-state '+stateTone(a),stateLabel(a));const at=agentState(a)==='working'?actSince(a):agentState(a)==='blocked'?statusSince(a)||0:0;if(at)st.append(' ',since(at));n.append(st);const p=projectOf(a);n.append(' · '+(p?p+' · ':'')+providerName(a.agent));if(c.manual)n.append(' · 手动关联');}
   if(a)renameMeta(n);}
  const d=document.getElementById('chat-dot');if(d)d.className='status-dot '+(c?.agent&&!c.stale?stateTone(c.agent):'muted');
@@ -471,7 +471,7 @@ function renderChat(){
  const av=avatar(S.chat.provider);const dot=el('span','status-dot');dot.id='chat-dot';av.append(dot);head.append(av);
  const name=el('div','grow chat-id');name.append(chatTitle());const sub=el('small','chat-meta');sub.id='chat-meta';name.append(sub);head.append(name);
  const sw=ib('branch','切换 Agent',agentSwitcher);sw.classList.add('with-count');const count=el('span','icon-count hidden');count.id='child-count';count.setAttribute('aria-hidden','true');sw.append(count);
- const more=ib('more','更多操作',chatMenu);sw.classList.add('head-act');more.classList.add('head-act');head.append(sw,more);root.append(head);
+ const more=ib('more','更多操作',chatMenu);sw.classList.add('head-act');more.classList.add('head-act');head.append(kidsRunButton(),sw,more);root.append(head);
  const tabs=el('div','chat-tabs');tabs.setAttribute('role','group');tabs.setAttribute('aria-label','视图');[['conversation','对话'],['commands','命令'],['terminal','终端']].filter(([mode])=>!(S.chat.noTranscript&&mode==='commands')).forEach(([mode,title])=>{const b=btn(title,S.chatMode===mode?'active':'',()=>{if(S.chatMode===mode)return;S.chatMode=mode;S.stick=true;S.unseen=0;S.epoch++;renderChat();if(mode==='terminal')fetchTerminal();else if(S.chat.record&&!S.messages.length)fetchHistory(false,true);});b.setAttribute('aria-pressed',String(S.chatMode===mode));tabs.append(b);});head.append(tabs);
  const wrap=el('div','chat-body-wrap');const body=el('main','chat-body');body.id='chat-scroll';
  body.onscroll=()=>{const bottom=body.scrollHeight-body.scrollTop-body.clientHeight<80;if(bottom!==S.stick||(bottom&&S.unseen)){S.stick=bottom;if(bottom)S.unseen=0;updateJump();}
@@ -755,7 +755,7 @@ async function loadCatalog(query='',more=false){
 function pocketBack(){
  // Back on a sheet with typed content (a device form, a new session) asks for × like a tap outside.
  // A view inside the sheet (the directory picker, dirpick.js) goes back to the sheet first.
- if(overlay.childElementCount){const panel=overlay.querySelector('.sheet');if(panel?.onBack&&panel.onBack())return;if(panel?.keepOpen&&panel.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();return;}
+ if(overlay.childElementCount){const panel=overlay.querySelector('.sheet,.ie');if(panel?.onBack&&panel.onBack())return;if(panel?.keepOpen&&panel.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();return;}
  if(T.view){leaveTerminal();render();return;}
  if(typeof FX!=='undefined'&&FX.view&&!S.chat){filesBack();return;}
  if(S.chatStack.length){const prev=S.chatStack.pop();S.chat=prev;S.chatMode=prev.mode||'conversation';S.messages=prev.savedMessages||[];S.children=prev.savedChildren||[];S.before=prev.savedBefore||0;S.more=!!prev.savedMore;S.stick=prev.savedStick!==false;S.unseen=0;S.epoch++;renderChat();if(!S.stick)document.getElementById('chat-scroll').scrollTop=prev.savedScroll||0;if(prev.record&&!S.messages.length)fetchHistory(false,true);return;}

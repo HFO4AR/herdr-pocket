@@ -22,6 +22,9 @@ data class OfficeRun(
     val sizePt: Int? = null,
     /** External http(s)/mailto target, display-only (the UI never navigates). */
     val link: String? = null,
+    /** A slide's run: its final size (autofit applied), and super/subscript in percent. */
+    val exactPt: Float? = null,
+    val baseline: Int? = null,
 )
 
 data class OfficeParagraph(
@@ -36,6 +39,22 @@ data class OfficeParagraph(
     val indentPt: Int? = null,
     val beforePt: Int? = null,
     val afterPt: Int? = null,
+    val slide: PptxParaStyle? = null,
+)
+
+/** A slide paragraph's layout in points, everything inherited already resolved. */
+data class PptxParaStyle(
+    val marginPt: Float = 0f,
+    val indentPt: Float = 0f,
+    /** Line spacing as a multiple of single, or fixed points. */
+    val lineScale: Float? = null,
+    val linePt: Float? = null,
+    val beforePt: Float = 0f,
+    val afterPt: Float = 0f,
+    val fontPt: Float = 18f,
+    val color: String? = null,
+    val markerColor: String? = null,
+    val markerScale: Float? = null,
 )
 
 sealed class DocxBlock {
@@ -105,9 +124,30 @@ data class PptxPresentation(
     val widthEmu: Long,
     val heightEmu: Long,
     internal val parts: List<String>,
-)
+) {
+    internal var defaultText: PptxParser.XNode? = null
+    /** Layouts, masters and themes already read (used under the session's lock). */
+    internal val cache = HashMap<String, Any>()
+}
 
-/** [kind] is one of text, image, placeholder, table. Positions/sizes are EMU. */
+data class PptxStop(val at: Float, val color: String, val alpha: Float)
+data class PptxGrad(val angle: Float, val stops: List<PptxStop>)
+data class PptxEnd(val type: String, val w: String, val len: String)
+data class PptxLine(val color: String, val alpha: Float = 1f, val widthEmu: Long = 9525L, val dash: String? = null, val head: PptxEnd? = null, val tail: PptxEnd? = null)
+/** One custom path, in its own [w] × [h] space: SVG commands M L C Q Z with whole numbers. */
+data class PptxPath(val w: Long, val h: Long, val fill: Boolean, val stroke: Boolean, val d: String)
+/** Text placement in a shape: insets (left, top, right, bottom in EMU), anchor, wrapping, direction. */
+data class PptxBody(val anchor: String? = null, val ins: List<Long> = listOf(91_440L, 45_720L, 91_440L, 45_720L), val wrap: Boolean = true, val vert: String? = null, val center: Boolean = false)
+data class PptxCell(val paragraphs: List<OfficeParagraph>, val body: PptxBody, val fill: String?, val fillAlpha: Float, val span: Int, val rowSpan: Int, val covered: Boolean, val borders: Map<String, PptxLine>)
+data class PptxRow(val h: Long, val cells: List<PptxCell>)
+data class PptxTable(val cols: List<Long>, val rows: List<PptxRow>)
+
+data class PptxSeries(val name: String, val color: String?, val values: List<Double?>, val xs: List<Double?>?, val points: Map<String, String>, val showVal: Boolean, val showPct: Boolean, val showCat: Boolean, val format: String?, val labelPt: Float?)
+data class PptxChart(val kind: String, val horizontal: Boolean, val stack: String?, val title: String?, val titlePt: Float, val cats: List<String>, val series: List<PptxSeries>,
+    val legend: String?, val legendPt: Float, val reverse: Boolean, val noCatAxis: Boolean, val noValAxis: Boolean, val grid: Boolean, val catPt: Float, val valPt: Float, val gap: Int,
+    val min: Double?, val max: Double?, val hole: Int?, val ink: String)
+
+/** [kind] is one of text, image, chart, table, or placeholder (an object that cannot be drawn, labelled). Positions/sizes are EMU. */
 data class PptxShape(
     val kind: String,
     val x: Long,
@@ -118,8 +158,23 @@ data class PptxShape(
     val asset: String? = null,
     val fill: String? = null,
     val name: String? = null,
-    /** Placeholder/unsupported label such as 图表, SmartArt, 嵌入对象. */
+    /** The placeholder type (title, body…), or what an unsupported object is: 图表, SmartArt, 嵌入对象. */
     val label: String? = null,
+    val fillAlpha: Float = 1f,
+    val grad: PptxGrad? = null,
+    val line: PptxLine? = null,
+    val rot: Float = 0f,
+    val flipH: Boolean = false,
+    val flipV: Boolean = false,
+    /** A preset shape's name and adjustments, or custom [paths]; a plain rectangle when neither. */
+    val geom: String? = null,
+    val adj: Map<String, Long> = emptyMap(),
+    val paths: List<PptxPath> = emptyList(),
+    val body: PptxBody? = null,
+    /** A picture's crop: left, top, right, bottom as fractions. */
+    val crop: List<Float>? = null,
+    val table: PptxTable? = null,
+    val chart: PptxChart? = null,
 )
 
 data class PptxSlide(
@@ -131,6 +186,7 @@ data class PptxSlide(
     val shapes: List<PptxShape> = emptyList(),
     val title: String? = null,
     val truncated: Boolean = false,
+    val bgGrad: PptxGrad? = null,
 )
 
 /**

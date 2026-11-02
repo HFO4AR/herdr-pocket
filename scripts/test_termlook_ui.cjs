@@ -38,7 +38,7 @@ const leave=page=>page.getByRole('button',{name:'返回终端列表',exact:true}
 const choose=(page,group,name)=>page.getByRole('radiogroup',{name:group,exact:true}).getByRole('radio',{name,exact:true}).click();
 const picked=(page,group)=>page.getByRole('radiogroup',{name:group,exact:true}).locator('[aria-checked="true"]').textContent();
 const seen=page=>page.evaluate(()=>{document.getAnimations().forEach(a=>a.finish());const css=(s,p)=>getComputedStyle(document.querySelector(s))[p],r=document.documentElement.dataset;
- return {theme:r.theme,term:r.term,key:css('.key','backgroundColor'),surface:css('#term-surface','backgroundColor'),xterm:T.shell.term.options.theme.background,fg:T.shell.term.options.theme.foreground};});
+ return {theme:r.theme,term:r.term,key:css('.tk-page .key','backgroundColor'),surface:css('#term-surface','backgroundColor'),xterm:T.shell.term.options.theme.background,fg:T.shell.term.options.theme.foreground};});
 const tokenRgb=hex=>{let h=hex.slice(1);if(h.length===3)h=[...h].map(x=>x+x).join('');return 'rgb('+[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)).join(', ')+')';};
 function look(s,theme,term,key,surface,tag){
  assert.equal(s.theme,theme,tag+': page theme');assert.equal(s.term,term,tag+': screen theme');
@@ -117,6 +117,29 @@ for(const [width,height] of [[390,844],[320,640]]){
  assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),'light');
  await page.context().close();}
 console.log('PASS: 终端选项 and 设置 change the look on the spot and agree');
+
+// 3b. The key bar: what stays put and what swipes read apart, in two rows and with the keyboard up, and still fit.
+for(const [width,height,rows] of [[390,844,2],[390,460,1],[320,640,2],[320,380,1]]){
+ const tag=width+'x'+height,page=await fresh('light',{},width,height);await openSsh(page);await page.waitForTimeout(150);
+ const s=await page.evaluate(()=>{document.getAnimations().forEach(a=>a.finish());
+  const m=document.querySelector('.tk-mods'),p=document.querySelector('.tk-pager'),page=p.querySelector('.tk-page'),box=n=>n.getBoundingClientRect();
+  return {two:document.querySelector('.tk-bar').classList.contains('two-rows'),line:getComputedStyle(m,':after').width,gap:box(p).left-box(m).right,
+   mod:getComputedStyle(m.querySelector('.key')).backgroundColor,key:getComputedStyle(page.querySelector('.key')).backgroundColor,
+   small:[...m.querySelectorAll('.key'),...page.querySelectorAll('.key')].filter(k=>box(k).width&&(box(k).width<44||box(k).height<44)).map(k=>k.textContent+' '+box(k).width),
+   left:box(m).left,right:innerWidth-Math.max(...[...page.querySelectorAll('.key')].map(k=>box(k).right)),dots:box(document.querySelector('.tk-dots')).left-box(p).left,dot:Math.min(...[...document.querySelectorAll('.tk-dots i')].map(i=>box(i).width))};});
+ assert.equal(s.two,rows===2,tag+': rows');
+ assert.equal(s.line,'1px',tag+': a line between them');assert.ok(s.gap>=10,tag+': room around the line '+s.gap);
+ assert.equal(s.mod,'rgba(0, 0, 0, 0)',tag+': pinned keys are outlined');assert.notEqual(s.key,s.mod,tag+': paged keys are filled');
+ assert.deepEqual(s.small,[],tag+': still 44 px targets');
+ assert.ok(Math.abs(s.left-s.right)<=1,tag+': same inset both sides '+s.left+'/'+s.right);
+ assert.ok(Math.abs(s.dots)<=1,tag+': the dots belong to the pages '+s.dots);
+ assert.ok(s.dot>=4.5,tag+': dots keep their shape '+s.dot);
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)<=0,tag+': fits');
+ await page.locator('.tk-bar').screenshot({path:path.join(folder,'termlook-keys-'+tag+'.png')});
+ await page.context().close();}
+{const page=await fresh('light',{termScreen:'light'},390,460);await openSsh(page);await page.waitForTimeout(150);
+ await page.locator('.tk-bar').screenshot({path:path.join(folder,'termlook-keys-light.png')});await page.context().close();}
+console.log('PASS: the key bar tells pinned keys from the pages');
 
 // 4. A light screen stays readable: the palette, and whatever colours a program asks for.
 {const page=await fresh('dark',{termScreen:'light'});

@@ -79,6 +79,7 @@ class SecureProfilesTest : Instrumentation() {
     }
     /** Picked pictures (file:// here, content:// from the picker) decode, shrink and re-encode. */
     private fun testImagePrep() {
+        ImagePrep.init(java.io.File(targetContext.noBackupFilesDir, "outgoing-pictures"))
         for ((name, format) in listOf("pick.png" to android.graphics.Bitmap.CompressFormat.PNG, "pick.jpg" to android.graphics.Bitmap.CompressFormat.JPEG)) {
             val file = java.io.File(targetContext.cacheDir, name)
             val bitmap = android.graphics.Bitmap.createBitmap(3000, 1800, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(200, 120, 80)) }
@@ -120,6 +121,7 @@ class SecureProfilesTest : Instrumentation() {
             resolver.update(uri, android.content.ContentValues().apply { put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
             check(uri.scheme == "content" && uri.authority == "media") { "Not a MediaStore URI: $uri" }
             check(resolver.getType(uri) == "image/jpeg") { "MediaStore type ${resolver.getType(uri)}" }
+            ImagePrep.init(java.io.File(targetContext.noBackupFilesDir, "outgoing-pictures"))
             val p = ImagePrep.prepare(resolver, uri)
             // 3000×1800 stored sideways with ROTATE_90: upright portrait, long edge 2048.
             check(p.height == 2048 && p.width in 1228..1229) { "MediaStore image-prep size ${p.width}x${p.height} (EXIF rotation not applied?)" }

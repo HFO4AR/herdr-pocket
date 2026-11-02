@@ -143,8 +143,9 @@ for(const theme of ['light','dark'])for(const [width,height] of [[390,844],[320,
  await page.getByRole('button',{name:/清理构建缓存/}).click();
  await page.evaluate(async()=>{await fetchTerminal(true);S.chat.qaRaw=true;renderComposer();});
  const scr=page.locator('#confirm-screen');await scr.waitFor();
- assert.equal(await scr.evaluate(n=>getComputedStyle(n).backgroundColor),rgb(bg));
- assert.match(await scr.evaluate(n=>getComputedStyle(n).fontFamily),/Mono/);
+ const scrCss=p=>page.evaluate(p=>getComputedStyle(document.getElementById('confirm-screen'))[p],p);
+ assert.equal(await scrCss('backgroundColor'),rgb(bg));
+ assert.match(await scrCss('fontFamily'),/Mono/);
  assert.ok(await scr.evaluate(n=>n.scrollHeight-n.scrollTop-n.clientHeight<4),'confirm screen shows the last lines');
  await page.screenshot({path:path.join(folder,'term-'+tag+'-confirm.png')});
  assert.ok(await overflow(page)<=0);

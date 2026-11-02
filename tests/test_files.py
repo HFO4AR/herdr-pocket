@@ -112,7 +112,7 @@ class FileTests(unittest.TestCase):
                [self.item(sha="0" * 64)],  # hash does not carry the folder prefix
                [self.item(sha=prefix + "0" * 48)],  # right prefix, wrong content
                [self.item(name=self.day + "/" + prefix + "/missing.pdf")],
-               [self.item()] * 5, [], "x"]
+               [], "x"]
         for files in bad:
             with self.assertRaises(bridge.BridgeError, msg=repr(files)):
                 bridge.handle(self.prompt(files=files), self.state)
@@ -205,6 +205,52 @@ class FileTests(unittest.TestCase):
         with self.assertRaisesRegex(bridge.BridgeError, "^没发出去"):
             bridge.handle(self.prompt(remote=True), self.state)
         self.assertEqual((self.sent(), self.receipts()), ([], []))
+
+    def test_any_number_of_files_of_any_size(self):
+        names = [self.upload("f%d.txt" % i, b"x" * (i + 1)) for i in range(12)]
+        files = [{"name": n, "sha256": hashlib.sha256(b"x" * (i + 1)).hexdigest()} for i, n in enumerate(names)]
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去"): bridge.handle(self.prompt(files=[]), self.state)
+        bridge.handle(self.prompt(text="一堆文件", files=files), self.state)
+        self.assertEqual(self.sent()[0][-1].count("[文件] "), 12)
+        big = patch.object(bridge, "FILE_BIG", 1024); big.start(); self.addCleanup(big.stop)
+        path = self.home / ".herdr-pocket/uploads" / self.name
+        check = dict(v=1, op="fileCheck", **self.item())
+        self.assertEqual(bridge.handle(dict(check)), {"match": True, "size": len(self.data)})
+        # A big file's hash is kept beside it (0600), so later steps do not read it again…
+        note = path.with_name("." + path.name + ".ok")
+        self.assertEqual(stat.S_IMODE(note.stat().st_mode), 0o600)
+        with patch.object(bridge, "file_sha256", side_effect=AssertionError("hashed again")):
+            self.assertEqual(bridge.handle(dict(check)), {"match": True, "size": len(self.data)})
+        # …until the file changes.
+        path.write_bytes(b"y" * 4096)
+        self.assertEqual(bridge.handle(dict(check)), {"match": False})
+        self.assertFalse(path.exists())
+        # Old folders go with their notes.
+        bridge.prune_uploads()
+
+    def test_big_file_is_streamed_to_a_ch_route_and_not_sent_twice(self):
+        """A real child process stands in for ssh: same stdin, the far home, no network."""
+        self.probe = {"ok": True, "route": self.route, "remote": True}
+        data = os.urandom(3 << 20); sha = hashlib.sha256(data).hexdigest(); name = self.upload("大文件.bin", data)
+        fake = self.home / "fake-ssh"
+        fake.write_text("#!/bin/sh\nfor last; do :; done\nHOME=" + str(self.far) + " exec sh -c \"$last\"\n"); fake.chmod(0o700)
+        for name_, value in (("FILE_BIG", 1 << 20), ("SAFE_SSH", [str(fake)])):
+            p = patch.object(bridge, name_, value); p.start(); self.addCleanup(p.stop)
+        run = patch.object(bridge.subprocess, "run", side_effect=lambda *a, **k: REAL_RUN(*a, **k)); run.start(); self.addCleanup(run.stop)
+        popen = []
+        real = bridge.subprocess.Popen
+        def counted(*a, **k): popen.append(a[0]); return real(*a, **k)
+        with patch.object(bridge.subprocess, "Popen", side_effect=counted), patch.object(bridge.Path, "read_bytes", side_effect=AssertionError("read whole")):
+            staged = bridge.handle(self.request("stageFile", name=name, sha256=sha), self.state)
+        remote = self.far / ".herdr-pocket/uploads" / name
+        self.assertEqual(staged, {"remote": True, "path": str(remote)})
+        self.assertEqual(remote.read_bytes(), data)
+        self.assertEqual(sum("ServerAliveInterval=15" in c for c in popen), 1, "streamed once, with a keepalive")
+        # Already there: nothing is streamed again.
+        popen.clear()
+        with patch.object(bridge.subprocess, "Popen", side_effect=counted):
+            self.assertEqual(bridge.handle(self.request("stageFile", name=name, sha256=sha), self.state), staged)
+        self.assertEqual(sum("ServerAliveInterval=15" in c for c in popen), 0)
 
     def test_old_file_folders_are_pruned(self):
         root = self.home / ".herdr-pocket/uploads"

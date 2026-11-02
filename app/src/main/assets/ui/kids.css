@@ -44,7 +44,12 @@
 .menu-item.kid-row .kid-title{font-size:var(--fs-base);color:var(--ink)}
 .menu-item.kid-row .kid-dot{margin:0 4px 0 6px}
 
-/* The header's 切换 Agent count turns amber while sub-agents run. */
+/* The header's 子 Agent control. On a narrow phone the avatar gives it room; the title keeps its width. */
+.kids-run-btn{color:var(--warn)}
+.kids-run-btn .act-glyph::before{animation-name:kids-glyph}
+@keyframes kids-glyph{0%{content:'✢'}20%{content:'✳'}40%{content:'✶'}60%{content:'✻'}80%{content:'✽'}}
+@media(max-width:360px){.chat-head:has(.kids-run-btn:not(.hidden)) .avatar{display:none}}
+/* Its count (and 切换 Agent's, for a record with no live pane) is amber while sub-agents run. */
 .icon-count.kids-on{background:var(--warn-soft);color:var(--warn);box-shadow:0 0 0 1.5px var(--warn) inset}
 
 /* Folded strip while sub-agents run: who is producing what right now (the newest running one). */

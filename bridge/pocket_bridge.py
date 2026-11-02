@@ -9,11 +9,13 @@ from pathlib import Path
 import re
 import shutil
 import shlex
+import signal
 import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import stat as stat_module
 from urllib.parse import quote as uri_quote
@@ -4252,14 +4254,14 @@ def uploads_root():
     return Path.home() / ".herdr-pocket/uploads"
 
 
-def owned_file(path, root, limit):
+def owned_file(path, root, limit=None):
     """A regular file of this user directly inside an un-symlinked root; never follows links."""
     try:
         if root.is_symlink() or path.is_symlink() or path.parent.is_symlink(): return None
         if not path.resolve().is_relative_to(root.resolve()): return None
         info = path.lstat()
     except OSError: return None
-    if not stat_module.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > limit: return None
+    if not stat_module.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or (limit is not None and info.st_size > limit): return None
     return path
 
 
@@ -4270,7 +4272,7 @@ def upload_path(name):
 
 
 def prompt_images(images, request, prefix, agent):
-    # Pictures have no count limit; the 65536-byte request bounds the list. Files keep FILE_MAX.
+    # Pictures and files have no count limit; the 65536-byte request bounds the list.
     if not isinstance(images, list) or not images:
         raise BridgeError("没发出去：这条消息没有图片")
     try: prune_uploads()
@@ -4461,10 +4463,12 @@ def prune_uploads(now=None):
 # (stage_file, run by the phone before the prompt), and the prompt names the remote path after a
 # remote hash check. Nothing else on either computer is written.
 FILE_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})/([a-f0-9]{16})/([^/]+)")
-FILE_LIMIT = 25_000_000
-FILE_MAX = 4
-# The phone gives up on one bridge call after 35 s; leave room for the pane lookup.
+# No size or count limit. Above FILE_BIG a file gets care for the time it takes: its hash is kept beside it,
+# and it is streamed to the other computer, unless already there.
+FILE_BIG = 64 << 20
+# The phone gives up on one bridge call after 35 s (longer for a file: fileWait in files.js, at the same rate).
 REMOTE_FILE_TIMEOUT = 25
+REMOTE_FILE_RATE = 256 * 1024  # bytes per second: the slowest link a copy is given time for
 # Reads a length-prefixed program from stdin; the rest of stdin is the file's bytes.
 REMOTE_FILE_COMMAND = "python3 -c 'import sys;b=sys.stdin.buffer;exec(b.read(int(b.readline())))'"
 SAFE_SSH = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ControlMaster=no",
@@ -4494,14 +4498,31 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
+def file_hash_ok(path, sha):
+    """Does the file hash to sha? A big file's answer is kept beside it (a dot name no upload can have) and
+    reused while its size, mtime and inode stay the same: hashing at every step would outlast the phone's wait."""
+    info = path.stat()
+    if info.st_size <= FILE_BIG: return file_sha256(path) == sha
+    note = path.with_name("." + path.name + ".ok")
+    stamp = [sha, info.st_size, info.st_mtime_ns, info.st_ino]
+    try:
+        if json.loads(note.read_text()) == stamp: return True
+    except (OSError, ValueError): pass
+    if file_sha256(path) != sha: return False
+    try:
+        with os.fdopen(os.open(note, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600), "w") as out: json.dump(stamp, out)
+    except OSError: pass
+    return True
+
+
 def uploaded_file(item):
     """The phone's upload named by {name, sha256}, re-hashed; refusals mean nothing was sent."""
     if not isinstance(item, dict): raise BridgeError("Invalid file")
     match = file_ref(item.get("name"), item.get("sha256"))
     label = match.group(3)[:60]
-    path = owned_file(uploads_root() / match.group(0), uploads_root(), FILE_LIMIT)
+    path = owned_file(uploads_root() / match.group(0), uploads_root())
     if not path: raise BridgeError("没发出去：文件「" + label + "」还没传到电脑上，删掉重新选一下")
-    if file_sha256(path) != item["sha256"]:
+    if not file_hash_ok(path, item["sha256"]):
         raise BridgeError("没发出去：电脑上的「" + label + "」和手机上的不一致，删掉重新选一下")
     return path, match
 
@@ -4525,9 +4546,9 @@ def upload_folder(parts, make):
 def file_check(request):
     """After an upload: does the file hash right? A wrong copy is removed so the phone can upload again."""
     match = file_ref(request.get("name"), request.get("sha256"))
-    path = owned_file(uploads_root() / match.group(0), uploads_root(), FILE_LIMIT)
+    path = owned_file(uploads_root() / match.group(0), uploads_root())
     if not path: return {"match": False, "missing": True}
-    if file_sha256(path) == request["sha256"]: return {"match": True, "size": path.stat().st_size}
+    if file_hash_ok(path, request["sha256"]): return {"match": True, "size": path.stat().st_size}
     path.unlink()
     return {"match": False}
 
@@ -4540,7 +4561,7 @@ def file_info(request):
     for name in names:
         try: match = file_ref(name)
         except BridgeError: continue
-        path = owned_file(uploads_root() / match.group(0), uploads_root(), FILE_LIMIT)
+        path = owned_file(uploads_root() / match.group(0), uploads_root())
         found[name] = {"size": path.stat().st_size} if path else {"gone": True}
     return {"files": found}
 
@@ -4662,13 +4683,17 @@ def stage_file(request, prefix, agent):
     path, match = uploaded_file(request)
     place = pane_place(request, prefix, agent)
     if place == "local": return {"remote": False, "path": str(path)}
-    data = remote_files(place, {"op": "put", "name": match.group(0), "sha256": request["sha256"], "size": path.stat().st_size}, path)
+    size = path.stat().st_size
+    if size > FILE_BIG:
+        there = remote_files(place, {"op": "has", "name": match.group(0), "sha256": request["sha256"]}, work=size).get("path")
+        if there: return {"remote": True, "path": there}
+    data = remote_files(place, {"op": "put", "name": match.group(0), "sha256": request["sha256"], "size": size}, path)
     return {"remote": True, "path": data["path"]}
 
 
 def prompt_files(files, request, prefix, agent):
-    if not isinstance(files, list) or not 1 <= len(files) <= FILE_MAX:
-        raise BridgeError("一条消息最多带 4 个文件")
+    if not isinstance(files, list) or not files:
+        raise BridgeError("没发出去：这条消息没有文件")
     try: prune_uploads()
     except OSError: pass
     checked = [uploaded_file(item) for item in files]
@@ -4680,13 +4705,37 @@ def prompt_files(files, request, prefix, agent):
     return [("file", p) for p in data["paths"]]
 
 
-def remote_files(route, params, path=None):
-    """Runs remote_files_main on the other computer over the ch route; the file's bytes follow on stdin."""
+def remote_file_stream(command, head, path, timeout):
+    """A big file goes through ssh as it is read: never whole in memory; a dead link ends it (ServerAlive)."""
+    keepalive = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
+    proc = subprocess.Popen([command[0], *keepalive, *command[1:]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    def feed():
+        try:
+            with path.open("rb") as source:
+                proc.stdin.write(head)
+                while chunk := source.read(1 << 20): proc.stdin.write(chunk)
+            proc.stdin.close()
+        except (OSError, ValueError): pass
+    threading.Thread(target=feed, daemon=True).start()
+    timer = threading.Timer(timeout, proc.kill); timer.start()
+    try: out = proc.stdout.read(100_000); code = proc.wait()
+    finally: timer.cancel()
+    if code == -signal.SIGKILL: raise subprocess.TimeoutExpired(command, timeout)
+    return subprocess.CompletedProcess(command, code, out, b"")
+
+
+def remote_files(route, params, path=None, work=0):
+    """Runs remote_files_main on the other computer over the ch route; the file's bytes follow on stdin.
+    `work`: bytes the other computer may have to read for this call, on top of a file sent."""
     source = Path(__file__).read_text().rsplit('\nif __name__ == "__main__":', 1)[0]
     code = (source + "\nremote_files_main(" + repr(json.dumps(params)) + ")\n").encode()
-    payload = str(len(code)).encode() + b"\n" + code + (path.read_bytes() if path else b"")
+    head = str(len(code)).encode() + b"\n" + code
+    size = path.stat().st_size if path else 0
+    timeout = REMOTE_FILE_TIMEOUT + (size + work) / REMOTE_FILE_RATE
+    command = [*SAFE_SSH, *route_ssh_options(route), REMOTE_FILE_COMMAND]
     try:
-        result = subprocess.run([*SAFE_SSH, *route_ssh_options(route), REMOTE_FILE_COMMAND], input=payload, capture_output=True, timeout=REMOTE_FILE_TIMEOUT)
+        if size > FILE_BIG: result = remote_file_stream(command, head, path, timeout)
+        else: result = subprocess.run(command, input=head + (path.read_bytes() if path else b""), capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired as exc: raise BridgeError("没发出去：文件传到远端电脑超时，网络慢或文件太大") from exc
     except OSError as exc: raise BridgeError("没发出去：无法启动 SSH 连接远端电脑") from exc
     if result.returncode: raise BridgeError("没发出去：连不上远端电脑（SSH 认证、网络或 Python 不可用）")
@@ -4713,15 +4762,19 @@ def remote_files_op(params, stream):
     except OSError: pass
     if params.get("op") == "check":
         paths = []
-        for item in params.get("items", [])[:FILE_MAX]:
+        for item in params.get("items", []):
             match = file_ref(item.get("name"), item.get("sha256"))
-            path = owned_file(uploads_root() / match.group(0), uploads_root(), FILE_LIMIT) if upload_folder(match.groups()[:2], False) else None
-            if not path or file_sha256(path) != item["sha256"]: return {"missing": match.group(3)}
+            path = owned_file(uploads_root() / match.group(0), uploads_root()) if upload_folder(match.groups()[:2], False) else None
+            if not path or not file_hash_ok(path, item["sha256"]): return {"missing": match.group(3)}
             paths.append(str(path))
         return {"paths": paths}
+    if params.get("op") == "has":
+        match = file_ref(params.get("name"), params.get("sha256"))
+        path = owned_file(uploads_root() / match.group(0), uploads_root()) if upload_folder(match.groups()[:2], False) else None
+        return {"path": str(path) if path and file_hash_ok(path, params["sha256"]) else None}
     if params.get("op") != "put": raise BridgeError("unknown file op")
     match = file_ref(params.get("name"), params.get("sha256")); size = params.get("size")
-    if not isinstance(size, int) or isinstance(size, bool) or not 0 <= size <= FILE_LIMIT: raise BridgeError("文件大小不对")
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0: raise BridgeError("文件大小不对")
     folder = upload_folder(match.groups()[:2], True)
     target = folder / match.group(3)
     temp = folder.parent / ("." + os.urandom(16).hex() + ".part")
@@ -4738,8 +4791,8 @@ def remote_files_op(params, stream):
         except FileExistsError: pass
         except OSError:
             if not os.path.lexists(target): os.rename(temp, target)
-        same = owned_file(target, uploads_root(), FILE_LIMIT)
-        if not same or file_sha256(same) != params["sha256"]: raise BridgeError("远端已有同名的不同文件，没有覆盖")
+        same = owned_file(target, uploads_root())
+        if not same or not file_hash_ok(same, params["sha256"]): raise BridgeError("远端已有同名的不同文件，没有覆盖")
     finally:
         try: temp.unlink()
         except FileNotFoundError: pass
@@ -6496,7 +6549,7 @@ def tmux_attachments(request):
                 raise BridgeError("没发出去：电脑上的图片和手机上的不一致，删掉重新选一下")
             refs.append(("local", str(path)))
     if files is not None:
-        if not isinstance(files, list) or not 1 <= len(files) <= FILE_MAX: raise BridgeError("一条消息最多带 4 个文件")
+        if not isinstance(files, list) or not files: raise BridgeError("没发出去：这条消息没有文件")
         refs += [("file", str(uploaded_file(item)[0])) for item in files]
     return refs
 

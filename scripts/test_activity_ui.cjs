@@ -105,15 +105,17 @@ for(const dark of [false,true]){
  assert.equal(await page.locator('#act .act-tool').isVisible(),false,'no open tool: no tool line');
  await page.evaluate(()=>{fx.read={...fx.read,activity:{...fx.read.activity,seconds:52,tokens:'1.9k',thinking:true}};});
  await until(page,()=>document.querySelector('#act .act-label')?.textContent==='正在思考',null,10000);
- // Sub-agents: two run, each says what it does; the finished one is not in the line.
+ // Sub-agents: never in the conversation. Two run: the header's control opens what each does; the finished one is not in it.
  await page.evaluate(k=>{fx.kids=k;},kidsReport());
- await until(page,()=>document.querySelectorAll('#act .act-kid').length===2,null,10000);
- assert.equal(await page.locator('#act .act-kids-head').textContent(),'2 个子 Agent 在跑');
- const rows=await page.locator('#act .act-kid').allTextContents();
+ const kidsBtn=page.getByRole('button',{name:'子 Agent 在跑 · 2',exact:true});await kidsBtn.waitFor({timeout:10000});
+ assert.equal(await page.locator('#chat-scroll .act-kid').count(),0,'not in the conversation');
+ await kidsBtn.click();await page.locator('#kids-run .act-kid').first().waitFor();
+ assert.equal(await page.locator('.sheet-head h2').textContent(),'子 Agent 在跑 · 2');
+ const rows=await page.locator('#kids-run .act-kid').allTextContents();
  assert.ok(rows[0].includes('补接口回归用例')&&rows[0].includes('运行')&&rows[0].includes('pytest -k api_cursor')&&/1:2\d/.test(rows[0]),'kid 1: '+rows[0]);
  assert.ok(rows[1].includes('检查暗色模式对比度')&&rows[1].includes('在输出')&&rows[1].includes('对比度不够的有 3 处'),'kid 2: '+rows[1]);
- await page.evaluate(()=>{const b=document.getElementById('chat-scroll');b.scrollTop=b.scrollHeight;});
  await shot(page,'phone-kids-'+tag);
+ await page.getByRole('button',{name:'关闭',exact:true}).click();
  // A question on screen: the line goes at once (the question card takes over).
  await page.evaluate(()=>{fx.status='blocked';fx.read={text:'Do you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel'};});
  await until(page,()=>!document.getElementById('act'),null,4000);
@@ -177,11 +179,14 @@ console.log('PASS: reduced motion keeps the line still');
  const subs=await page.locator('.kids-strip .kid-sub').allTextContents();
  assert.ok(subs.some(s=>s.includes('运行 pytest -k api_cursor')),'expanded: '+subs.join('|'));
  assert.ok(subs.some(s=>s.startsWith('已结束')),'finished one says so: '+subs.join('|'));
- // The parent idles while its sub-agents run: the chat line says so and lists them.
+ // The parent idles while its sub-agents run: no line in the conversation, the header says so and opens them.
  await page.locator('.agent-row').filter({hasText:'整理发布脚本'}).click();await page.getByText('慢在打包那一步').first().waitFor();
- await until(page,()=>document.querySelector('#act .act-label')?.textContent==='子 Agent 在跑 · 2',null,8000);
- // Open a running sub-agent from the line: its record, read-only, shows its own live step.
- await page.locator('#act .act-kid').first().click();
+ const kidsBtn=page.getByRole('button',{name:'子 Agent 在跑 · 2',exact:true});await kidsBtn.waitFor({timeout:8000});
+ await until(page,()=>!document.getElementById('act'),null,8000);
+ assert.ok((await page.locator('#chat-meta .meta-state').textContent()).startsWith('子 Agent 运行中 · 2'),'the header says what holds it');
+ // Open a running sub-agent from the sheet: its record, read-only, shows its own live step.
+ await kidsBtn.click();await page.locator('#kids-run .act-kid').first().click();
+ assert.equal(await page.locator('.sheet').count(),0,'the sheet closes');
  await page.getByText('补 api_cursor 的回归用例').first().waitFor();
  await until(page,()=>document.querySelector('#act .act-label')?.textContent==='子 Agent 正在执行',null,8000);
  assert.ok((await page.locator('#act .act-tool').textContent()).includes('pytest -k api_cursor'));
@@ -203,7 +208,7 @@ for(const dark of [false,true]){const page=await open(1280,800,{dark});
  await page.locator('.wide-list .card-button').filter({hasText:'整理发布脚本'}).click();await page.getByText('慢在打包那一步').first().waitFor();
  await page.evaluate(k=>{fx.kids=k;},kidsReport());await working(page);await page.evaluate(async()=>{S.statusBusy=false;await refreshStatus();});
  await until(page,()=>document.querySelector('#act .act-label')?.textContent==='正在执行',null,8000);
- await until(page,()=>document.querySelectorAll('#act .act-kid').length===2,null,10000);
+ await page.getByRole('button',{name:'子 Agent 在跑 · 2',exact:true}).waitFor({timeout:10000});
  const w=await page.evaluate(()=>[document.getElementById('act').getBoundingClientRect().width,document.querySelector('.timeline').getBoundingClientRect().width]);
  assert.ok(Math.abs(w[0]-w[1])<2,'the line spans the reading column: '+w);
  // The footer rail lines up with the composer under the reading column.

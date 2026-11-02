@@ -5,10 +5,11 @@
 /* The attach button leaves less room: keep a long placeholder on one line. */
 .composer textarea::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .att-tray{flex:0 0 100%;display:flex;align-items:center;gap:8px;padding:6px 6px 4px;overflow-x:auto;scrollbar-width:none}
-.att{position:relative;flex-shrink:0;width:64px;height:64px;border-radius:var(--radius-control);overflow:hidden;background:var(--sunken);box-shadow:inset 0 0 0 1px var(--hairline)}
+.att{position:relative;flex-shrink:0;width:76px;height:76px;border-radius:var(--radius-control);overflow:hidden;background:var(--sunken);box-shadow:inset 0 0 0 1px var(--hairline)}
 .att img{display:block;width:100%;height:100%;object-fit:cover}
 /* 44px hit area; the visible dot sits in the corner. */
-.att-x{position:absolute;top:0;right:0;width:44px;min-width:44px;min-height:44px;padding:4px;display:grid;place-items:start end;border-radius:0}
+/* × keeps to its corner: the rest of the thumbnail opens the editor. */
+.att-x{position:absolute;top:0;right:0;width:36px;min-width:36px;min-height:36px;padding:4px;display:grid;place-items:start end;border-radius:0}
 .att-x svg{width:12px;height:12px;padding:4px;box-sizing:content-box;border-radius:50%;background:#000000a6;color:#fff;stroke-width:2.6}
 .att-x:active{background:none}
 .att-note{flex-shrink:0;font-size:12px;color:var(--muted);white-space:nowrap;padding-left:2px}

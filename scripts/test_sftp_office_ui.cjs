@@ -40,9 +40,15 @@ await page.addInitScript(()=>{
  ];
  const XROWS1={i:0,cells:[{c:0,v:'汇总页'},{c:1,v:'99',t:'n'}]};
  const PPT0={index:0,w:12192000,h:6858000,bg:'#EEF2FF',title:'封面',shapes:[
-  {k:'text',x:914400,y:457200,w:10058400,h:1143000,ps:[{al:'center',runs:[{t:'季度报告',sz:40,b:true,color:'#112233'}]}]},
+  {k:'text',x:914400,y:457200,w:10058400,h:1143000,body:{ins:[0,0,0,0],anchor:'center'},ps:[{al:'center',pp:{pt:40},runs:[{t:'季度报告',sz:40,b:true,color:'#112233'}]}]},
   {k:'image',x:6000000,y:4000000,w:3000000,h:1500000,asset:'c'.repeat(40),name:'图'},
-  {k:'placeholder',x:1000000,y:5000000,w:2000000,h:1000000,label:'图表'}
+  {k:'placeholder',x:1000000,y:5000000,w:2000000,h:1000000,label:'图表'},
+  {k:'text',x:100000,y:2000000,w:2000250,h:0,geom:'line',line:{c:'#FF0000',w:9525,tail:['triangle','med','med']}},
+  {k:'text',x:100000,y:2200000,w:952500,h:476250,geom:'ellipse',fill:'#00FF00'},
+  {k:'text',x:100000,y:2800000,w:952500,h:476250,fill:'#0000FF',rot:90},
+  {k:'text',x:100000,y:3400000,w:2000250,h:1000125,fill:'#123456',paths:[{w:100,h:100,d:'M0 0L50 50L100 0Z'}]},
+  {k:'table',x:3000000,y:2000000,w:2000000,h:600000,table:{cols:[1000000,1000000],rows:[{h:300000,cells:[{ps:[{pp:{pt:12},runs:[{t:'表格甲',sz:12}]}],fill:'#FFEEDD',borders:{T:{c:'#000000',w:19050}},body:{ins:[1,1,1,1],anchor:'center'}},{ps:[{pp:{pt:12},runs:[{t:'表格乙',sz:12}]}]}]},{h:300000,cells:[{covered:true,ps:[]}]}]}},
+  {k:'chart',x:6000000,y:1500000,w:4000000,h:2000000,chart:{kind:'bar',horizontal:true,title:'季度销量',titlePt:14,cats:['甲','乙'],series:[{name:'GF',color:'#D98A00',values:[1,2],points:{'0':'#1F78C8'},showVal:true,fmt:'0.00'}],legendPt:10,catPt:10,valPt:10,gap:50,ink:'#000000',noValAxis:true,reverse:true}},
  ]};
  const PPT1={index:1,w:12192000,h:6858000,bg:'#FFFFFF',title:'第二张',shapes:[{k:'text',x:914400,y:457200,w:10058400,h:1143000,ps:[{runs:[{t:'第二张',sz:32}]}]}]};
  const PPT2={index:2,w:12192000,h:6858000,bg:'#FFFFFF',title:'第三张',shapes:[{k:'text',x:914400,y:457200,w:10058400,h:1143000,ps:[{runs:[{t:'第三张',sz:32}]}]}]};
@@ -105,7 +111,7 @@ await page.addInitScript(()=>{
      setTimeout(()=>nativeResult(id,{ok:true,data}),10);return;
     }
     else if(op==='sftpOfficeSlide'){
-     ofx.slideCalls.push(a);if(!ofx.sessions[a.session])return fail('预览已过期','office_gone');
+     ofx.slideCalls.push(a);if(!ofx.sessions[a.session])return fail('预览已过期','office_gone');if(ofx.slideFail){ofx.slideFail--;return fail('这张幻灯片已损坏，读不出来','office_damaged');}
      data=a.index===1?PPT1:PPT2;
     }
     else if(op==='sftpOfficeClose'){ofx.closed.push(a.session);delete ofx.sessions[a.session];data={};}
@@ -219,33 +225,74 @@ await back();
 console.log('PASS: Excel tabs/headers/styles/merge/virtual rows/chunk/scroll/copy/zoom, 320 px');
 
 // ── PowerPoint: canvas, text/image/placeholder, navigation, zoom ────────────
+await page.evaluate(()=>{ofx.slideFail=1;});
 await row('deck.pptx').locator('.file-row').click();
 await title('deck.pptx');
-await page.locator('#fx-ppt-canvas').waitFor();
-assert.equal(await page.locator('#fx-ppt-canvas').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(238, 242, 255)');
+const canvases=page.locator('.fx-ppt-canvas');
+await canvases.first().waitFor();
+assert.equal(await canvases.count(),3,'every slide in one scroll');
+assert.equal(await page.locator('.fx-ppt-slide').first().evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(238, 242, 255)');
 await page.getByText('季度报告',{exact:true}).waitFor();
-assert.equal(await page.getByText('图表',{exact:true}).count(),1,'chart placeholder is labelled');
+assert.equal(await page.getByText('图表',{exact:true}).count(),1,'an object that cannot be drawn is labelled');
 await page.waitForFunction(()=>{const i=document.querySelector('.fx-ppt-img');return i&&i.complete&&i.naturalWidth>0;});
 const pptImgSrc=await page.locator('.fx-ppt-img').getAttribute('src');
 assert.ok(pptImgSrc.startsWith('https://pocket.invalid/preview/office/'));
 assert.ok(!pptImgSrc.startsWith('data:'));
+// A slide that did not load says so and can be tried again; the rest are unaffected.
+const retry=page.getByRole('button',{name:'这一张没读出来，点一下重试',exact:true});
+await retry.waitFor();await retry.click();
+await page.getByText('第二张',{exact:true}).waitFor();await page.getByText('第三张',{exact:true}).waitFor();
+assert.deepEqual([...new Set((await calls('sftpOfficeSlide')).map(c=>c.index))].sort(),[1,2],'the first slide came with the open');
+// Text is laid out at the slide's own size and stays visible past its box.
+const slide=page.locator('.fx-ppt-slide').first();
+const runCss=await page.getByText('季度报告',{exact:true}).evaluate(n=>({size:getComputedStyle(n).fontSize,box:getComputedStyle(n.closest('.fx-ppt-text')).overflow,just:getComputedStyle(n.closest('.fx-ppt-text')).justifyContent}));
+assert.deepEqual(runCss,{size:'53.3333px',box:'visible',just:'center'},'40 pt at 96 dpi, anchored as the file says');
+// Shapes: a line with its arrow, an ellipse, a turned box; never a dashed prompt.
+const line=slide.locator('path[marker-end]');assert.equal(await line.getAttribute('d'),'M0 0L210 0');
+assert.equal(await line.getAttribute('stroke'),'#FF0000');
+const markerSize=await slide.locator('marker').first().getAttribute('markerWidth');assert.equal(Number(markerSize),8,'a thin line still gets a visible arrow');
+const oval=slide.locator('path[fill="#00FF00"]');assert.match(await oval.getAttribute('d'),/^M0 [\d.]+A/);
+assert.equal(await page.locator('.fx-ppt-shape').filter({has:page.locator('path[fill="#0000FF"]')}).evaluate(n=>n.style.transform),'rotate(90deg)');
+// A custom path, onto the shape's size.
+assert.equal(await slide.locator('path[fill="#123456"]').getAttribute('d'),'M0 0L105 52.5L210 0Z');
+// A table with its own grid, fill and borders.
+const td=slide.locator('.fx-ppt-table td');assert.equal(await td.count(),2,'merged cell not drawn');
+assert.deepEqual(await td.first().evaluate(n=>{const c=getComputedStyle(n);return [c.backgroundColor,c.borderTopWidth,c.verticalAlign,n.colSpan];}),['rgb(255, 238, 221)','2px','middle',1]);
+// A chart from its cached numbers.
+const chart=slide.locator('.fx-ppt-svg',{has:page.locator('text')});
+assert.deepEqual(await chart.locator('text').allTextContents(),['季度销量','甲','乙','1.00','2.00'],'title, categories, labels');
+assert.deepEqual(await chart.locator('rect').evaluateAll(ns=>ns.map(n=>n.getAttribute('fill'))),['#1F78C8','#D98A00'],'a point can have its own colour');
+const bars=await chart.locator('rect').evaluateAll(ns=>ns.map(n=>Number(n.getAttribute('width'))));assert.ok(Math.abs(bars[1]/bars[0]-2)<.02,'bar length follows the value: '+bars);
+const barY=await chart.locator('rect').evaluateAll(ns=>ns.map(n=>Number(n.getAttribute('y'))));assert.ok(barY[0]<barY[1],'orientation maxMin puts the first at the top');
+// Position in the scroll: the counter, the buttons and the arrow keys.
 assert.match(await page.locator('.fx-page-n').innerText(),/第 1 \/ 3 张/);
-const w0=(await page.locator('#fx-ppt-canvas').boundingBox()).width;
+const w0=(await canvases.first().boundingBox()).width,h0=await slide.locator('.fx-ppt-text').first().evaluate(n=>n.scrollHeight);
 await page.getByRole('button',{name:'下一张',exact:true}).click();
-await page.getByText('第二张',{exact:true}).waitFor();
 assert.match(await page.locator('.fx-page-n').innerText(),/第 2 \/ 3 张/);
-assert.deepEqual((await calls('sftpOfficeSlide')).map(c=>c.index),[1]);
+await page.waitForFunction(()=>document.getElementById('fx-body').scrollTop>0);
 await page.getByRole('button',{name:'放大',exact:true}).click();
-const w1=(await page.locator('#fx-ppt-canvas').boundingBox()).width;
-assert.ok(w1>w0,'zoom enlarges the slide');
+const w1=(await canvases.first().boundingBox()).width;
+assert.ok(w1>w0,'zoom enlarges the slides');
+assert.equal(await slide.locator('.fx-ppt-text').first().evaluate(n=>n.scrollHeight),h0,'zoom does not rewrap the text');
+assert.ok(Math.abs((await canvases.nth(1).boundingBox()).width-w1)<1,'every slide at the same zoom');
+await page.getByRole('button',{name:'适应屏幕',exact:true}).click();
 await page.evaluate(()=>window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true})));
-await page.getByText('第三张',{exact:true}).waitFor();
 assert.match(await page.locator('.fx-page-n').innerText(),/第 3 \/ 3 张/);
+assert.equal(await page.getByRole('button',{name:'下一张',exact:true}).isDisabled(),true);
 await page.getByRole('button',{name:'上一张',exact:true}).click();
-await page.getByText('第二张',{exact:true}).waitFor();
+assert.match(await page.locator('.fx-page-n').innerText(),/第 2 \/ 3 张/);
+await page.waitForTimeout(300);
+// Scrolling by hand moves the counter, up to the last slide at the very end.
+await page.evaluate(()=>{const b=document.getElementById('fx-body');b.scrollTop=0;});
+await page.waitForFunction(()=>/第 1 \/ 3 张/.test(document.querySelector('.fx-page-n').textContent),null,{timeout:3000});
+await page.evaluate(()=>{const b=document.getElementById('fx-body');b.scrollTop=b.scrollHeight;});
+await page.waitForFunction(()=>/第 3 \/ 3 张/.test(document.querySelector('.fx-page-n').textContent),null,{timeout:3000});
+await page.evaluate(()=>{const b=document.getElementById('fx-body');b.scrollTop=0;});
+await page.waitForFunction(()=>/第 1 \/ 3 张/.test(document.querySelector('.fx-page-n').textContent),null,{timeout:3000});
 await shot('pptx-light');
+assert.equal(await page.locator('.fx-chip',{hasText:/^[−+]$/}).count(),0,'zoom chips show one mark, not two');
 await back();
-console.log('PASS: PowerPoint canvas, title/image/chart, page buttons/arrows/counter, zoom');
+console.log('PASS: PowerPoint slides in one scroll: shapes, arrows, table, chart, retry, counter, buttons, arrows, zoom');
 
 // ── Legacy and encrypted fallbacks ──────────────────────────────────────────
 const before=(await calls('sftpOfficeOpen')).length;

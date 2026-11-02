@@ -1,10 +1,16 @@
 /* Terminal key bar (termkeys.js): Ctrl / Alt / Shift pinned at the start, then pages of keys that
- * fill the width (swipe sideways), two rows when the screen is tall, one with the keyboard up. */
-.tk-bar{position:relative;display:flex;gap:6px;padding:0 12px 9px;min-width:0}
-.tk-mods{display:grid;grid-auto-flow:column;grid-template-rows:44px;grid-auto-columns:44px;gap:4px;flex-shrink:0}
+ * fill the width (swipe sideways), two rows when the screen is tall, one with the keyboard up.
+ * What stays put and what swipes read apart: a line between them, the pinned keys outlined, the dots
+ * under the pages only. The page's own 6 px on the right makes the 12 px inset, like the left side. */
+.tk-bar{--tk-pages-at:163px;position:relative;display:flex;gap:11px;padding:0 6px 9px 12px;min-width:0}
+.tk-bar.two-rows{--tk-pages-at:115px}
+.tk-mods{position:relative;display:grid;grid-auto-flow:column;grid-template-rows:44px;grid-auto-columns:44px;gap:4px;flex-shrink:0}
 .tk-bar.two-rows .tk-mods{grid-auto-flow:row;grid-template-rows:repeat(2,44px);grid-template-columns:repeat(2,44px)}
 .tk-bar:not(.two-rows) .tk-edit{display:none}
+.tk-mods:after{content:'';position:absolute;top:0;bottom:0;right:-6px;width:1px;background:var(--line-strong)}
 .tk-mods .key{padding:0;font-size:var(--fs-xs);font-weight:650;letter-spacing:.2px}
+.tk-mods .key:not(.on):not(.locked){background:none;box-shadow:inset 0 0 0 1px var(--line-strong)}
+.tk-mods .key:not(.on):not(.locked):active{background:var(--line-strong)}
 .tk-mods #tk-shift{font-size:var(--fs-lg)}
 .mod-key.on{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1.5px var(--accent)}
 .mod-key.locked{background:var(--accent);color:var(--on-accent);box-shadow:none}
@@ -21,7 +27,8 @@
 /* Cannot be sent with the modifiers as they are: dimmed, the tap says why. */
 .key.off{opacity:.36;box-shadow:none}
 .key.off:active{transform:none}
-.tk-dots{position:absolute;left:0;right:0;bottom:1px;display:flex;justify-content:center;gap:5px;pointer-events:none}
+.tk-dots{position:absolute;left:var(--tk-pages-at);right:6px;bottom:1px;display:flex;justify-content:center;gap:5px;pointer-events:none}
+.tk-dots:has(i:nth-child(14)){gap:3px}
 .tk-dots i{width:5px;height:5px;border-radius:50%;background:var(--line-strong);transition:background-color .15s var(--ease),width .15s var(--ease)}
 .tk-dots i.on{background:var(--accent);width:12px;border-radius:3px}
 

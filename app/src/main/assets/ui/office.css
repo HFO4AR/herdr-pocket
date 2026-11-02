@@ -70,22 +70,6 @@
 .fx-xl-hint{color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* ─── PowerPoint ───────────────────────────────────────────────────────────── */
-.fx-ppt-wrap{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px;background:var(--bg);display:flex;justify-content:center;align-items:flex-start}
-.fx-ppt-stage{flex:0 0 auto;min-width:100%;display:flex;justify-content:center}
-.fx-ppt-canvas{position:relative;flex:0 0 auto;max-width:none;overflow:hidden;background:#fff;color:#111;
- box-shadow:0 3px 18px var(--edge-shadow);border-radius:2px;font-family:var(--font, system-ui, sans-serif);line-height:1.25}
-.fx-ppt-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
-.fx-ppt-shape{position:absolute;box-sizing:border-box;padding:1.6%;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-start;z-index:1}
-.fx-ppt-shape.placeholder{border:1px dashed #b9b9b9;background-repeat:no-repeat}
-.fx-ppt-label{position:absolute;inset:0;display:grid;place-items:center;color:#777;font-size:14px;font-weight:600;letter-spacing:.04em}
-.fx-ppt-img{position:absolute;object-fit:contain;z-index:2}
-.fx-ppt-p{margin:0 0 .18em;display:flex;flex-wrap:wrap;gap:.3em;align-items:baseline;white-space:pre-wrap;overflow-wrap:anywhere}
-.fx-ppt-p:last-child{margin-bottom:0}
-.fx-ppt-p.lvl1{padding-left:1.2em}.fx-ppt-p.lvl2{padding-left:2.4em}.fx-ppt-p.lvl3{padding-left:3.6em}.fx-ppt-p.lvl4{padding-left:4.8em}
-.fx-ppt-marker{flex:0 0 auto;opacity:.75}
-.fx-ppt-run{white-space:pre-wrap;overflow-wrap:anywhere}
-.fx-ppt-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;color:var(--muted);font-size:var(--fs-sm);background:var(--surface)}
-.fx-ppt-wrap .fx-notice{padding:10px 4px 4px}
 
 /* ─── Shared ───────────────────────────────────────────────────────────────── */
 .fx-body>.fx-notice{padding:0 var(--sp-4)}
@@ -94,7 +78,6 @@
 @media(min-width:600px){
  .fx-docx{padding:24px 34px 32px}
  .fx-xl-scroll{height:calc(100dvh - 300px)}
- .fx-ppt-wrap{padding:18px}
 }
 @media(max-width:359px){
  .fx-xl-tab{padding:0 9px;font-size:12px}
@@ -105,3 +88,27 @@
 @media(prefers-reduced-motion:reduce){
  .fx-xl-head{will-change:auto}
 }
+
+/* PowerPoint: slides in one scroll (office.js). */
+.fx-ppt-wrap{padding:12px;background:var(--bg)}
+.fx-ppt-list{display:flex;flex-direction:column;align-items:center;gap:12px;width:max-content;min-width:100%}
+.fx-ppt-canvas{position:relative;flex:0 0 auto;width:var(--ppt-w,100%);height:var(--ppt-h,200px);overflow:hidden;background:#fff;box-shadow:0 1px 3px #00000026,0 0 0 1px #0000000f;border-radius:2px}
+/* A slide at its own size, scaled as a whole: text wraps the same at any zoom. WebView's text zoom stays out. */
+.fx-ppt-slide{position:absolute;left:0;top:0;width:var(--ppt-sw);height:var(--ppt-sh);transform:scale(var(--ppt-s,1));transform-origin:0 0;overflow:hidden;color:#000;font-size:24px;line-height:1.2;text-size-adjust:none;-webkit-text-size-adjust:none}
+.fx-ppt-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.fx-ppt-shape{position:absolute;box-sizing:border-box}
+.fx-ppt-shape.clip{overflow:hidden}
+.fx-ppt-shape.placeholder{display:grid;place-items:center;border:1px dashed #b9b9b9;background:#f5f5f5}
+.fx-ppt-label{color:#777;font-size:18px;font-weight:600;letter-spacing:.04em}
+.fx-ppt-img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:fill;max-width:none}
+.fx-ppt-svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none;fill:none;stroke:none;stroke-width:1;stroke-linecap:butt;stroke-linejoin:round}
+/* Text stays visible past its box, as in PowerPoint: the phone's fonts are not the slide's. */
+.fx-ppt-text{position:absolute;inset:0;box-sizing:border-box;display:flex;flex-direction:column;justify-content:flex-start;white-space:pre-wrap;overflow-wrap:break-word}
+.fx-ppt-text.nowrap{white-space:pre}
+.fx-ppt-p{margin:0;min-width:0;white-space:inherit}
+.fx-ppt-marker{display:inline-block;text-indent:0}
+.fx-ppt-table{position:absolute;left:0;top:0;width:100%;table-layout:fixed;border-collapse:collapse;white-space:pre-wrap;overflow-wrap:break-word}
+.fx-ppt-table td{box-sizing:border-box}
+.fx-ppt-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--surface)}
+.fx-ppt-retry{position:absolute;inset:0;width:100%;color:var(--accent);font-size:var(--fs-sm)}
+.fx-ppt-wrap~.fx-notice{padding:0 16px 8px}

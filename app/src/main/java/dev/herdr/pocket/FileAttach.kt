@@ -19,10 +19,8 @@ class Picked(val id: String, val uri: Uri, val name: String, val size: Long, val
  * streamed from the content URI straight into SFTP and hashed on the way.
  */
 object FileAttach {
-    const val MAX_BYTES = 25_000_000L
-    const val MAX_FILES = 4
     private const val MAX_NAME_BYTES = 120
-    private const val KEEP = 16
+    private const val KEEP = 1000
 
     private val picked = ConcurrentHashMap<String, Picked>()
     private val order = ArrayDeque<String>()
@@ -30,7 +28,7 @@ object FileAttach {
     fun get(id: String): Picked? = picked[id]
     fun drop(id: String) { picked.remove(id); synchronized(order) { order.remove(id) } }
 
-    /** Reads name and size from the provider; refuses files that are too big before any upload. */
+    /** Reads name and size from the provider. */
     fun describe(resolver: ContentResolver, uri: Uri): Picked {
         var name: String? = null
         var size = -1L
@@ -41,7 +39,6 @@ object FileAttach {
             }
         }
         val clean = safeName(name ?: uri.lastPathSegment)
-        check(size <= MAX_BYTES) { "「$clean」超过 25 MB" }
         val p = Picked(UUID.randomUUID().toString(), uri, clean, size, resolver.getType(uri) ?: "")
         picked[p.id] = p
         synchronized(order) {
@@ -84,7 +81,7 @@ object FileAttach {
         return name
     }
 
-    /** Hashes, counts and limits whatever is read through it; reports progress at most every 250 ms. */
+    /** Hashes and counts whatever is read through it; reports progress at most every 250 ms. */
     class Hashing(source: InputStream, private val progress: (Long) -> Unit) : FilterInputStream(source) {
         val digest: MessageDigest = MessageDigest.getInstance("SHA-256")
         var count = 0L
@@ -102,7 +99,6 @@ object FileAttach {
         }
         private fun seen(n: Int) {
             count += n
-            check(count <= MAX_BYTES) { "文件超过 25 MB" }
             val now = System.nanoTime()
             if (now - told > 250_000_000L) { told = now; progress(count) }
         }

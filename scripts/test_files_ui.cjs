@@ -33,7 +33,7 @@ await page.getByRole('button',{name:'体验聊天演示',exact:true}).click();
 await page.getByRole('button',{name:/重构登录|清理构建缓存/}).first().click();
 await page.getByRole('button',{name:'添加附件',exact:true}).click();
 await page.getByRole('dialog',{name:'添加附件',exact:true}).waitFor();
-await page.getByRole('button',{name:/^文件.*单个不超过 25 MB.*还能加 4 个/}).click();
+await page.getByRole('button',{name:/^文件.*大小和个数不限/}).click();
 await page.getByText('演示模式：不能添加文件',{exact:true}).waitFor();
 assert(!(await page.evaluate(()=>nx.calls.some(c=>c.op==='pickFiles'))),'demo must not open a picker');
 await page.getByRole('button',{name:'返回列表',exact:true}).click();
@@ -95,19 +95,19 @@ assert.equal(await page.evaluate(()=>fx.calls.filter(c=>c.op==='fileInfo').lengt
 assert.equal(await page.locator('.file-list .file-chip.gone').count(),1);
 console.log('PASS: history file chips with size / cleaned up, one batched lookup, detail sheet copies the path');
 
-// Composer: pick two, a too-big one is refused by the native side, a duplicate is skipped.
-await page.evaluate(()=>{nx.picks.push({files:[['crash-report.txt',5321],['数据导出 2026Q3.xlsx',8400000]]},{files:[['crash-report.txt',5321]],failed:1,reason:'「录屏.mp4」超过 25 MB'});});
+// Composer: pick two, an unreadable one is reported by the native side, a duplicate is skipped.
+await page.evaluate(()=>{nx.picks.push({files:[['crash-report.txt',5321],['数据导出 2026Q3.xlsx',8400000]]},{files:[['crash-report.txt',5321]],failed:1,reason:'读不到'});});
 await page.getByRole('button',{name:'添加附件',exact:true}).click();
 await page.getByRole('dialog',{name:'添加附件',exact:true}).getByRole('button',{name:/^文件/}).click();
 const tray=page.getByRole('list',{name:'要发送的文件',exact:true});
 await tray.getByRole('listitem').nth(1).waitFor();
-assert.match(await tray.locator('.att-note').textContent(),/^2\/4 个 · 8\.4 MB$/);
+assert.match(await tray.locator('.att-note').textContent(),/^2 个 · 8\.4 MB$/);
 await page.getByRole('button',{name:'添加附件',exact:true}).click();
-await page.getByRole('dialog',{name:'添加附件',exact:true}).getByRole('button',{name:/^文件.*还能加 2 个/}).click();
-await page.getByText('没加上：「录屏.mp4」超过 25 MB',{exact:true}).waitFor();
+await page.getByRole('dialog',{name:'添加附件',exact:true}).getByRole('button',{name:/^文件/}).click();
+await page.getByText('没加上：读不到',{exact:true}).waitFor();
 assert.equal(await tray.getByRole('listitem').count(),2,'duplicate skipped');
 assert.deepEqual(await page.evaluate(()=>nx.calls.filter(c=>c.op==='dropFiles').map(c=>c.args.ids)),[['doc-3']]);
-assert.deepEqual(await page.evaluate(()=>nx.calls.filter(c=>c.op==='pickFiles').map(c=>c.args.max)),[4,2]);
+assert.deepEqual(await page.evaluate(()=>nx.calls.filter(c=>c.op==='pickFiles').map(c=>c.args.max)),[undefined,undefined],'no count limit');
 assert(!(await page.getByRole('button',{name:'发送消息',exact:true}).isDisabled()),'send enabled with files only');
 await page.evaluate(()=>{nx.names={'doc-1':'crash-report.txt','doc-2':'数据导出 2026Q3.xlsx'};nx.sizes={'doc-1':5321,'doc-2':8400000};});
 await page.getByRole('textbox',{name:'消息输入框',exact:true}).fill('崩溃报告和导出的数据都在这，帮我对一下');
@@ -117,7 +117,7 @@ assert(await page.evaluate(()=>document.scrollingElement.scrollWidth<=innerWidth
 const sendBox=await page.getByRole('button',{name:'发送消息',exact:true}).boundingBox();assert(sendBox.x+sendBox.width<=320&&sendBox.y+sendBox.height<=640,'send visible at 320');
 await shot(path.join(folder,'files-composer-320.png'));
 await page.setViewportSize({width:390,height:844});
-console.log('PASS: composer picks files, refuses too big and duplicates, stays inside 320 px');
+console.log('PASS: composer picks files, reports unreadable ones, skips duplicates, stays inside 320 px');
 
 // The second upload fails: nothing staged for it, nothing sent; the message waits in the send queue
 // (queue.js) with its files, and the queue pauses until the person continues.

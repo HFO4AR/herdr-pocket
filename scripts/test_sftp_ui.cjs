@@ -437,7 +437,7 @@ await page.getByRole('button',{name:'关闭',exact:true}).click();
 // Big file: asks first; 另存为 goes through the picker flag.
 await row('big.iso').locator('.file-more').click();
 await page.getByRole('dialog',{name:'big.iso'}).getByRole('button',{name:/^另存为/}).click();
-const bigDl=page.getByRole('dialog',{name:/^下载 3200 MB/});await bigDl.waitFor();
+const bigDl=page.getByRole('dialog',{name:/^下载 3\.2 GB/});await bigDl.waitFor();
 await bigDl.getByRole('button',{name:'下载',exact:true}).click();
 await toastSeen('开始下载「big.iso」');
 assert.equal((await calls('sftpDownload')).at(-1).saveAs,true);

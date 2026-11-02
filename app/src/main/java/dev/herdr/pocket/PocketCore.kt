@@ -397,17 +397,17 @@ object PocketCore {
     /** A bridge request to the active computer. */
     fun request(req: JSONObject): JSONObject = request(null, req)
 
-    /** A bridge request to [deviceId] (the active computer when null or empty). */
-    fun request(deviceId: String?, req: JSONObject): JSONObject {
+    /** A bridge request to [deviceId] (the active computer when null or empty); [waitMs] above the usual 35 s for a big file. */
+    fun request(deviceId: String?, req: JSONObject, waitMs: Long = 0L): JSONObject {
         val link = linkFor(deviceId)
         ensureConnected(link)
         val transport = link.transport
         return try {
-            transport.request(JSONObject(req.toString()))
+            transport.request(JSONObject(req.toString()), waitMs)
         } catch (e: NotSent) {
             // Only the first thread to see this session fail replaces it; others reuse the new one.
             synchronized(link.lock) { if (transport.generation == e.generation) reconnect(link) }
-            transport.request(JSONObject(req.toString()))
+            transport.request(JSONObject(req.toString()), waitMs)
         }
     }
 
@@ -449,7 +449,9 @@ object PocketCore {
         }
         repeat(2) {
             val sent = send()
-            val check = request(link.id, JSONObject().put("op", "fileCheck").put("name", sent.getString("name")).put("sha256", sent.getString("sha256")))
+            // The computer hashes the whole file; give a slow disk time (20 MB/s).
+            val wait = 35_000L + sent.getLong("size") / 20_000L
+            val check = request(link.id, JSONObject().put("op", "fileCheck").put("name", sent.getString("name")).put("sha256", sent.getString("sha256")), wait)
             if (check.optBoolean("match")) return sent
         }
         error("「${file.name}」上传后校验不一致")

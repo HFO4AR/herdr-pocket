@@ -426,27 +426,14 @@ object OfficePreview {
         return o
     }
 
-    private fun slideJson(slide: PptxSlide): JSONObject {
-        val shapes = JSONArray()
-        for (shape in slide.shapes) {
-            val o = JSONObject().put("k", shape.kind).put("x", shape.x).put("y", shape.y).put("w", shape.w).put("h", shape.h)
-            shape.fill?.let { o.put("fill", it) }
-            shape.name?.let { o.put("name", it) }
-            shape.label?.let { o.put("label", it) }
-            shape.asset?.let { o.put("asset", it) }
-            if (shape.paragraphs.isNotEmpty()) {
-                val ps = JSONArray(); shape.paragraphs.forEach { ps.put(paragraphJson(it)) }
-                o.put("ps", ps)
-            }
-            shapes.put(o)
-        }
-        return JSONObject().put("index", slide.index).put("w", slide.widthEmu).put("h", slide.heightEmu)
-            .put("bg", slide.background ?: "#FFFFFF").put("shapes", shapes)
-            .apply {
-                slide.bgAsset?.let { put("bgAsset", it) }
-                slide.title?.let { put("title", it) }
-                if (slide.truncated) put("truncated", true)
-            }
+    private fun slideJson(slide: PptxSlide): JSONObject = jsonOf(PptxJson.slide(slide)) as JSONObject
+
+    private fun jsonOf(v: Any?): Any = when (v) {
+        null -> JSONObject.NULL
+        is Map<*, *> -> JSONObject().also { o -> v.forEach { (k, x) -> o.put(k.toString(), jsonOf(x)) } }
+        is List<*> -> JSONArray().also { a -> v.forEach { a.put(jsonOf(it)) } }
+        is Float -> (Math.round(v * 1000f) / 1000.0)
+        else -> v
     }
 
     private fun mimeOf(kind: OfficeKind): String = when (kind) {
