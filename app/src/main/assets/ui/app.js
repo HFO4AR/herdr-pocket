@@ -319,7 +319,7 @@ async function loadLive(){
   S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
   // Herdr's plain terminals come along while 会话 is on screen (hpanes.js), no extra round trip.
   const dev=S.device?.id||'',session=S.session,panes=typeof hpWant==='function'&&hpWant();
-  const a=await remote('agents',{session:S.session,...(panes?{panes:true}:{})});if(epoch!==S.epoch)return;S.agents=a.agents;if(panes)hpTake(a.panes,dev,session);S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();glanceRefresh(true);loadNative(true);if(S.pendingPane){S.liveLoading=false;openPending();return;}}
+  const a=await remote('agents',{session:S.session,...(panes?{panes:true}:{})});if(epoch!==S.epoch)return;S.agents=a.agents;S.historyAt=Date.now();if(panes)hpTake(a.panes,dev,session);S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();glanceRefresh(true);loadNative(true);if(S.pendingPane){S.liveLoading=false;openPending();return;}}
  catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
  finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
 // Lightweight status refresh: Herdr state only, keeps resolved history refs.
@@ -335,9 +335,32 @@ async function refreshStatus(){
    // Waiting on a picker or on another dialog (等你选择 / 等你确认) under the same state.
    else if(!!cur.picker!==!!S.chat.agent.picker){S.chat.agent={...S.chat.agent,picker:cur.picker};updateChatMeta();renderComposer();}}
   if(fresh.length&&S.tab==='live'&&!S.chat){loadLive();return;}
+  // A ch pane's title changes when another conversation is attached (close + reopen in the same
+  // pane): re-resolve its history now instead of waiting for the minute timer.
+  const repane=next.some(a=>{const old=known.get(a.pane_id);return old&&a.agent==='ch'&&(old.terminal_title!==a.terminal_title||old.terminal_title_stripped!==a.terminal_title_stripped);});
+  if(repane&&!S.chat&&!S.histBusy&&Date.now()-(S.historyAt||0)>5000)recheckHistory();
   if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();else if(paneNews)hpRepaint();}
  catch(e){if(/Unknown operation|不支持的操作/.test(e.message))S.statusSupported=false;}
  finally{S.statusBusy=false;}}
+// A ch pane's identity does not change when its conversation is closed and reopened in the same
+// pane, and a cold remote read can answer remote_error once. Status polls keep the resolved ref,
+// so the list would never try again: re-resolve history now and then (sooner after a transient
+// error), and replace the ref when the pane now runs another conversation.
+async function recheckHistory(){
+ if(S.histBusy||!S.device||S.demo||!S.session||S.liveLoading||S.chat)return;
+ const epoch=S.epoch,dev=S.device.id,session=S.session,panes=typeof hpWant==='function'&&hpWant();
+ S.histBusy=true;S.historyAt=Date.now();
+ try{const r=await remote('agents',{session:S.session,...(panes?{panes:true}:{})});if(epoch!==S.epoch||!Array.isArray(r?.agents))return;
+  if(panes)hpTake(r.panes,dev,session);
+  const known=new Map(S.agents.map(a=>[a.pane_id,a]));let changed=false;
+  const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}
+   if(JSON.stringify(old.history_ref||null)!==JSON.stringify(a.history_ref||null))changed=true;
+   return {...old,...a,history_ref:a.history_ref||old.history_ref,picker:a.picker};});
+  if(next.length!==S.agents.length)changed=true;
+  noteStatus(next);S.agents=next;if(panes)hpRepaint();
+  if(changed){syncWatch();cacheLive();if(S.tab==='live'&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}}
+ catch(_){/* the next tick tries again */}
+ finally{S.histBusy=false;}}
 
 // ─── Chat ───────────────────────────────────────────────────────────────────
 function resetChat(chat){S.chat=chat;S.messages=[];S.children=[];S.more=false;S.before=0;S.historyNote='';S.terminalText='';S.terminalAnsi='';S.activity='';actForget();S.chatMode='conversation';S.paused=false;S.stick=true;S.unseen=0;lookApply();}
@@ -774,7 +797,7 @@ document.addEventListener('focusin',()=>setTimeout(sheetFieldClear,60));
 document.addEventListener('input',e=>{if(e.target?.closest?.('.sheet'))sheetFieldClear();});
 addEventListener('resize',()=>{setTimeout(sheetFieldClear,80);setTimeout(sheetFieldClear,350);});
 addEventListener('resize',()=>{const c=document.getElementById('confirm-screen');if(c)c.scrollTop=c.scrollHeight;});
-window.setForeground=v=>{S.active=v;if(v){netForeground();refreshStatus();loadNative(true);if(S.chat?.record&&!S.paused)fetchHistory();}};
+window.setForeground=v=>{S.active=v;if(v){netForeground();refreshStatus();loadNative(true);if(S.chat?.record&&!S.paused)fetchHistory();else if(S.tab==='live'&&Date.now()-(S.historyAt||0)>10000)recheckHistory();}};
 // Busy agents refresh faster; nothing polls in the background or in demo mode.
 // A ch pane's history is read over SSH on the other computer (~1 s a read), so it is polled
 // half as often: every 5 s while the agent works, every 10 s when idle. Reads never overlap.
@@ -784,6 +807,9 @@ function historyDue(busy,n){return S.chat?.record?.remote?n%(busy?2:4)===0:busy|
 // asked right before it) shows within about a second. The list polls every 2.5 s while anything
 // works or waits, else every 7.5 s.
 const POLL_BEAT=1250,POLL_HOT=15000,REPLY_WAIT=60000;
+// The list re-resolves ch/remote history now and then (its identity survives close/reopen):
+// normally every minute, and every 12 s while the last answer was a transient remote error.
+const HISTORY_RECHECK=60000,HISTORY_RETRY=12000;
 // Herdr can report a stop before the reply reaches the transcript (it watches the screen; a ch pane's
 // transcript is a remote read away). While the newest prompt has no reply yet, say so and read fast
 // instead of showing 已完成 over a conversation that seems to have been ignored.
@@ -805,7 +831,13 @@ function pollBeat(){
  if(S.chat){const reply=awaitingReply();if(reply){if(!S.paused&&!S.polling&&S.chatMode!=='terminal')fetchHistory();updateChatMeta();}
   if(beat){if(!reply&&!S.paused&&!S.polling&&S.chatMode!=='terminal'&&historyDue(busy,n))fetchHistory();if((busy||S.chat.noTranscript&&S.chatMode==='terminal'&&(pollHot()||n%4===0))&&S.chatMode!=='commands')fetchTerminal(true);}
   if(beat||pollHot())refreshStatus();}
- else if(S.tab==='live'&&tick%(listHot()?2:6)===0){refreshStatus().then(()=>glanceRefresh());if(Date.now()-S.nativeAt>5000)loadNative(true);}}
+ else if(S.tab==='live'&&tick%(listHot()?2:6)===0){
+  refreshStatus().then(()=>glanceRefresh());if(Date.now()-S.nativeAt>5000)loadNative(true);
+  // ch panes and remote records: re-resolve instead of trusting the first answer forever.
+  const remoteAgents=S.agents.filter(a=>a.agent==='ch'||a.history_ref?.remote);
+  if(remoteAgents.length&&!S.histBusy&&!S.liveLoading){
+   const transient=remoteAgents.some(a=>a.history_ref?.transient);
+   if(Date.now()-(S.historyAt||0)>(transient?HISTORY_RETRY:HISTORY_RECHECK))recheckHistory();}}}
 setInterval(pollBeat,POLL_BEAT);
 
 async function boot(){render();try{const r=await rpc('devices');S.devices=r.devices;S.version=r.version;S.alerts=r.alerts!==false;settingsLoad().then(updateAutoCheck);linkBoot(r);if(r.connected&&!S.device){S.device=r.connected;setTab('live');resumeBoot(r);return;}render();resumeBoot(r);}catch(e){error(e);}}

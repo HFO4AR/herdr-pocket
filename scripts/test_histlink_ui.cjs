@@ -38,7 +38,9 @@ await page.addInitScript(()=>{
    else if(a.op==='history'){if(fx.history!=='ok')fail=fx.history;else data={record:Object.values(R).find(r=>r.id===a.record_id),messages:H[a.record_id]||[],before:0,has_more:false,children:[]};}
    else if(a.op==='read')data={text:'$ '};
    else if(a.op==='catalog'){fx.catalogs.push(a);data=a.remote?{records:[R.moved],total:1,next:null}:{records:[R.local],total:1,next:null};}
-   else if(a.op==='link'){fx.links.push(a);const r=Object.values(R).find(x=>x.id===a.record_id);data={linked:matched(r,'manual')};}
+   else if(a.op==='link'){fx.links.push(a);const r=Object.values(R).find(x=>x.id===a.record_id);data={linked:matched(r,'manual')};
+    // Like the real bridge: the next agent list already carries the persisted manual pick.
+    const i=fx.list.findIndex(x=>x.pane_id===a.target);if(i>=0)fx.list[i]={...fx.list[i],history_ref:data.linked};}
    else if(a.op==='account')data={ssh_user:'u',hostname:'fx'};
    else throw Error('unexpected remote op '+a.op);}
   else if(!['watchState','protect','setAlerts','cacheGet','cachePut'].includes(op))throw Error('unexpected native op '+op);
@@ -147,7 +149,29 @@ await page.getByText(/还不知道历史在哪台电脑上/).waitFor();
 assert.equal(await page.evaluate(()=>fx.catalogs.length),asked);
 assert.equal(await page.getByText('本机的对话').count(),0);
 await page.keyboard.press('Escape');
+await page.evaluate(()=>closeSheet());
 console.log('PASS: an unknown computer never gets this computer\'s records offered');
+
+// 8. A ch pane keeps its identity across close/reopen: the list must re-resolve instead of keeping
+// the old conversation, and a transient remote failure must clear on the periodic recheck.
+await page.getByRole('button',{name:'返回列表',exact:true}).click();
+await page.evaluate(()=>{fx.list[0]={...fx.CH,history_ref:fx.matched(fx.R.live)};S.agents=JSON.parse(JSON.stringify(fx.list));render();});
+// The same pane now runs another conversation (closed + reopened): the bridge names R.moved.
+await page.evaluate(()=>{fx.list[0]={...fx.CH,history_ref:fx.matched(fx.R.moved)};});
+await page.evaluate(()=>recheckHistory());
+assert.equal(await page.evaluate(()=>S.agents.find(a=>a.pane_id==='w1:p2')?.history_ref?.record?.id),await page.evaluate(()=>fx.R.moved.id));
+await page.getByRole('button',{name:/远端的对话/}).click();
+await page.getByText('搬过来的回答：已经处理。').waitFor();
+console.log('PASS: a closed/reopened ch conversation is re-associated by the periodic history recheck');
+
+// A transient cold-read answer recovers on the next recheck without reopening the list.
+await page.getByRole('button',{name:'返回列表',exact:true}).click();
+await page.evaluate(()=>{fx.list[0]={...fx.CH,history_ref:{status:'remote_error',transient:true,reason:'远端电脑响应超时',remote:{session:'fx',target:'w1:p2',identity:'id-ch'}}};fx.list[1]={...fx.CH2,history_ref:fx.matched(fx.R.moved,'manual')};S.agents=JSON.parse(JSON.stringify(fx.list));render();});
+await page.getByText('历史暂时读不到',{exact:true}).first().waitFor();
+await page.evaluate(()=>{fx.list[0]={...fx.CH,history_ref:fx.matched(fx.R.live)};return recheckHistory();});
+await page.waitForFunction(()=>S.agents.find(a=>a.pane_id==='w1:p2')?.history_ref?.status==='matched');
+assert.equal(await page.getByText('历史暂时读不到',{exact:true}).count(),0,'the transient warning clears');
+console.log('PASS: a transient remote history error clears on the periodic recheck');
 
 await page.setViewportSize({width:320,height:640});
 assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

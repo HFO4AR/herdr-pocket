@@ -195,7 +195,7 @@ def agents(prefix, include_history=False, screens=False, links=None):
     if screens is not False: mark_screen_menus(prefix, result, screens if isinstance(screens, Path) else None)
     if not include_history: return result
     global _remote_deadline
-    _remote_deadline = time.monotonic() + 20
+    _remote_deadline = time.monotonic() + 25
     _remote_results.clear()
     live = [a for a in result if agent_provider(a) in TRANSCRIPT_PROVIDERS]
     probes = {a["pane_id"]: probe_pane(a, prefix, agent_provider(a)) for a in live}
@@ -1616,7 +1616,9 @@ def remote_exec(route, payload, digest, deadline, reuse=True):
 def remote_read(route, request, limit=None):
     # Reads only: the remote entry points read the two authorized history roots. No provider
     # credentials, shell input or process environment; see SECURITY.md.
-    limit = limit or (25 if request["op"] == "history" else 15)
+    # resolve is the first cold read (SSH login, remote Python, directory scan); 20 s lets a
+    # waking link finish, and the list retries transient answers anyway.
+    limit = limit or (25 if request["op"] == "history" else 20)
     deadline = time.monotonic() + (limit if _remote_deadline is None else min(limit, _remote_deadline - time.monotonic()))
     program, digest = remote_program()
     line = json.dumps(request).encode() + b"\n"
