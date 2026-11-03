@@ -436,7 +436,9 @@ function tlBuild(list,open){
  if(S.chat.noTranscript){list.append(noTranscriptNote(true));
   if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));list.append(el('pre','agent-terminal compact',tail(S.terminalText,14)));}
   S.outbox=S.outbox.filter(o=>o.key!==draftKey()||o.state!=='sent'||Date.now()-o.at<180000);outboxRows(list,()=>{});actRow(list);slashRest(list);queueTimeline(list);return;}
- if(!S.chat.record){const box=el('div','unlinked');box.append(el('h2','','还没关联到对话记录'),el('p','muted',S.chat.historyIssue||'正在定位这个窗格对应的历史记录…'));
+ if(!S.chat.record){const ref=S.chat.agent?.history_ref,trying=!S.chat.historyIssue||!!ref?.transient||ref?.status==='retry';
+  const box=el('div','unlinked');if(trying)box.append(el('span','spinner'));
+  box.append(el('h2','','还没关联到对话记录'),el('p','muted',S.chat.historyIssue||'正在定位这个窗格对应的历史记录…'));
   if(S.chat.historyIssue)box.append(btn('选择历史记录','primary',pickHistory));list.append(box);
   const candidates=S.chat.agent?.history_ref?.candidates||[];if(candidates.length){list.append(el('div','section-label','候选历史 · 点击后确认'));const g=el('div','card list-card');candidates.forEach(rec=>{const b=btn('','card-button',()=>chooseHistory(rec,S.chat.agent));const t=el('div','grow');t.append(el('div','card-title',rec.title),el('div','card-meta',relative(rec.modified)+' · '+String(rec.thread).slice(0,8)));b.append(t,icon('chevron'));g.append(b);});list.append(g);}
   if(S.chat.agent&&S.terminalText){list.append(el('div','section-label','终端最新画面'));const pre=el('pre','agent-terminal compact');screenPaint(pre,S.terminalText,S.terminalAnsi,14);list.append(pre);}
@@ -456,11 +458,21 @@ function tlBuild(list,open){
  if(!commandsOnly){count+=slashCards().length;slashRest(list);}
  outboxRows(list,dayMark);
  // Quiet, under the newest messages (where the reader is): they stay, the read retries by itself.
- if(S.chat.historyRetry&&!S.chat.historyError){const n=el('div','note history-retry');n.setAttribute('role','status');const t=el('span','grow');t.append(el('strong','','暂时读不到，正在重试'),el('span','fine retry-why',S.chat.historyRetry));n.append(t,btn('重试','secondary small',()=>{S.chat.retryAt=0;fetchHistory(false,true);}));list.append(n);}
+ if(S.chat.historyRetry&&!S.chat.historyError){const n=el('div','note history-retry');n.setAttribute('role','status');const t=el('span','grow'),head=el('span','retry-head');head.append(el('span','spinner mini'),el('strong','','暂时读不到，正在重试'));t.append(head,el('span','fine retry-why',S.chat.historyRetry));n.append(t,btn('重试','secondary small',()=>{S.chat.retryAt=0;fetchHistory(false,true);}));list.append(n);}
  // The live activity line (activity.js) follows what was sent; queued messages come after it.
  actRow(list);
  queueTimeline(list);
- if(!count&&!S.chat.historyError&&!S.chat.historyRetry){
+ // A first read of a remote conversation can take a few seconds: a real progress card with a
+ // spinner and a running wait, not a small line at the bottom of a blank page.
+ const waitingFirst=!count&&S.chat.historyLoading&&!S.messages.length;
+ if(waitingFirst){
+  const card=el('div','loading-card');card.setAttribute('role','status');card.setAttribute('aria-live','polite');
+  card.append(el('span','spinner'));
+  const t=el('div');t.append(el('h2','','正在读取对话记录'),el('p','muted',S.chat.record?.remote?'这段记录在另一台电脑上，第一次连接可能要几秒。':'正在读取这台电脑上的记录。'));
+  if(S.chat.loadingSince)t.append(since(S.chat.loadingSince,'dur','已等待 '));
+  if(S.chat.record?.remote&&S.chat.agent)t.append(btn('先看终端','secondary small',()=>{S.chatMode='terminal';S.stick=true;S.epoch++;renderChat();fetchTerminal();},'terminal'));
+  card.append(t);list.append(card);}
+ if(!count&&!S.chat.historyError&&!S.chat.historyRetry&&!waitingFirst){
   if(S.chat.historyLoading||S.more)list.append(el('div','empty small',S.chat.historyLoading?'正在读取对话记录…':'这一页没有可显示的消息，继续加载更早记录。'));
   // A real empty state, not a stray line over a blank page.
   else if(commandsOnly)empty(list,'还没有执行过命令','Agent 跑过的命令和输出会列在这里。',undefined,'terminal');

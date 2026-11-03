@@ -17,13 +17,17 @@ const CLOSE_EXIT={claude:'/exit',codex:'/quit',opencode:'/exit'};
 // ─── Long press (agent rows, history rows) ─────────────────────────────────
 // Long press or the context-menu key opens the row's actions; the click that ends a long press is eaten.
 function closeHold(n,open){
- let timer=0,x=0,y=0,fired=0;
+ let timer=0,x=0,y=0,fired=0,down=false,moved=false,downAt=0;
  const cancel=()=>{clearTimeout(timer);timer=0;n.classList.remove('holding');};
- const fire=()=>{cancel();fired=Date.now();closeHintLearned();open();};
- n.addEventListener('pointerdown',e=>{if(e.button)return;x=e.clientX;y=e.clientY;cancel();n.classList.add('holding');timer=setTimeout(fire,520);});
- n.addEventListener('pointermove',e=>{if(timer&&Math.hypot(e.clientX-x,e.clientY-y)>10)cancel();});
- ['pointerup','pointercancel','pointerleave'].forEach(t=>n.addEventListener(t,cancel));
- n.addEventListener('contextmenu',e=>{e.preventDefault();if(Date.now()-fired>800)fire();});
+ const fire=()=>{if(Date.now()-fired<700)return;cancel();fired=Date.now();closeHintLearned();open();};
+ n.addEventListener('pointerdown',e=>{if(e.button)return;down=true;moved=false;downAt=Date.now();x=e.clientX;y=e.clientY;cancel();n.classList.add('holding');timer=setTimeout(fire,650);});
+ n.addEventListener('pointermove',e=>{if(timer&&Math.hypot(e.clientX-x,e.clientY-y)>8){moved=true;cancel();}});
+ ['pointerup','pointercancel','pointerleave'].forEach(t=>n.addEventListener(t,()=>{down=false;cancel();}));
+ // Android/Chrome also emits contextmenu for its own long-press detection. It must not open the
+ // actions after a scroll or a swipe (which already cancelled the timer): only a still, held
+ // finger, or an explicit keyboard context menu (no recent pointer sequence), opens them.
+ n.addEventListener('contextmenu',e=>{e.preventDefault();
+  if(down? !moved : (!downAt||Date.now()-downAt>1000))fire();});
  n.addEventListener('click',e=>{if(Date.now()-fired<800){e.preventDefault();e.stopImmediatePropagation();}},true);
  n.classList.add('holdable');n.setAttribute('aria-haspopup','dialog');}
 // Swipe a row left to reveal its actions (the same ones long press offers). Only one row stays

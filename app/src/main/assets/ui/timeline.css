@@ -108,6 +108,7 @@
 .timeline>.tool-row{align-self:stretch}
 /* Unlinked chat */
 .unlinked{padding:18px;border:1px dashed var(--line-strong);border-radius:var(--radius-card);text-align:center}
+.unlinked .spinner{display:block;margin:0 auto 10px}
 .unlinked p{margin:6px 0 14px}
 .agent-terminal{font:12px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;margin:0;border-radius:var(--radius-control);padding:14px;background:var(--terminal);color:var(--terminal-ink);min-height:150px}
 .agent-terminal.compact{min-height:0;max-height:280px;overflow:auto}
@@ -173,6 +174,7 @@
 /* A read that fails for a moment: quiet, the messages above stay. */
 .note.history-retry{background:var(--sunken);color:var(--ink-2);margin:10px 0}
 .note.history-retry .grow{display:flex;flex-direction:column;gap:2px;min-width:0}
+.note.history-retry .retry-head{display:flex;align-items:center;gap:6px}
 .note.history-retry strong{color:var(--ink);font-weight:600}
 .note.history-retry .fine{color:var(--muted);font-size:var(--fs-xs);overflow-wrap:anywhere}
 .note.history-retry button{flex-shrink:0;align-self:center}

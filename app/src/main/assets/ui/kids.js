@@ -81,10 +81,14 @@ function kidsApply(){
  const before=new Map(touched.map(a=>[kidsKey(a),S.since.get(kidsKey(a))?.status]));
  if(touched.length){noteStatus(touched);syncWatch();}
  const moved=touched.some(a=>before.get(kidsKey(a))!==agentState(a));
+ // A change that stays in the same list group (working ↔ kids, idle ↔ done) is patched into the
+ // row; only crossing 等你确认 / 执行中 / 空闲 moves it and rebuilds the list.
+ const groupMoved=touched.some(a=>stateGroup(before.get(kidsKey(a))||'')!==liveGroup(a));
  if(S.chat){updateChatMeta();kidsPaintSheet();}
  else if(S.tab==='live'&&moved&&!overlay.childElementCount&&!(typeof T!=='undefined'&&T.view)){
-  const m=document.querySelector('.main'),top=m?m.scrollTop:0;render();const n=document.querySelector('.main');if(n){n.classList.remove('pane-enter');n.scrollTop=top;}return;}
- if(typeof LAYOUT!=='undefined'&&LAYOUT.wide&&moved&&LAYOUT.refreshList)LAYOUT.refreshList(true);
+  if(groupMoved){const m=document.querySelector('.main'),top=m?m.scrollTop:0;render();const n=document.querySelector('.main');if(n){n.classList.remove('pane-enter');n.scrollTop=top;}return;}
+  paintLiveRows();}
+ if(typeof LAYOUT!=='undefined'&&LAYOUT.wide&&groupMoved&&LAYOUT.refreshList)LAYOUT.refreshList(true);
  kidsPaintStrips();}
 // History pages carry the open record's sub-agents (and, for a sub-agent, whether it runs).
 function kidsFromHistory(record,r){

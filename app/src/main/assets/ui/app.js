@@ -112,7 +112,13 @@ function noTranscript(a){return !!a?.agent&&!hasTranscript(agentProvider(a));}
 function cleanTitle(t){return String(t||'').replace(/<\/?pasted_content(?:\s+id="[^"]{0,40}")?\s*>/g,' ').replace(/^[\s✳✻✽✶⠀-⣿·•*]+/,'').replace(/\s*\|\s*[^|]+$/,'').trim();}
 function genericTitle(t,a){if(!t||/^[^:]{1,60}:\s*(ch|claude|codex|bash|zsh|sh|ssh)$/i.test(t)||t===a.agent||/^(claude|codex)( code)?$/i.test(t))return true;
  const k=kindSafe(a.agent);return !!k&&(t.toLowerCase()===providerName(k).toLowerCase()||new RegExp('^[^:]{1,60}:\\s*'+k+'$','i').test(t));}
-function titleOf(a){for(const raw of [a.title,a.terminal_title_stripped,a.terminal_title]){const t=cleanTitle(raw);if(!genericTitle(t,a))return t;}
+function titleOf(a){
+ // A ch pane's own title is often the long attach command ("ch --host … resume …"). Once its
+ // conversation is known, the conversation's name says what it is (and fits the row).
+ if(a?.agent==='ch'&&a.history_ref?.status==='matched'){
+  const t=cleanTitle(a.history_ref.record?.title);
+  if(t&&!genericTitle(t,a)&&!/^This session is being continued/.test(t))return t.slice(0,60);}
+ for(const raw of [a.title,a.terminal_title_stripped,a.terminal_title]){const t=cleanTitle(raw);if(!genericTitle(t,a))return t;}
  const first=cleanTitle(a.history_ref?.record?.title);if(first&&!/^This session is being continued/.test(first))return first.slice(0,60);
  return providerName(a.agent)+(projectOf(a)?' · '+projectOf(a):'');}
 function projectOf(a){const p=a.foreground_cwd||a.cwd||'';return p.split('/').filter(Boolean).pop()||'';}
@@ -216,10 +222,16 @@ function agentRow(a){
  const meta=el('div','card-meta');meta.dataset.glance=k;const project=projectOf(a);meta.append(el('span','project',project||providerName(a.agent)));
  if(closeIsCh(a))meta.append(el('span','tag remote-tag','远端'));
  modeRowTags(meta,a);
- const ref=a.history_ref;if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(el('span','sep warn',ref.transient?'历史暂时读不到':'历史未关联'));queueBadge(meta,a);
+ const ref=a.history_ref;
+ if(ref&&ref.status!=='matched'&&ref.status!=='pending')meta.append(rowWarn(ref));
+ queueBadge(meta,a);
  const preview=glancePreview(a);if(preview){meta.append(preview);n.classList.add('has-glance');}
  text.append(meta);
- const side=el('div','row-side');const at=statusSince(a);
+ n.append(avatar(a.agent,tone),text,agentSide(a));closeHold(n,()=>agentActions(a));
+ return closeSwipe(n,[['关闭','x','danger',()=>closeSession(a)],['更多','more','',()=>agentActions(a)]]);}
+function agentSide(a){
+ const unread=S.unread.has(agentKey(a)),asks=!!glanceAsks(a),tone=asks?'alert':stateTone(a),st=agentState(a),at=statusSince(a);
+ const side=el('div','row-side');
  // The group header, the avatar dot and the tint already say 执行中 / 等你确认: the side keeps
  // just how long, so the preview gets the width.
  if(st==='blocked'||st==='working'||st==='kids'){const t=at?since(at,'ago'):el('span','',rowTimeText(a));t.classList.add('row-time','state-time','t-'+tone);side.append(t);t.title=stateLabel(a);}
@@ -227,11 +239,41 @@ function agentRow(a){
   if(asks)side.append(el('span','row-state t-ask','在问你'));
   else if(unread){const d=el('span','unread-dot');d.title='做完了，还没看';side.append(d,el('span','sr-only','有新进展'));}
   else if(st==='done')side.append(el('span','row-state','已完成'));}
- n.append(avatar(a.agent,tone),text,side);closeHold(n,()=>agentActions(a));
- return closeSwipe(n,[['关闭','x','danger',()=>closeSession(a)],['更多','more','',()=>agentActions(a)]]);}
+ return side;}
 // The meta line already names the project: a fallback title ("OpenCode · site") drops it there.
-function rowTitle(a){const t=titleOf(a),p=projectOf(a);return p&&t===providerName(a.agent)+' · '+p?providerName(a.agent):t;}
+// Which group a row is in (the list's 等你确认 / 执行中 / 空闲 cards).
+function stateGroup(st){return st==='blocked'?'alert':st==='working'||st==='kids'?'work':'idle';}
+function liveGroup(a){return glanceAsks(a)?'alert':stateGroup(agentState(a));}
+function rowTitle(a){let t=titleOf(a);const p=projectOf(a);if(p&&t===providerName(a.agent)+' · '+p)t=providerName(a.agent);
+ // An unresolved ch conversation is titled with its long attach command; keep the useful part.
+ const m=a.agent==='ch'?t.match(/ch\b[^\n]{0,160}?\bresume\s+['"]?([0-9a-f]{8})/i):null;
+ return m?'ch resume '+m[1]+'…':t;}
 function rowTimeText(a){const at=statusSince(a),last=lastActivity(a);if(!last)return '';return (at&&at>=last?ago(Date.now()-at)+'前':relative(last/1000)).replace('刚刚前','刚刚');}
+// The "history not linked / reconnecting" cell, kept as one node so a background re-resolve can
+// update it without rebuilding the list (which made the home page flash).
+function rowWarn(ref){
+ const w=el('span','sep warn');w.dataset.sig=ref?.transient?'t':'n';
+ if(ref?.transient)w.append(el('span','spinner mini'));
+ w.append(document.createTextNode(ref?.transient?'正在重连远端历史…':'历史未关联'));return w;}
+function paintRowWarn(meta,ref){
+ const w=meta.querySelector('.warn');
+ if(!(ref&&ref.status!=='matched'&&ref.status!=='pending')){w?.remove();return;}
+ const sig=ref.transient?'t':'n';
+ if(!w){const glance=meta.querySelector('.glance');meta.insertBefore(rowWarn(ref),glance||null);return;}
+ if(w.dataset.sig!==sig){w.dataset.sig=sig;w.replaceChildren();if(ref.transient)w.append(el('span','spinner mini'));
+  w.append(document.createTextNode(ref.transient?'正在重连远端历史…':'历史未关联'));}}
+// Patch the list's titles and history state in place; never replaces the rows (no flash, no jump).
+function paintLiveRows(){
+ if(S.chat||S.tab!=='live'||(typeof T!=='undefined'&&T.view)||overlay.childElementCount)return;
+ const by=new Map(S.agents.map(a=>[agentKey(a),a]));
+ document.querySelectorAll('.agent-row').forEach(row=>{
+  const meta=row.querySelector('.card-meta[data-glance]');if(!meta)return;const a=by.get(meta.dataset.glance);if(!a)return;
+  const unread=S.unread.has(agentKey(a)),asks=!!glanceAsks(a),tone=asks?'alert':stateTone(a),has=row.classList.contains('has-glance');
+  row.className='card-button agent-row tone-'+tone+(unread?' unread':'')+(has?' has-glance':'');
+  const dot=row.querySelector('.avatar .status-dot');if(dot)dot.className='status-dot '+tone;
+  const t=row.querySelector('.card-title');if(t){const v=rowTitle(a);if(t.textContent!==v)t.textContent=v;}
+  const side=row.querySelector('.row-side');if(side)side.replaceWith(agentSide(a));
+  paintRowWarn(meta,a.history_ref);});}
 // Within a group: unseen results first, then whatever changed most recently.
 function sortAgents(items){return items.map((a,i)=>({a,i,u:S.unread.has(agentKey(a))?1:0,t:lastActivity(a)})).sort((x,y)=>y.u-x.u||y.t-x.t||x.i-y.i).map(x=>x.a);}
 function liveProjects(){const m=new Map();for(const a of S.agents){const p=projectOf(a)||'其他';m.set(p,(m.get(p)||0)+1);}return [...m].sort((x,y)=>y[1]-x[1]||x[0].localeCompare(y[0]));}
@@ -326,9 +368,16 @@ async function loadLive(){
 async function refreshStatus(){
  if(!S.device||S.demo||S.statusBusy||!S.session||!S.statusSupported||S.liveLoading)return;S.statusBusy=true;
  const dev=S.device.id,session=S.session,panes=typeof hpWant==='function'&&hpWant();
- try{const r=await remote('status',{session:S.session,...(panes?{panes:true}:{})});const paneNews=panes&&hpTake(r.panes,dev,session);const known=new Map(S.agents.map(a=>[a.pane_id,a]));let changed=false;
-  const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}if(old.agent_status!==a.agent_status||titleOf(old)!==titleOf(a))changed=true;return {...old,...a,history_ref:old.history_ref,picker:a.picker};});
-  if(next.length!==S.agents.length)changed=true;
+ try{const r=await remote('status',{session:S.session,...(panes?{panes:true}:{})});const paneNews=panes&&hpTake(r.panes,dev,session);const known=new Map(S.agents.map(a=>[a.pane_id,a]));let changed=false,stateChanged=false,paintChanged=false;
+  const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){stateChanged=true;return a;}
+   const merged={...old,...a,history_ref:old.history_ref,picker:a.picker};
+   // Moving between 等你确认 / 执行中 / 空闲 relocates the row and rebuilds the list; a status or
+   // title change inside the same group is patched into the existing row (no flash).
+   if(old.agent_status!==a.agent_status||!!old.picker!==!!a.picker){
+    if(liveGroup(old)!==liveGroup(merged))stateChanged=true;else paintChanged=true;}
+   if(titleOf(old)!==titleOf(merged))paintChanged=true;
+   return merged;});
+  if(next.length!==S.agents.length)stateChanged=true;changed=stateChanged||paintChanged;
   const fresh=next.filter(a=>!known.has(a.pane_id)||known.get(a.pane_id).identity!==a.identity);
   noteStatus(next);S.agents=next;S.liveAt=Date.now();document.querySelectorAll('[data-fmt="upd"]').forEach(n=>{n.dataset.since=S.liveAt;});if(changed){syncWatch();cacheLive();}
   if(S.chat?.agent&&!S.chat.agent.tmux){const cur=next.find(a=>a.pane_id===S.chat.agent.pane_id);followHint(cur);if(!cur||cur.identity!==S.chat.agent.identity){if(!S.chat.stale){S.chat.stale=true;toast('这个窗格的 Agent 已变化，已停止发送');renderChat();}}else if(cur.agent_status!==S.chat.agent.agent_status){const was=S.chat.agent.agent_status;S.chat.agent={...S.chat.agent,agent_status:cur.agent_status,picker:cur.picker};onAgentStatus(was,cur.agent_status);}
@@ -339,7 +388,9 @@ async function refreshStatus(){
   // pane): re-resolve its history now instead of waiting for the minute timer.
   const repane=next.some(a=>{const old=known.get(a.pane_id);return old&&a.agent==='ch'&&(old.terminal_title!==a.terminal_title||old.terminal_title_stripped!==a.terminal_title_stripped);});
   if(repane&&!S.chat&&!S.histBusy&&Date.now()-(S.historyAt||0)>5000)recheckHistory();
-  if(changed&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();else if(paneNews)hpRepaint();}
+  if(stateChanged&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();
+  else if(paintChanged&&!S.chat&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)paintLiveRows();
+  else if(paneNews)hpRepaint();}
  catch(e){if(/Unknown operation|不支持的操作/.test(e.message))S.statusSupported=false;}
  finally{S.statusBusy=false;}}
 // A ch pane's identity does not change when its conversation is closed and reopened in the same
@@ -352,13 +403,19 @@ async function recheckHistory(){
  S.histBusy=true;S.historyAt=Date.now();
  try{const r=await remote('agents',{session:S.session,...(panes?{panes:true}:{})});if(epoch!==S.epoch||!Array.isArray(r?.agents))return;
   if(panes)hpTake(r.panes,dev,session);
-  const known=new Map(S.agents.map(a=>[a.pane_id,a]));let changed=false;
-  const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){changed=true;return a;}
-   if(JSON.stringify(old.history_ref||null)!==JSON.stringify(a.history_ref||null))changed=true;
-   return {...old,...a,history_ref:a.history_ref||old.history_ref,picker:a.picker};});
-  if(next.length!==S.agents.length)changed=true;
+  const known=new Map(S.agents.map(a=>[a.pane_id,a]));let stateChanged=false,paintChanged=false;
+  const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){stateChanged=true;return a;}
+   const merged={...old,...a,history_ref:a.history_ref||old.history_ref,picker:a.picker};
+   if(old.agent_status!==a.agent_status||!!old.picker!==!!a.picker)stateChanged=true;
+   if(titleOf(old)!==titleOf(merged)||JSON.stringify(old.history_ref||null)!==JSON.stringify(merged.history_ref||null))paintChanged=true;
+   return merged;});
+  if(next.length!==S.agents.length)stateChanged=true;
   noteStatus(next);S.agents=next;if(panes)hpRepaint();
-  if(changed){syncWatch();cacheLive();if(S.tab==='live'&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}}
+  if(stateChanged||paintChanged){syncWatch();cacheLive();}
+  // Only a real state/group change rebuilds the list; a resolved history ref or title is patched
+  // into the existing rows, so the home page does not flash on every background re-resolve.
+  if(stateChanged){if(S.tab==='live'&&!(typeof T!=='undefined'&&T.view)&&!overlay.childElementCount)render();}
+  else if(paintChanged)paintLiveRows();}
  catch(_){/* the next tick tries again */}
  finally{S.histBusy=false;}}
 
@@ -377,7 +434,12 @@ async function openAgent(a){
  if(remembered){S.chat.record=remembered;S.chat.manual=true;await fetchHistory(false,true);return;}
  const id=ref?.thread||(a.agent_session?.kind!=='path'?a.agent_session?.value:null);
  if(id&&ref?.status!=='pending'&&S.device){try{const r=await remote('catalog',{thread:id});if(epoch!==S.epoch)return;const rec=r.records.find(x=>x.provider===agentProvider(a)&&(!ref?.record_id||x.id===ref.record_id));if(rec){S.chat.record=rec;await fetchHistory(false,true);return;}}catch(e){if(epoch===S.epoch)error(e);}}
- if(epoch===S.epoch){S.chat.historyIssue=historyIssueText(ref);paintTimeline();if(a.agent_status==='working'||a.agent_status==='blocked')fetchTerminal(true);}}
+ if(epoch===S.epoch){S.chat.historyIssue=historyIssueText(ref);paintTimeline();
+  // Don't wait for the follow interval when the history is only momentarily unreadable: resolve
+  // this pane once now (the same targeted read the poll would do), so opening it shows progress
+  // and links as soon as the computer answers.
+  if(typeof followNow==='function'&&(!ref||ref.transient))followNow(0);
+  if(a.agent_status==='working'||a.agent_status==='blocked')fetchTerminal(true);}}
 // Pane + terminal + kind: a session id Herdr reports later must not lose the pick.
 function bindingKey(a){return [S.session,a.pane_id,a.terminal_id||'',a.agent].join('/');}
 // "Cannot read it right now" (retried by itself) reads differently from "there is nothing to find".
@@ -439,9 +501,9 @@ async function historyRead(older,initial){
  S.polling=true;const epoch=S.epoch;S.fetchEpoch=epoch;const record=S.chat.record;
  try{
  // A cached copy is painted first; before SSH is up the read waits for the connection.
- if(initial){const wait=await cacheFill(record,epoch);if(epoch!==S.epoch||wait){if(wait&&epoch===S.epoch)paintTimeline();return;}S.chat.historyLoading=true;paintTimeline();}
+ if(initial){const wait=await cacheFill(record,epoch);if(epoch!==S.epoch||wait){if(wait&&epoch===S.epoch)paintTimeline();return;}S.chat.historyLoading=true;S.chat.loadingSince=Date.now();paintTimeline();}
  const args={record_id:record.id};if(record.remote)args.remote=record.remote;if(older)args.before=S.before;
- try{const r=await remote('history',args);if(epoch!==S.epoch)return;kidsFromHistory(record,r);const hadError=!!(S.chat.historyError||S.chat.historyRetry);S.chat.historyError=null;S.chat.historyRetry='';S.chat.retryN=0;S.chat.retryAt=0;S.chat.historyLoading=false;S.chat.cached=0;S.chat.waiting=false;const prior=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
+ try{const r=await remote('history',args);if(epoch!==S.epoch)return;kidsFromHistory(record,r);const hadError=!!(S.chat.historyError||S.chat.historyRetry);S.chat.historyError=null;S.chat.historyRetry='';S.chat.retryN=0;S.chat.retryAt=0;S.chat.historyLoading=false;S.chat.loadingSince=0;S.chat.cached=0;S.chat.waiting=false;const prior=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text.length||0);
   const known=new Set(S.messages.map(x=>x.id));
   if(older)S.messages=r.messages.filter(m=>!known.has(m.id)).concat(S.messages);
   else if(initial)S.messages=r.messages.slice();
@@ -461,7 +523,7 @@ async function historyRead(older,initial){
  catch(e){if(epoch!==S.epoch)return;
   // An earlier page that did not load says so in place, with 重试; the chat itself keeps polling.
   if(older){olderSet(epoch,'error',e.message);return;}
-  S.chat.historyLoading=false;
+  S.chat.historyLoading=false;S.chat.loadingSince=0;
   // A read that fails for a moment (network, the other computer, ch reconnecting) keeps what is
   // shown and retries by itself, more slowly each time; a record that is gone stops and says so.
   if(historyTransient(e.message)){const c=S.chat;c.retryN=(c.retryN||0)+1;c.retryAt=Date.now()+Math.min(60000,4000*2**Math.min(c.retryN-1,4));

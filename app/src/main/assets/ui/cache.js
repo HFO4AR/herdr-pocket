@@ -67,6 +67,9 @@ function cacheChat(){
  cachePut(cacheChatKey(c.record),{messages,children:S.children,at:Date.now()});}
 function cacheChatNote(list){
  const c=S.chat;if(!c?.cached)return;
- list.append(el('div','fine center cache-note',c.waiting?'正在连接 · 上次读取 '+cacheAge(c.cached)+' · 连接好后自动刷新':c.historyLoading?'上次读取 '+cacheAge(c.cached)+' · 正在更新…':'显示的是上次读取的内容（'+cacheAge(c.cached)+'）'));}
+ const note=el('div','fine center cache-note');
+ if(c.historyLoading)note.append(el('span','spinner mini'));
+ note.append(document.createTextNode(c.waiting?'正在连接 · 上次读取 '+cacheAge(c.cached)+' · 连接好后自动刷新':c.historyLoading?'上次读取 '+cacheAge(c.cached)+' · 正在更新…':'显示的是上次读取的内容（'+cacheAge(c.cached)+'）'));
+ list.append(note);}
 // Not connected yet: the cached chat is read-only, nothing can be sent.
 function cacheOffline(footer){if(S.device||S.demo)return false;footer.replaceChildren(el('div','readonly','正在连接 · 显示的是上次的缓存，连上后才能发送'));return true;}

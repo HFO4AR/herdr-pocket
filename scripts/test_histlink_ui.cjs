@@ -15,11 +15,12 @@ await page.addInitScript(()=>{
  const ctx={session:'fx',target:'w1:p2',identity:'id-ch',provider:'claude'};
  const rec=(id,thread,title,remote)=>({id,thread,title,provider:'claude',parent:null,cwd:'/remote/ws',modified:now-60,...(remote?{remote:ctx}:{})});
  const R={live:rec('remote:k:'+'a'.repeat(64),'t-live','远端的对话',true),moved:rec('remote:k:'+'b'.repeat(64),'t-moved','搬过来的对话',true),
-  local:rec('c'.repeat(64),'t-local','本机的对话',false)};
+  local:rec('c'.repeat(64),'t-local','本机的对话',false),fresh:rec('remote:k:'+'d'.repeat(64),'t-fresh','另一段远端对话',true)};
  const msg=(id,kind,text,age)=>({id:id+':0',kind,text,title:'',call_id:'',timestamp:iso(age)});
  const H={[R.live.id]:[msg(1,'user','远端：帮我看看日志',90),msg(2,'assistant','远端的回答：日志正常。',80)],
   [R.moved.id]:[msg(5,'user','搬过来之前问的',900),msg(6,'assistant','搬过来的回答：已经处理。',890)],
-  [R.local.id]:[msg(9,'user','本机问题',50),msg(10,'assistant','本机回答。',40)]};
+  [R.local.id]:[msg(9,'user','本机问题',50),msg(10,'assistant','本机回答。',40)],
+  [R.fresh.id]:[msg(21,'user','新对话的问题',10),msg(22,'assistant','新对话的回答。',5)]};
  const matched=(r,source='native-process',extra={})=>({status:'matched',source,record_id:r.id,thread:r.thread,record:r,remote:ctx,...extra});
  // Herdr 0.8.2 lists a ch pane as agent "ch" with the conversation's provider in display_agent.
  const CH={pane_id:'w1:p2',terminal_id:'term-ch',agent:'ch',display_agent:'claude',agent_status:'done',identity:'id-ch',cwd:'/home/u/proj',title:'远端的对话',
@@ -44,7 +45,7 @@ await page.addInitScript(()=>{
    else if(a.op==='account')data={ssh_user:'u',hostname:'fx'};
    else throw Error('unexpected remote op '+a.op);}
   else if(!['watchState','protect','setAlerts','cacheGet','cachePut'].includes(op))throw Error('unexpected native op '+op);
-  setTimeout(()=>nativeResult(id,fail?{ok:false,error:fail}:{ok:true,data}),0);}};
+  setTimeout(()=>nativeResult(id,fail?{ok:false,error:fail}:{ok:true,data}),(op==='remote'&&a.op==='history'&&fx.historyDelay)||0);}};
 });
 await page.goto(require('./ui_bundle.cjs').url(html));
 await page.evaluate(()=>{window.followInterval=()=>1e9;});
@@ -128,7 +129,7 @@ console.log('PASS: the remote picker lists the other computer\'s records and the
 // 6. The pick sticks: an app restart (memory gone) and a failed auto-match still open it, from the bridge.
 await page.getByRole('button',{name:'返回列表',exact:true}).click();
 await page.evaluate(()=>{S.bindings.clear();fx.list[1]={...fx.CH2,history_ref:fx.matched(fx.R.moved,'manual',{auto_status:'remote_missing',remote:{...fx.CH2.history_ref.remote}})};S.agents=JSON.parse(JSON.stringify(fx.list));render();});
-await page.getByRole('button',{name:/ch-cli/}).click();
+await page.getByRole('button',{name:/搬过来的对话/}).first().click();
 await page.getByText('搬过来的回答：已经处理。').waitFor();
 assert.match(await page.locator('#chat-meta').textContent(),/手动关联/);
 // The bridge failing to answer this time (old bridge or no state) still keeps the in-app pick.
@@ -160,18 +161,44 @@ await page.evaluate(()=>{fx.list[0]={...fx.CH,history_ref:fx.matched(fx.R.live)}
 await page.evaluate(()=>{fx.list[0]={...fx.CH,history_ref:fx.matched(fx.R.moved)};});
 await page.evaluate(()=>recheckHistory());
 assert.equal(await page.evaluate(()=>S.agents.find(a=>a.pane_id==='w1:p2')?.history_ref?.record?.id),await page.evaluate(()=>fx.R.moved.id));
-await page.getByRole('button',{name:/远端的对话/}).click();
+await page.getByRole('button',{name:/搬过来的对话/}).first().click();
 await page.getByText('搬过来的回答：已经处理。').waitFor();
 console.log('PASS: a closed/reopened ch conversation is re-associated by the periodic history recheck');
 
 // A transient cold-read answer recovers on the next recheck without reopening the list.
 await page.getByRole('button',{name:'返回列表',exact:true}).click();
 await page.evaluate(()=>{fx.list[0]={...fx.CH,history_ref:{status:'remote_error',transient:true,reason:'远端电脑响应超时',remote:{session:'fx',target:'w1:p2',identity:'id-ch'}}};fx.list[1]={...fx.CH2,history_ref:fx.matched(fx.R.moved,'manual')};S.agents=JSON.parse(JSON.stringify(fx.list));render();});
-await page.getByText('历史暂时读不到',{exact:true}).first().waitFor();
+await page.getByText('正在重连远端历史…',{exact:true}).first().waitFor();
 await page.evaluate(()=>{fx.list[0]={...fx.CH,history_ref:fx.matched(fx.R.live)};return recheckHistory();});
 await page.waitForFunction(()=>S.agents.find(a=>a.pane_id==='w1:p2')?.history_ref?.status==='matched');
-assert.equal(await page.getByText('历史暂时读不到',{exact:true}).count(),0,'the transient warning clears');
+assert.equal(await page.getByText('正在重连远端历史…',{exact:true}).count(),0,'the transient warning clears');
 console.log('PASS: a transient remote history error clears on the periodic recheck');
+
+// 9. Opening a remote conversation whose first page is slow shows real progress, not a blank page.
+await page.evaluate(()=>{fx.historyDelay=700;fx.list[0]={...fx.CH,title:'另一段远端对话',history_ref:fx.matched(fx.R.fresh)};S.agents=JSON.parse(JSON.stringify(fx.list));render();});
+await page.getByRole('button',{name:/另一段远端对话/}).first().click();
+await page.locator('.loading-card').getByText('正在读取对话记录',{exact:true}).waitFor();
+assert.ok(await page.locator('.loading-card .spinner').count(),'a spinner is shown');
+assert.match(await page.locator('.loading-card').textContent(),/已等待/,'the wait is counted');
+assert.equal(await page.locator('.loading-card').getByRole('button',{name:'先看终端',exact:true}).count(),1,'terminal fallback offered');
+await page.getByText('新对话的回答。').waitFor();
+assert.equal(await page.locator('.loading-card').count(),0,'the progress card goes once the page arrives');
+await page.evaluate(()=>{fx.historyDelay=0;});
+console.log('PASS: a slow remote history read shows progress and a terminal fallback');
+
+// 10. A status-only title change patches the row in place; it must not rebuild (and flash) the list.
+await page.getByRole('button',{name:'返回列表',exact:true}).click();
+await page.evaluate(()=>{fx.list.push({pane_id:'w9:p9',terminal_id:'term-local',agent:'claude',agent_status:'idle',identity:'id-local',cwd:'/home/u',title:'本地标题',history_ref:null});S.agents=JSON.parse(JSON.stringify(fx.list));render();});
+await page.getByRole('button',{name:/本地标题/}).waitFor();
+await page.evaluate(()=>{const r=[...document.querySelectorAll('.agent-row')].find(n=>n.textContent.includes('本地标题'));r.__keep=1;window.__keepRow=r;});
+await page.evaluate(async()=>{fx.list[fx.list.length-1].title='本地新标题';S.statusBusy=false;await refreshStatus();});
+assert.equal(await page.evaluate(()=>window.__keepRow.isConnected&&window.__keepRow.__keep===1),true,'the same row node survives a title update');
+assert.match(await page.evaluate(()=>window.__keepRow.textContent),/本地新标题/);
+// A state change inside the same group (空闲: idle → done) also patches the row in place.
+await page.evaluate(async()=>{fx.list[fx.list.length-1].agent_status='done';S.statusBusy=false;await refreshStatus();});
+assert.equal(await page.evaluate(()=>window.__keepRow.isConnected&&window.__keepRow.__keep===1),true,'the same row node survives a same-group status change');
+assert.match(await page.evaluate(()=>window.__keepRow.textContent),/已完成/);
+console.log('PASS: title and same-group status changes patch the row instead of rebuilding the list');
 
 await page.setViewportSize({width:320,height:640});
 assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

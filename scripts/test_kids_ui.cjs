@@ -237,13 +237,13 @@ for(const [w,h,dark] of [[320,640,false],[390,844,true],[320,640,true]]){
  // An automatic status refresh that repaints the list must keep the reading position and must
  // not replay the entrance animation (that was the quick jump to the top / flicker).
  await page.getByRole('button',{name:'返回列表',exact:true}).click();
- await page.evaluate(()=>{document.querySelector('.main').scrollTop=500;});
+ await page.evaluate(()=>{const m=document.querySelector('.main');m.scrollTop=500;window.__listMain=m;});
  const before=await page.evaluate(()=>document.querySelector('.main').scrollTop);
  assert(before>0,'list scrolled');
  await page.evaluate(async()=>{fx.agents=fx.agents.map((a,i)=>i===4?{...a,agent_status:a.agent_status==='idle'?'done':'idle'}:a);S.statusBusy=false;await refreshStatus();});
  const after=await page.evaluate(()=>document.querySelector('.main').scrollTop);
  assert(Math.abs(after-before)<2,'scroll kept on refresh: '+before+' → '+after);
- assert.equal(await page.evaluate(()=>document.querySelector('.main').classList.contains('pane-enter')),false,'no entrance replay');
+ assert.equal(await page.evaluate(()=>document.querySelector('.main')===window.__listMain),true,'same-group refresh patches, never rebuilds the list');
  await page.context().close();}
 
 await browser.close();
