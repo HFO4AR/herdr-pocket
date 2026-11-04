@@ -198,6 +198,9 @@ assert.match(await page.evaluate(()=>window.__keepRow.textContent),/本地新标
 await page.evaluate(async()=>{fx.list[fx.list.length-1].agent_status='done';S.statusBusy=false;await refreshStatus();});
 assert.equal(await page.evaluate(()=>window.__keepRow.isConnected&&window.__keepRow.__keep===1),true,'the same row node survives a same-group status change');
 assert.match(await page.evaluate(()=>window.__keepRow.textContent),/已完成/);
+// Patching must not strip the swipe wiring (that exposed every row's 关闭 / 更多 buttons).
+assert.equal(await page.evaluate(()=>[...document.querySelectorAll('.agent-row')].every(r=>r.classList.contains('swipe-row'))),true,'swipe-row kept on every row');
+assert.equal(await page.evaluate(()=>[...document.querySelectorAll('.swipe-acts')].every(a=>a.getAttribute('aria-hidden')==='true')),true,'swipe actions stay hidden');
 console.log('PASS: title and same-group status changes patch the row instead of rebuilding the list');
 
 await page.setViewportSize({width:320,height:640});

@@ -268,8 +268,12 @@ function paintLiveRows(){
  const by=new Map(S.agents.map(a=>[agentKey(a),a]));
  document.querySelectorAll('.agent-row').forEach(row=>{
   const meta=row.querySelector('.card-meta[data-glance]');if(!meta)return;const a=by.get(meta.dataset.glance);if(!a)return;
-  const unread=S.unread.has(agentKey(a)),asks=!!glanceAsks(a),tone=asks?'alert':stateTone(a),has=row.classList.contains('has-glance');
-  row.className='card-button agent-row tone-'+tone+(unread?' unread':'')+(has?' has-glance':'');
+  const unread=S.unread.has(agentKey(a)),asks=!!glanceAsks(a),tone=asks?'alert':stateTone(a);
+  // Touch only the state classes: swipe-row / holding / has-glance and the swipe transform must
+  // survive. Replacing className here removed swipe-row and exposed every row's 关闭/更多 buttons.
+  [...row.classList].filter(c=>c.startsWith('tone-')).forEach(c=>row.classList.remove(c));
+  row.classList.add('tone-'+tone);
+  row.classList.toggle('unread',unread);
   const dot=row.querySelector('.avatar .status-dot');if(dot)dot.className='status-dot '+tone;
   const t=row.querySelector('.card-title');if(t){const v=rowTitle(a);if(t.textContent!==v)t.textContent=v;}
   const side=row.querySelector('.row-side');if(side)side.replaceWith(agentSide(a));
