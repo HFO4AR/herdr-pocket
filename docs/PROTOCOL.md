@@ -36,6 +36,16 @@ History does not require a running Herdr session and never accepts a caller-sele
 Codex adapters read session_meta and response_item records; Claude adapters read user/assistant message blocks and the documented subagents layout. Private reasoning/system/developer records are omitted. Related upstream references: [Codex rollout reducer](https://github.com/openai/codex/blob/main/codex-rs/rollout-trace/src/reducer/thread.rs), [Claude subagent documentation](https://code.claude.com/docs/en/sub-agents). Local fixture and installed-version verification is required when schemas change.
 
 
+## ch approval console (protocol remains v1)
+
+ch-cli's approval queue lives on the computer the bridge runs on (not the remote ch computer). The phone reads it read-only and, on an explicit tap, sends the decision.
+
+- `chSummary {}` → `{available, paused: running|paused|unknown, count, first, expires_at, server}`. Works without the headless service and is attached to `sessions`, `agents` and `status` as an optional `ch` field.
+- `chApprovals {}` → `{available, paused, approvals: [...], count, truncated, server, now}`. Each approval: `id, session, account, project, project_name, asks, text, truncated, ports, standing, bridge_state, approvable, approve_reason, source`. `text` is capped at 16 KiB; a truncated item is not approvable. Pending and socket paths are omitted. This is the read-only fallback for a ch without the service.
+- `chConsole {action, request_id, ...}` forwards to `ch __control-serve` and returns its envelope `{v,id,ok,result,error,code}`. Actions: `list`, `hello`, `decide {approval_id, decision}`, `decide_and_open {approval_id}`, `decide_standing {approval_id}`, `ports_open {candidate, ports}`, `ports_close {id}`, `ports_extend {id}`, `ports_extend_session {id}`, `ports_close_session {id}`, `ports_close_all`, `ports_extend_all`, `standing_add {candidate, kind, port|host}`, `standing_remove {id}`, `pause`, `resume`, `bridge_action {bridge, bridge_do}`, `shutdown`. The phone sends only opaque ids; the service re-resolves every target from the computer's own records. `list` omits requests that already have a decision, reports `pending_total` / `pending_truncated`, and includes `guardian {active, expires_at_ms, targets}`; ports and the guardian window use `expires_at_ms` (pending requests keep ch's `expires_at` in seconds).
+- The bridge starts `ch --state <state> __control-serve` detached when the socket is missing, checks `hello`, and never retries a mutation after it was sent; an unfinished call asks the page to refresh. A `ports_held_elsewhere` code means another console owns the ports.
+- One JSON request per Unix socket connection. The socket is 0600 in a 0700 directory, same-UID peers only; the service holds ch's ports lock while temporary ports are open and exits after 30 minutes idle with no ports.
+
 ## Terminal extension (v0.4.0, protocol remains v1)
 
 - `panes(session)`: ordinary panes in all workspaces; includes pane/terminal/tab/workspace IDs and identity. Recognized Agents are excluded.

@@ -19,6 +19,10 @@ class BridgeTests(unittest.TestCase):
         self.mock = patch.object(bridge, "call", side_effect=self.call)
         self.mock.start()
         self.addCleanup(self.mock.stop)
+        # Keep the ch approval summary away from the developer's real home.
+        bases = patch.object(bridge, "ch_state_bases", return_value=[self.state / "ch"])
+        bases.start()
+        self.addCleanup(bases.stop)
         self.addCleanup(self.directory.cleanup)
 
     def call(self, args):
@@ -68,7 +72,10 @@ class BridgeTests(unittest.TestCase):
         self.assertIn("menu", result)
 
     def test_sessions_only_exposes_public_fields(self):
-        self.assertEqual(bridge.handle({"v": 1, "op": "sessions"}),
+        result = bridge.handle({"v": 1, "op": "sessions"})
+        self.assertIn("ch", result)
+        result.pop("ch")
+        self.assertEqual(result,
                          {"herdr": True, "sessions": [{"name": "default", "running": True, "default": None}]})
 
     def test_duplicate_prompt_is_sent_once_and_text_is_one_argument(self):

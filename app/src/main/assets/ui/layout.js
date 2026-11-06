@@ -42,6 +42,7 @@ function splitTab(){return S.tab==='live'||S.tab==='history';}
  render=function(){
   if(!L.wide)return baseRender();
   if(!S.chat&&typeof T!=='undefined'&&T.view){renderTerminal();return;}
+  if(typeof CH!=='undefined'&&CH.view&&typeof renderChConsole==='function'){renderChConsole();return;}
   const split=splitTab();frame();setMode(S.chat&&!split?'focus':split?'split':'solo');
   paintList();
   if(S.chat)paintChat();else if(split)paintEmpty();else L.frame.detail.replaceChildren();};

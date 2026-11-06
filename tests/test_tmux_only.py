@@ -116,11 +116,16 @@ class TmuxOnlyTests(unittest.TestCase):
 
     # ── 1. No Herdr: clean answers, no crash ──
     def test_no_herdr_sessions_flag_and_doctor(self):
-        self.assertEqual(self.h(op="sessions"), {"sessions": [], "herdr": False, "tmux": True})
+        sessions = self.h(op="sessions")
+        self.assertIn("ch", sessions)
+        sessions.pop("ch")
+        self.assertEqual(sessions, {"sessions": [], "herdr": False, "tmux": True})
         doctor = self.h(op="doctor")
         self.assertEqual((doctor["herdr"], doctor["tmux"], doctor["running"]), (False, True, None))
         with patch.dict(os.environ, {"PATH": str(self.dir / "nothing")}):
-            self.assertEqual(self.h(op="sessions"), {"sessions": [], "herdr": False, "tmux": False})
+            sessions = self.h(op="sessions")
+            sessions.pop("ch", None)
+            self.assertEqual(sessions, {"sessions": [], "herdr": False, "tmux": False})
             self.assertFalse(self.h(op="doctor")["tmux"])
 
     def test_every_herdr_op_fails_cleanly(self):
@@ -135,7 +140,10 @@ class TmuxOnlyTests(unittest.TestCase):
         self.assertFalse(reply["ok"]); self.assertIn("没找到 Herdr", reply["error"]); self.assertEqual(out.stderr, "")
         sessions = subprocess.run([sys.executable, "-I", str(Path(bridge.__file__))], input='{"v":1,"op":"sessions"}\n',
                                   capture_output=True, text=True, timeout=30, env=env)
-        self.assertEqual(json.loads(sessions.stdout), {"ok": True, "data": {"sessions": [], "herdr": False, "tmux": True}})
+        data = json.loads(sessions.stdout)
+        self.assertTrue(data["ok"])
+        data["data"].pop("ch", None)
+        self.assertEqual(data, {"ok": True, "data": {"sessions": [], "herdr": False, "tmux": True}})
 
     # ── 2. New tmux session ──
     def test_new_session_argv_no_shell_and_returns_pane(self):

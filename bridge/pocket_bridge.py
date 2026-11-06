@@ -1445,6 +1445,412 @@ def ch_transfer_catalog(record_id):
     return []
 
 
+# ─── ch approval console ─────────────────────────────────────────────────────
+# ch-cli's `ch control` keeps its approval queue and its authority in <state>/control. This
+# bridge reads the queue directly (read-only, for the phone's list and badge) and sends every
+# action to the resident `ch __control-serve` process over a private Unix socket. That process
+# holds the ports lock and re-checks every target against this machine's own records; nothing
+# here runs a command or trusts a path from the phone.
+CH_APPROVAL_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\Z")
+CH_APPROVAL_TEXT = 16000
+CH_APPROVAL_MAX = 50
+CH_CONSOLE_PROTOCOL = 1
+CH_CONSOLE_TIMEOUT = 12.0
+
+
+def ch_state_bases():
+    """Where ch keeps its state, in the order ch itself would look. Local only: the control
+    queue belongs to the computer running ch, never to the far side of an SSH route."""
+    bases = []
+    env = os.environ.get("CH_STATE_DIR")
+    if env and os.path.isabs(env): bases.append(Path(env))
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg and os.path.isabs(xdg): bases.append(Path(xdg) / "ch")
+    home = Path.home()
+    bases.append(home / ".local/share/ch")
+    if sys.platform == "darwin": bases.append(home / "Library/Application Support/ch")
+    out, seen = [], set()
+    for base in bases:
+        try: key = os.path.realpath(base)
+        except OSError: continue
+        if key in seen: continue
+        seen.add(key); out.append(base)
+    return out
+
+
+def ch_control_dir(base):
+    """ch's own rule: an account state under accounts/<hash> shares the root's console."""
+    base = Path(base)
+    return base.parent / "control" if base.parent.name == "accounts" else base / "control"
+
+
+def ch_control_dirs():
+    out, seen = [], set()
+    for base in ch_state_bases():
+        control = ch_control_dir(base)
+        try: key = os.path.realpath(control)
+        except OSError: continue
+        if key in seen: continue
+        seen.add(key); out.append(control)
+    return out
+
+
+def ch_private_read(path, limit=1024 * 1024):
+    """A small private regular file of this user, without following a symlink."""
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+    try: fd = os.open(path, flags)
+    except OSError: return None
+    try:
+        info = os.fstat(fd)
+        if not stat_module.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > limit: return None
+        chunks, total = [], 0
+        while total <= limit:
+            chunk = os.read(fd, min(65536, limit + 1 - total))
+            if not chunk: break
+            chunks.append(chunk); total += len(chunk)
+        data = b"".join(chunks)
+        return data if len(data) <= limit else None
+    except OSError: return None
+    finally:
+        try: os.close(fd)
+        except OSError: pass
+
+
+def ch_pid_alive(pid):
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0: return False
+    try:
+        os.kill(pid, 0); return True
+    except OSError: return False
+
+
+def ch_paused(control):
+    try: os.lstat(Path(control) / "paused"); return "paused"
+    except FileNotFoundError: return "running"
+    except OSError: return "unknown"
+
+
+def ch_decision(control, approval_id):
+    """A decision can exist before the bridge consumes the pending file; `ch` hides those too."""
+    raw = ch_private_read(Path(control) / "decisions" / approval_id, 8)
+    if raw == b"allow": return "allow"
+    if raw == b"deny": return "deny"
+    return None
+
+
+def ch_bridge_state(control, socket_path):
+    """`open`, `paused`, `closed` or `unknown`; anything but a clear answer refuses approval."""
+    if not isinstance(socket_path, str) or not socket_path: return "open"
+    try: key = hashlib.sha256(os.fsencode(socket_path)).hexdigest()
+    except (TypeError, ValueError): return "unknown"
+    def flag(name):
+        try: os.lstat(Path(control) / "bridge-state" / (key + "." + name)); return True
+        except FileNotFoundError: return False
+        except OSError: return None
+    closed, paused = flag("closed"), flag("paused")
+    if closed is None or paused is None: return "unknown"
+    if closed: return "closed"
+    if paused: return "paused"
+    return "open"
+
+
+def ch_pending(control):
+    """Live requests in one control directory, oldest first (ch's own order). Read-only:
+    expired or dead entries are filtered, never deleted (the ch console owns cleanup)."""
+    try: entries = list(os.scandir(Path(control) / "pending"))
+    except OSError: return []
+    now, items = int(time.time()), []
+    for entry in entries:
+        name = entry.name
+        if not name.endswith(".json"): continue
+        approval_id = name[:-5]
+        if not CH_APPROVAL_ID.fullmatch(approval_id): continue
+        if ch_decision(control, approval_id) is not None: continue
+        raw = ch_private_read(entry.path)
+        if raw is None: continue
+        try: item = json.loads(raw)
+        except (ValueError, UnicodeDecodeError): continue
+        if not isinstance(item, dict) or item.get("id") != approval_id: continue
+        try:
+            expires, pid = int(item.get("expires_at")), int(item.get("pid"))
+            queued = int(item.get("queued_ms") or 0)
+        except (TypeError, ValueError): continue
+        if expires < now or not ch_pid_alive(pid): continue
+        session, text = item.get("session"), item.get("text")
+        if not isinstance(session, str) or not isinstance(text, str): continue
+        ports = item.get("ports")
+        ports = [p for p in ports if isinstance(p, int) and not isinstance(p, bool) and 0 < p < 65536][:16] if isinstance(ports, list) else []
+        project = item.get("project") if isinstance(item.get("project"), str) else None
+        account = item.get("account") if isinstance(item.get("account"), str) else None
+        asks = item.get("asks") if isinstance(item.get("asks"), str) else ""
+        items.append({"id": approval_id, "expires_at": expires, "queued_ms": queued, "session": session,
+                      "text": text, "ports": ports, "account": account, "asks": asks,
+                      "_project": project, "_socket": item.get("socket") if isinstance(item.get("socket"), str) else None,
+                      "_standing": ch_standing(item.get("standing"))})
+    items.sort(key=lambda x: (x["expires_at"], x["queued_ms"], x["id"]))
+    return items
+
+
+def ch_standing(raw):
+    """The persistent-rule part of a request, with the remote's text bounded and plain."""
+    if not isinstance(raw, dict): return None
+    out = {}
+    ports = raw.get("ports")
+    if isinstance(ports, list):
+        ports = [p for p in ports if isinstance(p, int) and not isinstance(p, bool) and 0 < p < 65536][:16]
+        if ports: out["ports"] = ports
+    for field, limit in (("ssh", 255), ("resolved", 1024), ("reason", 2000), ("folder", 4096)):
+        value = raw.get(field)
+        if isinstance(value, str) and value: out[field] = value[:limit]
+    if raw.get("write") is True: out["write"] = True
+    return out or None
+
+
+def ch_source(control):
+    """An opaque token for one control directory; the phone never sends a path back."""
+    try: return hashlib.sha256(os.path.realpath(control).encode()).hexdigest()[:16]
+    except (OSError, TypeError): return ""
+
+
+def ch_approval_item(item, control, paused):
+    text, truncated = item["text"], False
+    if len(text) > CH_APPROVAL_TEXT:
+        text, truncated = text[:CH_APPROVAL_TEXT], True
+    bridge = ch_bridge_state(control, item["_socket"])
+    why = None
+    if paused == "paused": why = "已暂停，不能批准"
+    elif paused == "unknown": why = "读不到暂停状态，不能批准"
+    elif bridge != "open": why = "这个桥已暂停或关闭，不能批准"
+    elif truncated: why = "内容太长，请到电脑上的 ch control 查看"
+    project = item["_project"]
+    return {"id": item["id"], "session": item["session"], "expires_at": item["expires_at"],
+            "queued_ms": item["queued_ms"], "account": item["account"], "project": project,
+            "project_name": Path(project).name if project else None, "asks": item["asks"],
+            "text": text, "truncated": truncated, "ports": item["ports"], "standing": item["_standing"],
+            "bridge_state": bridge, "approvable": why is None, "approve_reason": why,
+            "source": ch_source(control)}
+
+
+def ch_approvals():
+    """The read-only list, also usable on a ch without the headless service."""
+    controls = ch_control_dirs()
+    available = any(os.path.isdir(control) for control in controls)
+    paused_states = [ch_paused(control) for control in controls]
+    paused = "paused" if "paused" in paused_states else "unknown" if "unknown" in paused_states else "running"
+    items = []
+    for control in controls:
+        for item in ch_pending(control): items.append(ch_approval_item(item, control, paused))
+    items.sort(key=lambda x: (x["expires_at"], x["queued_ms"], x["id"]))
+    server = any(os.path.exists(Path(control) / "control.sock") for control in controls)
+    return {"available": available, "paused": paused, "approvals": items[:CH_APPROVAL_MAX],
+            "count": len(items), "truncated": len(items) > CH_APPROVAL_MAX,
+            "server": server, "now": int(time.time())}
+
+
+def ch_summary():
+    """Cheap enough for every status poll: the phone's badge and the background reminder."""
+    controls = ch_control_dirs()
+    available = any(os.path.isdir(control) for control in controls)
+    if not available:
+        return {"available": False, "paused": "running", "count": 0, "expires_at": None, "server": False}
+    paused_states = [ch_paused(control) for control in controls]
+    paused = "paused" if "paused" in paused_states else "unknown" if "unknown" in paused_states else "running"
+    items = []
+    for control in controls: items.extend(ch_pending(control))
+    items.sort(key=lambda x: (x["expires_at"], x["queued_ms"], x["id"]))
+    server = any(os.path.exists(Path(control) / "control.sock") for control in controls)
+    return {"available": True, "paused": paused, "count": len(items),
+            "first": items[0]["id"] if items else None,
+            "expires_at": items[0]["expires_at"] if items else None, "server": server}
+
+
+def ch_status_summary():
+    try: return ch_summary()
+    except (OSError, ValueError, TypeError, KeyError): return None
+
+
+def with_ch_summary(result):
+    """Best-effort: approval discovery never breaks an agent list or a status poll."""
+    summary = ch_status_summary()
+    if summary is not None: result["ch"] = summary
+    return result
+
+
+def ch_console_target():
+    """The state root and control directory whose console this phone should talk to."""
+    bases = ch_state_bases()
+    for base in bases:
+        control = ch_control_dir(base)
+        if os.path.isdir(control): return base, control
+    base = bases[0]
+    return base, ch_control_dir(base)
+
+
+def ch_console_spawn(base):
+    ch = find_executable("ch")
+    if not ch: raise BridgeError("电脑上没找到 ch：先在电脑上装好 ch，再试")
+    home = Path.home()
+    log = subprocess.DEVNULL
+    try:
+        folder = home / ".herdr-pocket"
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = folder / "ch-console.log"
+        log = open(path, "ab", buffering=0)
+        try: os.chmod(path, 0o600)
+        except OSError: pass
+    except OSError: pass
+    try:
+        child = subprocess.Popen([ch, "--state", str(base), "__control-serve"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log,
+                                 cwd=str(home), start_new_session=True, close_fds=True)
+    except OSError as exc:
+        raise BridgeError("手机控制台没有启动：" + str(exc)[:200]) from exc
+    finally:
+        if log is not subprocess.DEVNULL:
+            try: log.close()
+            except OSError: pass
+    return child
+
+
+def ch_console_probe():
+    """Does the installed ch have the headless service? The probe creates no socket."""
+    ch = find_executable("ch")
+    if not ch: return False
+    base, _ = ch_console_target()
+    try:
+        done = subprocess.run([ch, "--state", str(base), "__control-serve", "--probe"],
+                              capture_output=True, text=True, timeout=5)
+        if done.returncode: return False
+        value = json.loads(done.stdout)
+        return isinstance(value, dict) and value.get("protocol") == CH_CONSOLE_PROTOCOL
+    except (OSError, ValueError, subprocess.TimeoutExpired): return False
+
+
+def ch_console_connect(control, timeout=2.5):
+    """A private Unix socket of this user; never a path the phone chose."""
+    path = Path(control) / "control.sock"
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            info = os.lstat(path)
+            if not stat_module.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+                raise BridgeError("手机控制台的 socket 不是本机私有的 socket")
+            stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            stream.settimeout(min(CH_CONSOLE_TIMEOUT, 6.0))
+            stream.connect(str(path))
+            stream.settimeout(CH_CONSOLE_TIMEOUT)
+            return stream
+        except BridgeError: raise
+        except OSError as exc:
+            try: stream.close()
+            except (OSError, UnboundLocalError): pass
+            if time.monotonic() >= deadline: raise BridgeError("手机控制台没有回应：" + str(exc)[:200]) from exc
+            time.sleep(0.05)
+
+
+def ch_console_call(command, request_id, retry=False):
+    """One request to `ch __control-serve`. Mutations are never retried after they were sent."""
+    base, control = ch_console_target()
+    stream = None
+    for attempt in (0, 1) if retry else (0,):
+        try:
+            try: stream = ch_console_connect(control)
+            except BridgeError:
+                child = ch_console_spawn(base)
+                try:
+                    stream = ch_console_connect(control)
+                except BridgeError as exc:
+                    # Distinguish "old ch" from "it did not start": the probe has no side effect.
+                    if not ch_console_probe():
+                        raise BridgeError("电脑上的 ch 还没有手机控制台，更新 ch 后再试") from exc
+                    raise
+                finally:
+                    if stream is None and child.poll() is None:
+                        try: child.terminate()
+                        except OSError: pass
+            payload = json.dumps({"v": CH_CONSOLE_PROTOCOL, "id": request_id, "command": command},
+                                 ensure_ascii=False).encode()
+            stream.sendall(payload + b"\n")
+            data = b""
+            while b"\n" not in data and len(data) <= 2_000_000:
+                chunk = stream.recv(65536)
+                if not chunk: break
+                data += chunk
+            line, _, _ = data.partition(b"\n")
+            if not line: raise BridgeError("手机控制台没有回答")
+            reply = json.loads(line)
+            if not isinstance(reply, dict) or reply.get("v") != CH_CONSOLE_PROTOCOL:
+                raise BridgeError("手机控制台的协议版本不匹配")
+            return reply
+        except socket.timeout:
+            # The request may have been performed. Only a read is safe to send again.
+            if retry and attempt == 0: continue
+            return {"v": CH_CONSOLE_PROTOCOL, "id": request_id, "ok": False, "code": "unknown",
+                    "error": "结果未知：控制台没有回答，回列表刷新后看实际状态"}
+        except BridgeError:
+            raise
+        except (OSError, ValueError) as exc:
+            if retry and attempt == 0: continue
+            raise BridgeError("手机控制台没有回应：" + str(exc)[:200]) from exc
+        finally:
+            if stream is not None:
+                try: stream.close()
+                except OSError: pass
+                stream = None
+    raise BridgeError("手机控制台没有回应")
+def ch_console_request(request):
+    """Actions from the phone. Only opaque ids and fixed fields reach the service."""
+    action = request.get("action")
+    if action == "status": action = "list"
+    # The envelope id is separate from an action's own `id` (a port or rule id).
+    request_id = request.get("request_id")
+    if not isinstance(request_id, str) or not (1 <= len(request_id) <= 80): request_id = os.urandom(8).hex()
+    if action in ("list", "hello", "pause", "resume", "ports_close_all", "ports_extend_all", "shutdown"):
+        command = {"op": action}
+        return ch_console_call(command, request_id, retry=action in ("list", "hello"))
+    def uuid(name):
+        value = request.get(name)
+        if not isinstance(value, str) or not CH_APPROVAL_ID.fullmatch(value):
+            raise BridgeError("无效的 " + name)
+        return value
+    def key(name, length):
+        value = request.get(name)
+        if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{%d}" % length, value):
+            raise BridgeError("无效的 " + name)
+        return value
+    if action in ("decide", "decide_and_open", "decide_standing"):
+        command = {"op": action, "approval_id": uuid("approval_id")}
+        if action == "decide":
+            if request.get("decision") not in ("allow", "deny"): raise BridgeError("无效的答复")
+            command["decision"] = request["decision"]
+    elif action == "ports_open":
+        ports = request.get("ports")
+        if not isinstance(ports, list) or not (1 <= len(ports) <= 16) or not all(
+                isinstance(p, int) and not isinstance(p, bool) and 0 < p < 65536 for p in ports):
+            raise BridgeError("无效的端口")
+        command = {"op": "ports_open", "candidate": key("candidate", 32), "ports": ports}
+    elif action in ("ports_close", "ports_extend", "ports_extend_session", "ports_close_session", "standing_remove"):
+        command = {"op": action, "id": uuid("id")}
+    elif action == "bridge_action":
+        if request.get("bridge_do") not in ("pause", "resume", "close", "reopen"): raise BridgeError("未知的 bridge 操作")
+        command = {"op": "bridge_action", "bridge": key("bridge", 64), "action": request["bridge_do"]}
+    elif action == "standing_add":
+        kind = request.get("kind")
+        if kind not in ("port", "ssh"): raise BridgeError("未知的规则类型")
+        command = {"op": "standing_add", "candidate": key("candidate", 32), "kind": kind}
+        if kind == "port":
+            port = request.get("port")
+            if not isinstance(port, int) or isinstance(port, bool): raise BridgeError("缺少端口")
+            command["port"] = port
+        else:
+            host = request.get("host")
+            if not isinstance(host, str) or not (1 <= len(host) <= 255): raise BridgeError("缺少主机名")
+            command["host"] = host
+        # A reason typed on the phone is not a remote reason; it is never forwarded.
+    else:
+        raise BridgeError("不支持的 ch 控制台操作")
+    return ch_console_call(command, request_id)
+
+
 def scoped_records(provider, workspace, limit=12):
     """Root conversations started in this workspace; never parses other projects."""
     root = provider_root(provider)
@@ -8341,11 +8747,11 @@ def handle(request, state_dir=None):
     if op == "sessions":
         # No Herdr on this computer: an empty list and a flag, so the app shows tmux only.
         try: found = sessions()
-        except HerdrMissing: return {"sessions": [], "herdr": False, "tmux": tmux_binary() is not None}
+        except HerdrMissing: return with_ch_summary({"sessions": [], "herdr": False, "tmux": tmux_binary() is not None})
         result = {"herdr": True, "sessions": [{k: s.get(k) for k in ("name", "running", "default")} for s in found]}
         brief = server_brief() if any(s.get("default") and s.get("running") for s in found) else None
         if brief: result["server"] = brief
-        return result
+        return with_ch_summary(result)
     if op == "herdrHealth": return herdr_health()
     if op == "herdrStart": return herdr_start(request, state_dir or Path.home() / ".local/state/herdr-pocket")
     if op == "guardPlan": return guard_plan(request)
@@ -8390,6 +8796,9 @@ def handle(request, state_dir=None):
         prefix = select_session(request)
         if op == "closeInfo": return close_info(request, prefix)
         return close_pane(request, prefix, state_dir or Path.home() / ".local/state/herdr-pocket")
+    if op == "chSummary": return ch_summary()
+    if op == "chApprovals": return ch_approvals()
+    if op == "chConsole": return ch_console_request(request)
     if op not in ("agents", "status", "read", "prompt", "key", "answer", "stageFile", "commands", "exitAgent", "link", "panelTour"):
         raise BridgeError("Unknown operation")
     if op == "status" and request.get("tmux") is True:
@@ -8399,16 +8808,16 @@ def handle(request, state_dir=None):
         if request.get("session"):
             try: found = herdr_status(select_session(request), state_dir or True)
             except HerdrMissing: found = []
-        return {"agents": found + tmux_status_rows(), "tmux": True}
+        return with_ch_summary({"agents": found + tmux_status_rows(), "tmux": True})
     prefix = select_session(request)
     # The screen notes live in the state folder the request runs with (main passes the real one).
     screens = state_dir or True
-    if op == "status": return with_panes({"agents": herdr_status(prefix, screens)}, request, prefix)
+    if op == "status": return with_ch_summary(with_panes({"agents": herdr_status(prefix, screens)}, request, prefix))
     if op == "agents":
         links = links_for(state_dir)
         try:
-            if request.get("target") is not None: return follow_pane(request, prefix, links)
-            return with_panes({"agents": agents(prefix, include_history=True, screens=screens, links=links)}, request, prefix)
+            if request.get("target") is not None: return with_ch_summary(follow_pane(request, prefix, links))
+            return with_ch_summary(with_panes({"agents": agents(prefix, include_history=True, screens=screens, links=links)}, request, prefix))
         finally: links.save()
     if op == "link": return link_history(request, prefix, links_for(state_dir))
     found = agents(prefix, screens=screens)

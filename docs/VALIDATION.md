@@ -1,3 +1,15 @@
+# ch approval console (2026-11-06)
+
+- Added the phone side of ch-cli's `ch control`: `chSummary` / `chApprovals` (read-only queue) and `chConsole` (forwarded to the resident `ch __control-serve`), a full-screen console in `chconsole.js` (approvals, ports / SSH / persistent rules, bridge pause / close / reopen), the 会话 banner / toolbar entry / nav count and a background notification. No automatic approval and no replay of an unknown mutation.
+- Added `src/control_ops.rs`, `src/control_server.rs` and `tests/control_server.rs` in ch-cli: a 0600 same-UID Unix socket, single-instance lock, atomic decide / decide_and_open / decide_standing, `ports::Holder` lifetime, shutdown that closes only temporary ports. New files plus two `lib.rs` lines and one hidden subcommand in `main.rs`; the existing TUI was not modified.
+- PASS: ch-cli `cargo test --test control_server` — 23/23 (list + decided filtering + guardian off, first-decision-wins, truncated text refusal, list truncation, decide_and_open rollback + no extension of an existing port, decide_standing rollback + folder, ports open/close/extend/close-session/close-all, holder conflict, bridge flags + closed/paused/open gates, pause/resume, socket 0600, double instance, stale socket, symlinked account state, shutdown, idle-with-ports, probe, bad version/op).
+- PASS: ch-cli `cargo clippy --all-targets -- -D warnings` (the earlier `standing.rs:1025` warning was fixed by the agent working on that file).
+- PASS: full ch-cli suite with `TMPDIR=/var/tmp/ch-test-tmp` (the `context_rules` test fails only when a stray `/tmp/.git` or `/home/yuki/.git` is an ancestor of its temporary directory; two real-process/tmux tests failed only when the whole suite ran in parallel and passed individually).
+- PASS: herdr-pocket `python3 -m unittest discover -s tests` — 566 tests, including the new `tests/test_ch_console.py` (10 tests).
+- PASS: browser suites `test_chconsole_ui.cjs` (new), `test_lists_ui.cjs`, `test_guard_ui.cjs`, `test_settings_ui.cjs`, `test_answer_ui.cjs`, `test_sftp_ui.cjs`, `test_new_ui.cjs` — offline fakes, 320 px, dark and tablet checks. The active guardian banner is covered by the UI fake; the Rust test covers `guardian.active: false` (constructing a live guardian window needs Landlock and a full scan, so that path is checked on the UI side).
+- NOT RUN: `./gradlew assembleDebug lintDebug` — this host has only Java 25 and Gradle 8.13 refuses it; no JDK 17 is installed. The Kotlin changes (allowlist + WatchService notification) are unbuilt here.
+- NOT VERIFIED: a real handset, a real ch with `__control-serve`, opening ports through real `pasta`, and the phone's notification tap. All tests used synthetic state and fake sockets.
+
 # preview-87 integration: Office + CC Switch (2026-10-20)
 
 Integration branch `agent/preview87-integration-10201516` on `805cae1` (Phase 1 images/PDF + Phase 2 media). Merged `agent/preview3-10201303` (`97782db`) first, then `agent/ccswitch-10201303` (`71c2fc8`).

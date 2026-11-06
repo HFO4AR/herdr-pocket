@@ -74,6 +74,9 @@ class WatchService : Service() {
         val on get() = session.isNotEmpty() || tmux
         fun off() { session = ""; tmux = false }
         var failures = 0
+        // The ch approval line last notified: count and the earliest request's id/expiry, so the
+        // countdown itself never re-posts it.
+        var chSeen = ""
         val last = HashMap<String, String>()
         // Each agent's record as the app knows it (provider, thread, record_id, cwd or remote): what to ask about sub-agents.
         val kidItems = HashMap<String, JSONObject>()
@@ -295,7 +298,8 @@ class WatchService : Service() {
         try {
             val ask = JSONObject().put("op", "status").put("session", w.session)
             if (w.tmux) ask.put("tmux", true)
-            val agents = PocketCore.request(w.id, ask).getJSONArray("agents")
+            val status = PocketCore.request(w.id, ask)
+            val agents = status.getJSONArray("agents")
             w.failures = 0
             val seen = HashMap<String, String>()
             val listed = LinkedHashMap<String, JSONObject>()
@@ -349,6 +353,7 @@ class WatchService : Service() {
             }
             last.keys.retainAll(seen.keys)
             listOf(asks, w.askStamps, askRetry).forEach { it.keys.retainAll(seen.keys) }
+            chNotify(w, status.optJSONObject("ch"))
             return WatchRules.interval(seen.values, askRetry.isNotEmpty())
         } catch (_: Exception) {
             // PocketCore already reconnected once if the session was dead; repeated failures mean the
@@ -450,6 +455,28 @@ class WatchService : Service() {
      * Tap = open that chat on that computer. With several computers connected the computer's name
      * shows next to the app name.
      */
+    /**
+     * ch's approval queue, on the same read-only poll. One notification per computer; the text
+     * carries no command content (only how many wait and how soon the earliest expires). Go back
+     * into the app to read and answer them; nothing here decides anything.
+     */
+    private fun chNotify(w: Watch, ch: JSONObject?) {
+        val count = ch?.optInt("count", 0) ?: 0
+        val key = w.key("ch-approvals")
+        if (count <= 0) {
+            if (w.chSeen.isNotEmpty()) { w.chSeen = ""; cancel(key) }
+            return
+        }
+        val expires = ch?.optLong("expires_at", 0L) ?: 0L
+        val first = ch?.optString("first", "") ?: ""
+        val seen = "$count/$first/$expires/${ch?.optString("paused", "")}"
+        if (seen == w.chSeen) return
+        w.chSeen = seen
+        val left = if (expires > 0) maxOf(0L, expires - System.currentTimeMillis() / 1000) else 0L
+        val text = "ch 有 $count 条等待审批" + if (left > 0) " · 最早的还剩 $left 秒" else ""
+        notify(w, "ch-approvals", "ch 等你审批", text, "", WatchRules.Alert.BLOCKED)
+    }
+
     private fun notify(w: Watch, agentKey: String, title: String, text: String, pane: String, kind: WatchRules.Alert, grouped: Boolean = true) {
         val manager = manager()
         val key = w.key(agentKey)

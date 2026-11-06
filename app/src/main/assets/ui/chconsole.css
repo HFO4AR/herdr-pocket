@@ -1,0 +1,67 @@
+/* ch 控制台: approvals, temporary ports / persistent rules, and bridge pause. */
+.ch-shell{display:flex;flex-direction:column;min-height:100%;background:var(--bg)}
+.ch-head{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--line);background:var(--bg)}
+.ch-title{margin:0;font-size:var(--fs-lg);line-height:1.2;font-weight:650}
+.ch-sub{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:baseline;margin:2px 0 0;color:var(--faint);font-size:var(--fs-xs)}
+.ch-head-count{color:var(--danger);font-weight:600}
+.ch-tabs{display:flex;flex:none;width:100%;margin:0;gap:var(--sp-1);padding:var(--sp-1) var(--sp-3);border-bottom:1px solid var(--line);background:var(--bg);overflow-x:auto}
+.ch-tabs button{flex:none;min-height:40px;padding:0 var(--sp-3);border-radius:999px;font-size:var(--fs-sm);color:var(--muted)}
+.ch-tabs button.active{background:var(--soft);color:var(--accent);font-weight:600}
+.ch-main{padding:var(--sp-3);padding-bottom:calc(var(--sp-6) + env(safe-area-inset-bottom))}
+.ch-note{margin:0 0 var(--sp-2);color:var(--muted);font-size:var(--fs-sm)}
+.ch-warn{margin:var(--sp-2) 0;padding:var(--sp-2) var(--sp-3);border-radius:var(--radius-control);background:var(--danger-soft);color:var(--danger);font-size:var(--fs-sm);line-height:1.45}
+.ch-fine{margin:2px 0;color:var(--faint);font-size:var(--fs-xs);line-height:1.45}
+.ch-readonly,.ch-paused,.ch-guardian{display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-3);padding:var(--sp-3);border-radius:var(--radius-card);font-size:var(--fs-sm);line-height:1.4}
+.ch-readonly,.ch-guardian{background:var(--warn-soft);color:var(--warn)}
+.ch-paused{background:var(--danger-soft);color:var(--danger)}
+.ch-readonly>svg,.ch-paused>svg,.ch-guardian>svg{width:20px;height:20px;flex:none}
+.ch-list{padding:0;overflow:hidden}
+.ch-row{display:block;width:100%;padding:var(--sp-3);border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;text-align:left}
+.ch-list .ch-row:last-of-type{border-bottom:0}
+.ch-row.standing{background:var(--alert-row)}
+.ch-row.open{background:var(--soft)}
+.ch-row-top{display:flex;align-items:flex-start;gap:var(--sp-2)}
+.ch-row-ic{display:inline-flex;flex:none;padding-top:1px;color:var(--warn)}
+.ch-row-ic svg{width:20px;height:20px}
+.ch-row-title{font-size:var(--fs-md);font-weight:600;line-height:1.35;color:var(--ink);word-break:break-word}
+.ch-row-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:5px}
+.ch-tag{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 8px;border-radius:999px;background:var(--sunken);color:var(--muted);font-size:var(--fs-2xs);line-height:1.5}
+.ch-session{font-family:var(--mono)}
+.ch-tag-port{background:var(--warn-soft);color:var(--warn)}
+.ch-tag-danger{background:var(--danger-soft);color:var(--danger);font-weight:600}
+.ch-ok{background:var(--success-soft);color:var(--success)}
+.ch-bad{background:var(--danger-soft);color:var(--danger)}
+.ch-left{margin-left:auto;flex:none;padding-top:2px;color:var(--faint);font-size:var(--fs-xs);white-space:nowrap}
+.ch-detail{padding:0 var(--sp-3) var(--sp-3);border-bottom:1px solid var(--line);background:var(--surface)}
+.ch-text{margin:0 0 var(--sp-2);padding:var(--sp-2);max-height:45vh;overflow:auto;border:1px solid var(--line);border-radius:var(--radius-control);background:var(--code-bg);color:var(--ink-2);font-family:var(--mono);font-size:var(--fs-xs);line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.ch-actions{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center;justify-content:flex-end;margin-top:var(--sp-2)}
+.ch-actions-wrap{justify-content:flex-start;margin:var(--sp-3) 0}
+.ch-actions button:disabled{opacity:.45}
+.ch-card{padding:0;overflow:hidden}
+.ch-port-session{padding:var(--sp-3);border-bottom:1px solid var(--line)}
+.ch-port-session:last-child{border-bottom:0}
+.ch-port-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2)}
+.ch-port-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);padding:var(--sp-2) 0}
+.ch-port{font-family:var(--mono);font-weight:600;margin-right:var(--sp-2)}
+.ch-port-left{color:var(--faint);font-size:var(--fs-xs);white-space:nowrap;margin-left:var(--sp-2)}
+.ch-rule-row{display:flex;align-items:flex-start;gap:var(--sp-2);padding:var(--sp-3);border-bottom:1px solid var(--line)}
+.ch-rule-row:last-child{border-bottom:0}
+.ch-pause-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-3);padding:var(--sp-3);border:1px solid var(--line);border-radius:var(--radius-card);background:var(--surface);font-size:var(--fs-sm);color:var(--muted)}
+.ch-bridge-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);padding:var(--sp-3);border-bottom:1px solid var(--line)}
+.ch-bridge-row:last-child{border-bottom:0}
+.ch-pick{display:flex;flex-direction:column;gap:var(--sp-2);margin:var(--sp-2) 0}
+.ch-pick-row{display:flex;align-items:center;gap:var(--sp-2);width:100%;min-height:48px;padding:var(--sp-2) var(--sp-3);border:1px solid var(--line);border-radius:var(--radius-control);background:var(--surface);text-align:left}
+.ch-pick-row.on{border-color:var(--accent);background:var(--soft)}
+.ch-input{width:100%;min-height:44px;margin:var(--sp-2) 0;padding:0 var(--sp-3);border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--surface);color:var(--ink);font-size:var(--fs-md)}
+.ch-entry{color:var(--danger);background:var(--danger-soft);border-color:var(--danger-line);font-weight:600}
+.ch-banner{margin:var(--sp-2) 0 var(--sp-3);padding:var(--sp-3)}
+.ch-banner .row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2)}
+.ch-banner-ic{display:inline-flex;color:var(--danger)}
+.ch-banner-ic svg{width:22px;height:22px}
+.ch-banner-line{display:block;margin-top:2px;color:var(--muted);font-size:var(--fs-xs)}
+.ch-banner .ch-left{display:inline;margin-left:var(--sp-2)}
+@media (max-width:340px){
+ .ch-main{padding:var(--sp-2)}
+ .ch-row,.ch-detail,.ch-port-session,.ch-rule-row,.ch-bridge-row{padding-left:var(--sp-2);padding-right:var(--sp-2)}
+ .ch-actions{gap:6px}
+}

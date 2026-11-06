@@ -160,7 +160,7 @@ setInterval(()=>{if(!S.active)return;document.querySelectorAll('[data-since]').f
 
 // ─── App shell & navigation ─────────────────────────────────────────────────
 const TABS=[['live','chat','会话'],['history','history','历史'],['terminals','terminal','终端'],['devices','device','设备'],['settings','settings','设置']];
-function setTab(tab){leaveTerminal();if(typeof filesLeave==='function')filesLeave();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();if(tab==='settings')settingsLoad().then(()=>{if(S.tab==='settings'&&!S.chat&&!overlay.childElementCount)paintSettings();});}
+function setTab(tab){leaveTerminal();if(typeof filesLeave==='function')filesLeave();if(typeof chConsoleLeave==='function')chConsoleLeave();S.chat=null;S.chatStack=[];S.tab=tab;S.epoch++;S.liveLoading=false;render();if(tab==='terminals'&&S.device)loadPanes();if(tab==='live'&&S.device)loadLive();if(tab==='history'&&S.device)loadCatalog();if(tab==='devices'&&S.device&&!S.account)loadAccount();if(tab==='settings')settingsLoad().then(()=>{if(S.tab==='settings'&&!S.chat&&!overlay.childElementCount)paintSettings();});}
 function shell(){app.replaceChildren();const root=el('div','shell');app.append(root);if(S.demo)root.append(el('div','demo-banner','离线演示 · 示例数据，不连接电脑'));return root;}
 function header(root){
  const bar=el('header','topbar');const title=(TABS.find(t=>t[0]===S.tab)||[])[2]||'Herdr Pocket';bar.append(el('h1','',title));
@@ -176,7 +176,7 @@ function loadingCard(main,title,detail){const box=el('div','loading-card');box.s
 function skeleton(main,rows=4){for(let i=0;i<rows;i++){const r=el('div','skeleton-row');r.append(el('div','sk-avatar'),el('div','sk-lines'));main.append(r);}}
 function empty(main,title,desc,action,name='chat'){const n=el('div','empty');const a=el('div','empty-icon');a.append(icon(name));n.append(a,el('h2','',title),el('p','',desc));if(action)n.append(action);main.append(n);}
 function render(){
- if(S.chat){renderChat();return;}if(typeof T!=='undefined'&&T.view){renderTerminal();return;}if(typeof FX!=='undefined'&&FX.view){renderFiles();return;}
+ if(S.chat){renderChat();return;}if(typeof T!=='undefined'&&T.view){renderTerminal();return;}if(typeof FX!=='undefined'&&FX.view){renderFiles();return;}if(typeof CH!=='undefined'&&CH.view&&typeof renderChConsole==='function'){renderChConsole();return;}
  // A refresh of the same tab keeps the reading position and does not play the entrance again:
  // status polls used to rebuild the list and snap it back to the top.
  const oldMain=document.querySelector('.shell>main.main'),keep=S.renderedTab===S.tab&&oldMain?oldMain.scrollTop:null;
@@ -186,8 +186,9 @@ function render(){
  S.renderedTab=S.tab;
  const nav=el('nav','bottom-nav');nav.setAttribute('aria-label','主导航');
  const waiting=S.agents.filter(a=>a.agent_status==='blocked'||glanceAsks(a)).length;
+ const waitingAll=waiting+(typeof chPendingCount==='function'?chPendingCount():0);
  // 历史 reads the computer's own Claude/Codex transcripts; it does not need Herdr.
- TABS.forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waiting){const badge=el('span','nav-badge',String(waiting));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waiting+' 个 Agent 等你确认';}if(tab==='settings'&&settingsBadge()){n.append(el('span','nav-dot'));n.title='有新版本';}nav.append(n);});
+ TABS.forEach(([tab,i,label])=>{const n=btn(label,'nav-item'+(S.tab===tab?' active':''),()=>setTab(tab),i);n.setAttribute('aria-current',S.tab===tab?'page':'false');if(tab==='live'&&waitingAll){const badge=el('span','nav-badge',String(waitingAll));badge.setAttribute('aria-hidden','true');n.append(badge);n.title=waitingAll+' 个 Agent 或 ch 审批等你确认';}if(tab==='settings'&&settingsBadge()){n.append(el('span','nav-dot'));n.title='有新版本';}nav.append(n);});
  root.append(nav);}
 function requireDevice(main){if(S.device||cacheBrowsing())return true;if(S.loading){loadingCard(main,'连接正在进行','连接成功后会自动读取会话，请稍候。');return false;}empty(main,'先连接你的电脑','连接后，在线会话、历史记录和终端会出现在这里。',btn('选择设备','primary',()=>setTab('devices')));return false;}
 function searchBox(placeholder,change,value=''){const box=el('div','search');const input=el('input');input.type='search';input.placeholder=placeholder;input.value=value;input.setAttribute('aria-label',placeholder);input.setAttribute('enterkeyhint','search');
@@ -312,6 +313,7 @@ function livePage(main){
  if(!requireDevice(main))return;
  const actions=el('div','row list-actions');
  if(S.sessions.length>1){const s=btn('','pill session-pill',chooseSession,'folder');s.append(el('span','truncate',S.session||'选择会话'),icon('down'));s.setAttribute('aria-label','切换 Herdr 会话 · 当前 '+(S.session||'未选'));actions.append(s);}
+ if(typeof chEntryButton==='function'){const b=chEntryButton();if(b)actions.append(b);}
  const counts=S.agents.length&&!S.liveError&&!(S.liveLoading&&!S.agents.length);
  actions.append(counts?liveStatus():el('span','grow'),ib('refresh','刷新会话',loadLive));
  // With no sessions the empty state carries the one 新建 button.
@@ -319,7 +321,7 @@ function livePage(main){
  if(S.device&&S.session&&(S.agents.length||pendingHere))actions.append(createButton());
  // Loading, failed and empty pages carry their own status and action (and new agents appear by
  // themselves): a lone refresh icon over them only looks unfinished.
- if(counts||S.sessions.length>1||pendingHere)main.append(actions);
+ if(counts||S.sessions.length>1||pendingHere||(typeof chPendingCount==='function'&&chPendingCount()))main.append(actions);
  // Starts still on their way (create.js 正在启动) go first, also above an empty or loading list.
  const starting=typeof newPendingSection==='function'?newPendingSection(main):0;
  if(S.liveLoading&&!S.agents.length){loadingCard(main,'SSH 已连接，正在读取会话',S.liveLoading==='sessions'?'正在获取 Herdr 工作区…':'正在识别 Agent 并关联历史记录…');skeleton(main,3);return;}
@@ -356,7 +358,7 @@ function switchSession(name){
  if(S.tab==='terminals')loadPanes();else loadLive();toast('切到 Herdr 会话「'+name+'」');}
 async function loadLive(){
  if(!S.device)return;const epoch=++S.epoch;S.liveLoading=S.agents.length?'agents':'sessions';S.liveError='';if(!S.agents.length)cacheShowLive();if(S.tab==='live'&&!S.chat)render();
- try{const r=await remote('sessions');if(epoch!==S.epoch)return;
+ try{const r=await remote('sessions');if(epoch!==S.epoch)return;if(typeof chNoteStatus==='function')chNoteStatus(r.ch);
   // Herdr's server down or restarted since the last list (guard.js).
   if(typeof guardSessions==='function')guardSessions(r);
   // No Herdr on this computer (bridge flag): no sessions, no agents, no error; tmux.js shows tmux only.
@@ -365,14 +367,14 @@ async function loadLive(){
   S.liveLoading='agents';if(S.tab==='live'&&!S.chat&&!S.agents.length)render();
   // Herdr's plain terminals come along while 会话 is on screen (hpanes.js), no extra round trip.
   const dev=S.device?.id||'',session=S.session,panes=typeof hpWant==='function'&&hpWant();
-  const a=await remote('agents',{session:S.session,...(panes?{panes:true}:{})});if(epoch!==S.epoch)return;S.agents=a.agents;S.historyAt=Date.now();if(panes)hpTake(a.panes,dev,session);S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();glanceRefresh(true);loadNative(true);if(S.pendingPane){S.liveLoading=false;openPending();return;}}
+  const a=await remote('agents',{session:S.session,...(panes?{panes:true}:{})});if(epoch!==S.epoch)return;if(typeof chNoteStatus==='function')chNoteStatus(a.ch);S.agents=a.agents;S.historyAt=Date.now();if(panes)hpTake(a.panes,dev,session);S.liveAt=Date.now();noteStatus(S.agents);syncWatch();cacheLive();glanceRefresh(true);loadNative(true);if(S.pendingPane){S.liveLoading=false;openPending();return;}}
  catch(e){if(epoch===S.epoch)S.liveError=e.message||String(e);}
  finally{if(epoch===S.epoch){S.liveLoading=false;if(S.tab==='live'&&!S.chat)render();}}}
 // Lightweight status refresh: Herdr state only, keeps resolved history refs.
 async function refreshStatus(){
  if(!S.device||S.demo||S.statusBusy||!S.session||!S.statusSupported||S.liveLoading)return;S.statusBusy=true;
  const dev=S.device.id,session=S.session,panes=typeof hpWant==='function'&&hpWant();
- try{const r=await remote('status',{session:S.session,...(panes?{panes:true}:{})});const paneNews=panes&&hpTake(r.panes,dev,session);const known=new Map(S.agents.map(a=>[a.pane_id,a]));let changed=false,stateChanged=false,paintChanged=false;
+ try{const r=await remote('status',{session:S.session,...(panes?{panes:true}:{})});if(typeof chNoteStatus==='function')chNoteStatus(r.ch);const paneNews=panes&&hpTake(r.panes,dev,session);const known=new Map(S.agents.map(a=>[a.pane_id,a]));let changed=false,stateChanged=false,paintChanged=false;
   const next=r.agents.map(a=>{const old=known.get(a.pane_id);if(!old||old.identity!==a.identity){stateChanged=true;return a;}
    const merged={...old,...a,history_ref:old.history_ref,picker:a.picker};
    // Moving between 等你确认 / 执行中 / 空闲 relocates the row and rebuilds the list; a status or
@@ -847,6 +849,7 @@ function pocketBack(){
  if(overlay.childElementCount){const panel=overlay.querySelector('.sheet,.ie');if(panel?.onBack&&panel.onBack())return;if(panel?.keepOpen&&panel.keepOpen()){toast('填的内容还没保存；不要了就点右上角 ×');return;}closeSheet();return;}
  if(T.view){leaveTerminal();render();return;}
  if(typeof FX!=='undefined'&&FX.view&&!S.chat){filesBack();return;}
+ if(typeof CH!=='undefined'&&CH.view&&!S.chat&&typeof chConsoleBack==='function'){chConsoleBack();return;}
  if(S.chatStack.length){const prev=S.chatStack.pop();S.chat=prev;S.chatMode=prev.mode||'conversation';S.messages=prev.savedMessages||[];S.children=prev.savedChildren||[];S.before=prev.savedBefore||0;S.more=!!prev.savedMore;S.stick=prev.savedStick!==false;S.unseen=0;S.epoch++;renderChat();if(!S.stick)document.getElementById('chat-scroll').scrollTop=prev.savedScroll||0;if(prev.record&&!S.messages.length)fetchHistory(false,true);return;}
  if(S.chat){S.chat=null;S.epoch++;render();return;}
  if(S.tab!=='live'&&S.device)setTab('live');else if(S.tab!=='devices')setTab('devices');else toast('设备和保存的密码都在，可以直接关闭应用');}
@@ -863,7 +866,7 @@ document.addEventListener('focusin',()=>setTimeout(sheetFieldClear,60));
 document.addEventListener('input',e=>{if(e.target?.closest?.('.sheet'))sheetFieldClear();});
 addEventListener('resize',()=>{setTimeout(sheetFieldClear,80);setTimeout(sheetFieldClear,350);});
 addEventListener('resize',()=>{const c=document.getElementById('confirm-screen');if(c)c.scrollTop=c.scrollHeight;});
-window.setForeground=v=>{S.active=v;if(v){netForeground();refreshStatus();loadNative(true);if(S.chat?.record&&!S.paused)fetchHistory();else if(S.tab==='live'&&Date.now()-(S.historyAt||0)>10000)recheckHistory();}};
+window.setForeground=v=>{S.active=v;if(v){netForeground();refreshStatus();loadNative(true);if(S.chat?.record&&!S.paused)fetchHistory();else if(S.tab==='live'&&Date.now()-(S.historyAt||0)>10000)recheckHistory();if(typeof chPoll==='function'&&typeof CH!=='undefined'&&CH.view)chPoll(true);}};
 // Busy agents refresh faster; nothing polls in the background or in demo mode.
 // A ch pane's history is read over SSH on the other computer (~1 s a read), so it is polled
 // half as often: every 5 s while the agent works, every 10 s when idle. Reads never overlap.

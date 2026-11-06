@@ -102,6 +102,7 @@ function settingsPage(main){
  if(S.alerts!==false&&p.notifications===false){privacy.append(el('p','set-note error','系统通知被关掉了，后台提醒弹不出来。'));const go=btn('打开系统通知','secondary small',()=>rpc('openNotificationSettings').catch(error));go.classList.add('set-action');privacy.append(go);}
  privacy.append(toggle('防截图','打开后不能截图、录屏，最近任务里也看不到画面',!!p.secureScreen,async on=>{const r=await settingsSet('secureScreen',on);if(r)toast(on?'已禁止截图':'现在可以截图了');return !!r;}));
  if(S.device&&!S.demo)conn.append(linkRow('模型 · CC Switch','Claude / Codex',()=>ccswitchOpen()));
+ if(S.device&&!S.demo&&typeof chConsoleOpen==='function'){const n=typeof chPendingCount==='function'?chPendingCount():0;conn.append(linkRow('ch 审批',n?n+' 条待审批':'端口、暂停、常开规则',()=>chConsoleOpen('approvals'),'lock'));}
 
  const store=group(right,'缓存');
  const info=el('div','set-row');info.append(el('span','set-label','对话缓存'));const size=el('span','set-value',SET.cache?bytesText(SET.cache.bytes||0)+' · '+(SET.cache.entries||0)+' 项':'读取中…');size.id='cache-size';info.append(size);store.append(info);
