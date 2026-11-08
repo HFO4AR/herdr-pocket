@@ -24,6 +24,7 @@ async function live(page){
   const now=Date.now()/1000;
   window.fx={calls:[],created:null,createError:null,newAgent:null,newVisible:true,
    info:{kinds:[{kind:'codex',found:true},{kind:'claude',found:true},{kind:'ch',found:true}],home:'/home/me',
+    ch_hosts:[{name:'remote',target:'patrick@100.122.217.17',default:true},{name:'patrick-ss',target:'patrick-ss@100.122.217.17'},{name:'zhenyu',target:'zhenyu@100.122.217.17'}],
     workspaces:[{workspace_id:'w1',label:'stm32_host',focused:true,dirs:[{path:'/home/me/IterxAI/stm32_host',agents:7,panes:9},{path:'/mnt/E/project/ch-cli',agents:3,panes:3}]},
      {workspace_id:'w3',label:'dmimu_host_app',dirs:[{path:'/mnt/E/project/dmimu_host_app',agents:0,panes:2}]},{workspace_id:'w4',label:'~',dirs:[{path:'/home/me',agents:0,panes:2}]}],
     dirs:[{path:'/home/me/IterxAI/stm32_host',source:'pane',agents:7,workspace_id:'w1'},{path:'/mnt/E/project/ch-cli',source:'pane',agents:3,workspace_id:'w1'},
@@ -71,6 +72,7 @@ const newAgent=(status,extra={})=>({pane_id:'w1:p9',identity:'id-new',agent:'cla
  assert.equal(await sheet.getByRole('radio',{name:'Codex',exact:true}).getAttribute('aria-checked'),'true');
  assert.equal(await sheet.getByRole('radio',{name:/^stm32_host\s?~\/IterxAI/}).getAttribute('aria-checked'),'true');
  assert.equal(await sheet.getByRole('radio',{name:'stm32_host',exact:true}).getAttribute('aria-checked'),'true');
+ assert.equal(await sheet.locator('.new-hosts').evaluate(n=>n.classList.contains('hidden')),true,'ch accounts stay out of the way for local agents');
  await sheet.getByText('在「stm32_host」里加一个标签页，电脑上的画面不会被切走。',{exact:true}).waitFor();
  // Only four directories until asked; history directories say when they were used.
  assert.equal(await sheet.locator('.new-dir').count(),5);
@@ -78,6 +80,10 @@ const newAgent=(status,extra={})=>({pane_id:'w1:p9',identity:'id-new',agent:'cla
  await sheet.getByText('~/notes · 3 天前用过',{exact:true}).waitFor();
  await page.screenshot({path:path.join(folder,'new-sheet-390.png')});
  await sheet.getByRole('radio',{name:'Claude · ch',exact:true}).click();
+ await sheet.getByRole('radio',{name:'ch 账号 remote，默认',exact:true}).waitFor();
+ assert.equal(await sheet.getByRole('radio',{name:'ch 账号 remote，默认',exact:true}).getAttribute('aria-checked'),'true','ch default account preselected');
+ await sheet.getByRole('radio',{name:'ch 账号 patrick-ss',exact:true}).click();
+ assert.equal(await sheet.getByRole('radio',{name:'ch 账号 patrick-ss',exact:true}).getAttribute('aria-checked'),'true');
  await sheet.getByRole('radio',{name:/^dmimu_host_app\s?\//}).click();
  assert.equal(await sheet.getByRole('radio',{name:'dmimu_host_app',exact:true}).getAttribute('aria-checked'),'true','workspace follows the directory');
  await sheet.getByRole('radio',{name:/^ch-cli/}).click();
@@ -92,7 +98,7 @@ const newAgent=(status,extra={})=>({pane_id:'w1:p9',identity:'id-new',agent:'cla
  await sheet.getByRole('button',{name:'开始新建',exact:true}).click();
  await page.getByRole('button',{name:'返回列表',exact:true}).waitFor();
  const [req]=await calls(page,'create');
- assert.deepEqual({...req,id:undefined},{session:'default',id:undefined,kind:'ch',cwd:'/mnt/E/project/ch-cli',workspace:'w1'});
+ assert.deepEqual({...req,id:undefined},{session:'default',id:undefined,kind:'ch',cwd:'/mnt/E/project/ch-cli',workspace:'w1',ch_host:'patrick-ss'});
  assert.match(req.id,/^[a-f0-9-]{36}$/);
  await page.waitForFunction(()=>fx.calls.some(c=>c.op==='prompt'));
  const prompts=await calls(page,'prompt');

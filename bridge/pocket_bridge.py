@@ -5219,7 +5219,7 @@ CREATE_KINDS = ("codex", "claude", "ch")
 # because a `cursor` on PATH is usually the editor, not the agent.
 CREATE_MORE = ("opencode", "gemini", "pi", "devin", "agy", "cline", "omp", "mastracode", "copilot", "kimi", "kiro",
                "droid", "amp", "grok", "hermes", "kilo", "qodercli", "qwen", "maki")
-CREATE_KEYS = {"v", "op", "session", "id", "kind", "cwd", "workspace", "resume"}
+CREATE_KEYS = {"v", "op", "session", "id", "kind", "cwd", "workspace", "resume", "ch_host"}
 CREATE_BUDGET = 26.0   # seconds for one create at most; the app waits 35 s for any request
 # A create answers within a few seconds: the tab, then the start handed to Herdr. The phone shows
 # 「正在启动」 and polls until the agent is there, instead of a spinner for the whole startup.
@@ -5312,7 +5312,8 @@ def create_info(prefix):
         dirs.append({"path": d["path"], "source": "history", "modified": d["modified"]})
     kinds = [{"kind": k, "found": bool(find_executable(k))} for k in CREATE_KINDS]
     more = [{"kind": k, "found": True} for k in CREATE_MORE if find_executable(k)]
-    return {"kinds": kinds, "more": more, "workspaces": workspaces, "dirs": dirs[:24], "home": str(Path.home())}
+    return {"kinds": kinds, "more": more, "workspaces": workspaces, "dirs": dirs[:24], "home": str(Path.home()),
+            "ch_hosts": ch_host_list()}
 
 
 def create_dir(raw):
@@ -5365,6 +5366,31 @@ def ch_hosts():
         with (folder / "ch" / "config.toml").open("rb") as stream: text = stream.read(CH_CONFIG_LIMIT).decode("utf-8", "replace")
     except OSError: return None
     return {m.group(1) or m.group(2) for m in CH_HOST_ROW.finditer(text)}
+
+
+def ch_host_list():
+    """The hosts the 新建 sheet offers: [{name, target, default}]. `ch hosts` is read (it is the
+    CLI's own list, including display targets and the default marker); when it cannot run, the
+    config table names are used without targets. Names still come from the checked CH_HOST form."""
+    rows = []
+    binary = shutil.which("ch") or str(Path.home() / ".local/bin/ch")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
+    try:
+        result = subprocess.run([binary, "hosts"], capture_output=True, text=True, timeout=5, env=env)
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                name, _, rest = line.partition("\t")
+                name = name.strip()
+                if not CH_HOST.fullmatch(name): continue
+                target = rest.strip()
+                default = bool(re.search(r"\s*\(default\)\s*$", target))
+                target = re.sub(r"\s*\(default\)\s*$", "", target)[:200]
+                rows.append({"name": name, "target": target, "default": default})
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if not rows:
+        rows = [{"name": name, "target": "", "default": False} for name in sorted(ch_hosts() or ())]
+    return rows
 
 
 def resume_spec(raw, kind):
@@ -5834,6 +5860,16 @@ def create_checked(request, prefix, state_dir):
     if not isinstance(place, str) or not (place in ("new", "auto") or re.fullmatch(r"w[A-Za-z0-9]{1,16}", place)):
         raise BridgeError("没创建：位置不对")
     spec = resume_spec(request["resume"], kind) if request.get("resume") is not None else None
+    # A new ch conversation may name one of ch's own hosts; a resumed one already has its host.
+    ch_host = request.get("ch_host")
+    if ch_host is not None:
+        if kind != "ch": raise BridgeError("没创建：只有 ch 会话需要选择账号")
+        if spec: raise BridgeError("没创建：继续已有对话时，账号由那段记录决定")
+        if not isinstance(ch_host, str) or not CH_HOST.fullmatch(ch_host):
+            raise BridgeError("没创建：ch 账号名不对")
+        hosts = ch_hosts()
+        if hosts is None: raise BridgeError("没创建：读不到 ch 的主机配置（~/.config/ch/config.toml）")
+        if ch_host not in hosts: raise BridgeError("没创建：ch 里没有叫 " + ch_host + " 的主机")
     digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     # A request already handled answers from its receipt, before any check against today's state
     # (a resumed conversation is running by now, which the checks below would refuse).
@@ -5891,7 +5927,10 @@ def create_checked(request, prefix, state_dir):
             receipt_save(db, req_id, result)
             return result
         name = "pocket-" + req_id[:8]
-        if kind == "ch": outcome = start_ch(prefix, pane_id, deadline, resume_text(spec) if spec else CH_NEW)
+        if kind == "ch":
+            text = resume_text(spec) if spec else (" ".join(shlex.quote(w) for w in ("ch", "--host", ch_host, "new")) if ch_host else CH_NEW)
+            if ch_host and not spec: result["ch_host"] = ch_host
+            outcome = start_ch(prefix, pane_id, deadline, text)
         else: outcome = start_in_pane(prefix, pane_id, kind, name, deadline, spec["args"] if spec else ())
         if outcome["state"] != "ready":
             # One last look: what is actually in the pane now.

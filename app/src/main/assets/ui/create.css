@@ -16,6 +16,11 @@
 .new-kind.on{border-color:var(--accent-raw);background:var(--soft);box-shadow:inset 0 0 0 1px var(--accent-raw)}
 .new-kind.on strong{color:var(--accent)}
 
+.new-hosts{border:1px solid var(--line);border-radius:var(--radius-card);padding:4px}
+.new-host{min-height:54px}
+.new-host.on{background:var(--soft)}
+.new-host.on .menu-label{color:var(--accent);font-weight:600}
+.new-host small{max-width:100%}
 .new-dirs{border:1px solid var(--line);border-radius:var(--radius-card);padding:4px}
 .new-dir{min-height:54px}
 .new-dir>svg:last-child{color:var(--accent);width:20px;height:20px}

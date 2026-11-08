@@ -43,7 +43,9 @@ function createForm(body,info){
  const kinds=info.kinds.filter(k=>k.found||k.kind!=='ch').map(k=>k.kind).concat((info.more||[]).filter(k=>k&&k.found&&kindSafe(k.kind)&&!NEW_KINDS[k.kind]).map(k=>k.kind));
  const found=k=>info.kinds.concat(info.more||[]).find(x=>x.kind===k)?.found;
  const last=NEW.lastKind||newPref('kind'),recent=(NEW.recentFor===(S.device?.id||'')&&NEW.recent)||[];
- const f=NEW.form={kind:kinds.includes(last)?last:kinds[0]||'codex',dir:'',custom:false,place:'new',placeTouched:false};
+ const hosts=(info.ch_hosts||[]).filter(h=>h&&typeof h.name==='string'),lastHost=newPref('chHost');
+ const f=NEW.form={kind:kinds.includes(last)?last:kinds[0]||'codex',dir:'',custom:false,place:'new',placeTouched:false,
+  chHost:hosts.some(h=>h.name===lastHost)?lastHost:(hosts.find(h=>h.default)?.name||hosts[0]?.name||'')};
  // Recently used from here first (marked), then what the computer reports (busiest first).
  const known=new Map((info.dirs||[]).map(d=>[d.path,d]));const dirs=[];
  for(const r of recent){dirs.push({...(known.get(r.path)||{path:r.path,source:'recent'}),recentAt:r.at});known.delete(r.path);}
@@ -54,9 +56,24 @@ function createForm(body,info){
  body.append(el('div','section-label','用哪个 Agent'));
  const kindRow=el('div','new-kinds');kindRow.setAttribute('role','radiogroup');kindRow.setAttribute('aria-label','Agent 类型');body.append(kindRow);
  function drawKinds(){kindRow.replaceChildren();for(const k of kinds){const [label,av,detail]=newKind(k);
-  const b=btn('','new-kind'+(f.kind===k?' on':''),()=>{f.kind=k;drawKinds();},null);b.setAttribute('role','radio');b.setAttribute('aria-checked',String(f.kind===k));b.setAttribute('aria-label',label);
+  const b=btn('','new-kind'+(f.kind===k?' on':''),()=>{f.kind=k;drawKinds();drawHosts();},null);b.setAttribute('role','radio');b.setAttribute('aria-checked',String(f.kind===k));b.setAttribute('aria-label',label);
   const t=el('span','new-kind-text');t.append(el('strong','',label),el('small','',found(k)?detail:'没找到命令'));b.append(avatar(av),t);kindRow.append(b);}}
  drawKinds();
+
+ // ch account: only for Claude · ch, and only when ch's config lists hosts.
+ const hostLabel=el('div','section-label','用哪个 ch 账号');
+ const hostList=el('div','new-hosts');hostList.setAttribute('role','radiogroup');hostList.setAttribute('aria-label','ch 账号');
+ body.append(hostLabel,hostList);
+ function drawHosts(){
+  const on=f.kind==='ch';hostLabel.classList.toggle('hidden',!on);hostList.classList.toggle('hidden',!on);
+  if(!on)return;hostList.replaceChildren();
+  if(!hosts.length){hostList.append(el('p','fine new-note','ch 没有配置主机；会用 ch 的默认账号。'));return;}
+  for(const h of hosts){const sel=f.chHost===h.name;
+   const b=btn('','menu-item new-host'+(sel?' on':''),()=>{f.chHost=h.name;drawHosts();},'device');
+   b.setAttribute('role','radio');b.setAttribute('aria-checked',String(sel));b.setAttribute('aria-label','ch 账号 '+h.name+(h.default?'，默认':''));
+   const t=el('span','grow');t.append(el('span','menu-label',h.name+(h.default?' · 默认':'')));
+   t.append(el('small','truncate',h.target||'ch 配置里的主机'));b.append(t);if(sel)b.append(icon('check'));hostList.append(b);}}
+ drawHosts();
 
  // Directory
  body.append(el('div','section-label','在哪个目录'));
@@ -123,12 +140,13 @@ async function createSubmit(text,go,status){
  // The bridge answers in a few seconds (tab open, start handed to Herdr); the rest shows on the list.
  newStatus(status,'busy','正在开标签页，把 '+label+' 叫起来…');
  const req={session:S.session,id:uuid(),kind:f.kind,cwd:f.dir,workspace:f.place};
+ if(f.kind==='ch'&&f.chHost)req.ch_host=f.chHost;
  // Named for the 正在启动 / 没起来 sheets (the pane id means nothing to a person).
  const ws=f.place==='new'?null:(NEW.info?.workspaces||[]).find(w=>w.workspace_id===f.place),placeName=ws?ws.label||'工作区 '+ws.workspace_id.slice(1):'';
  try{
   const r=await remote('create',req);NEW.busy=false;
   if(!r||!r.created){newStatus(status,'error','没创建：Herdr 没接受，可以改一下再试');restoreGo(go);return;}
-  newPref('kind',f.kind);newRecentSave(f.dir.replace(/\/+$/,''),f.kind);NEW.info=null;
+  newPref('kind',f.kind);if(f.kind==='ch'&&f.chHost)newPref('chHost',f.chHost);newRecentSave(f.dir.replace(/\/+$/,''),f.kind);NEW.info=null;
   if(status.isConnected)closeSheet();createDone({...r,place_label:placeName},text.trim()?text:'',label);}
  catch(e){NEW.busy=false;const m=e.message||String(e);
   if(/^没创建/.test(m)){if(status.isConnected){newStatus(status,'error',m);restoreGo(go);}else toast(m);return;}

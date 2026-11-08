@@ -26,6 +26,9 @@ class CreateTests(unittest.TestCase):
             p = patch.object(target, value, return_value=self.home); p.start(); self.addCleanup(p.stop)
         p = patch.object(bridge, "call", side_effect=self.call); p.start(); self.addCleanup(p.stop)
         p = patch.object(bridge, "find_executable", side_effect=lambda name: "/usr/bin/" + name); p.start(); self.addCleanup(p.stop)
+        p = patch.object(bridge, "ch_host_list", return_value=[
+            {"name": "remote", "target": "patrick@example", "default": True},
+            {"name": "patrick-ss", "target": "patrick-ss@example", "default": False}]); p.start(); self.addCleanup(p.stop)
         p = patch.object(bridge, "transcript_catalog", return_value=[{"cwd": str(self.outside / "missing"), "modified": 5},
                                                                       {"cwd": "/tmp", "modified": 4}]); p.start(); self.addCleanup(p.stop)
         p = patch.object(bridge.time, "sleep", lambda s: None); p.start(); self.addCleanup(p.stop)
@@ -69,6 +72,8 @@ class CreateTests(unittest.TestCase):
         self.assertEqual(paths[0], str(self.project))
         self.assertIn(str(self.outside), paths)
         self.assertNotIn("/tmp", paths)  # temp and missing history dirs are not offered
+        self.assertEqual([h["name"] for h in info["ch_hosts"]], ["remote", "patrick-ss"])
+        self.assertTrue(info["ch_hosts"][0]["default"])
         self.assertEqual(self.mutations(), [])
 
     def test_codex_new_tab_and_start_with_generated_name(self):
@@ -110,6 +115,24 @@ class CreateTests(unittest.TestCase):
         self.assertEqual(self.mutations()[1], ["pane", "run", "w1:p9", "ch new"])
         self.assertEqual(len(self.mutations()), 2)
         self.assertEqual((r["state"], r["detected"]), ("ready", True))
+
+    def test_ch_new_can_name_one_of_chs_hosts(self):
+        self.pane_after = {"pane_id": "w1:p9", "agent": "claude", "agent_status": "idle"}
+        with patch.object(bridge, "ch_hosts", return_value={"remote", "patrick-ss"}):
+            r = bridge.handle(self.req(kind="ch", ch_host="patrick-ss"), self.state)
+        self.assertEqual(self.mutations()[1], ["pane", "run", "w1:p9", "ch --host patrick-ss new"])
+        self.assertEqual(r["ch_host"], "patrick-ss")
+
+    def test_ch_host_is_checked_before_anything_is_created(self):
+        with patch.object(bridge, "ch_hosts", return_value={"remote", "patrick-ss"}):
+            with self.assertRaisesRegex(bridge.BridgeError, "只有 ch"):
+                bridge.handle(self.req(kind="codex", ch_host="remote"), self.state)
+            with self.assertRaisesRegex(bridge.BridgeError, "没有叫 nope"):
+                bridge.handle(self.req(kind="ch", ch_host="nope"), self.state)
+            with self.assertRaisesRegex(bridge.BridgeError, "账号由那段记录决定"):
+                bridge.handle(self.req(kind="ch", ch_host="remote",
+                                       resume={"id": "12345678-1234-4234-8234-123456789012", "host": "remote"}), self.state)
+        self.assertEqual(self.mutations(), [])
 
     def test_ch_not_detected_in_time_reports_starting(self):
         self.pane_after = {"pane_id": "w1:p9", "agent": None}
