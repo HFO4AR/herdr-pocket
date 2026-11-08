@@ -80,6 +80,8 @@ class LocalCache(context: Context) {
     companion object {
         private const val ALIAS = "pocket.cache.v1"
         const val MAX_ENTRY = 1_500_000
-        private const val MAX_TOTAL = 32L * 1024 * 1024
+        // More chats than the old 32 MB held: one entry is now written well under MAX_ENTRY (the UI
+        // trims by UTF-8 bytes), so this is room for roughly 150+ conversations instead of a few dozen.
+        private const val MAX_TOTAL = 64L * 1024 * 1024
     }
 }

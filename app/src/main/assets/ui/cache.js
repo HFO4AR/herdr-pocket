@@ -3,17 +3,32 @@
 // Kept in memory and persisted per device by the native layer (LocalCache.kt, encrypted).
 // Cached content is display only: nothing is sent from it, and demo mode never writes.
 const CACHE={mem:new Map(),timers:new Map()};
-const CACHE_CHAT_MESSAGES=80,CACHE_CHAT_CHARS=500000;
+// Chat entries are trimmed by UTF-8 bytes, the unit LocalCache caps (MAX_ENTRY), not by JavaScript
+// characters: Chinese is three bytes per character, so a 500k-character tail could pass the old
+// count and still be refused by the native store, silently leaving that chat uncached.
+const CACHE_UTF8=new TextEncoder();
+const CACHE_CHAT_MESSAGES=80,CACHE_CHAT_BYTES=400000,CACHE_CHAT_CHILDREN=60;
 function cacheDevice(){return S.demo?'':(S.device?.id||S.connecting?.id||'');}
 async function cacheGet(key,dev=cacheDevice()){
  if(!dev||S.demo)return null;const mk=dev+'\n'+key;if(CACHE.mem.has(mk))return CACHE.mem.get(mk);
  try{const r=await rpc('cacheGet',{key,device:dev});if(CACHE.mem.has(mk))return CACHE.mem.get(mk);if(r?.value)CACHE.mem.set(mk,r.value);return r?.value||null;}catch(_){return null;}}
-// Writes are debounced: a chat that polls every few seconds is stored once it settles.
-function cachePut(key,value,dev=cacheDevice()){
- if(!dev||S.demo||!value)return;const mk=dev+'\n'+key;CACHE.mem.set(mk,value);clearTimeout(CACHE.timers.get(mk));
- CACHE.timers.set(mk,setTimeout(()=>{CACHE.timers.delete(mk);rpc('cachePut',{key,value,device:dev}).catch(()=>{});},1200));}
+// Writes are debounced: a chat that polls every few seconds is stored once it settles. `now` skips
+// the wait for something worth persisting at once (the first read of a chat).
+function cachePut(key,value,dev=cacheDevice(),now=false){
+ if(!dev||S.demo||!value)return;const mk=dev+'\n'+key;CACHE.mem.set(mk,value);clearTimeout(CACHE.timers.get(mk));CACHE.timers.delete(mk);
+ const write=()=>rpc('cachePut',{key,value,device:dev}).catch(()=>{});
+ if(now){write();return;}
+ CACHE.timers.set(mk,setTimeout(()=>{CACHE.timers.delete(mk);write();},1200));}
+// Left to the background or closed: the page's timers stop with it, so write what is still pending.
+function cacheFlush(){
+ CACHE.timers.forEach((timer,mk)=>{clearTimeout(timer);const i=mk.indexOf('\n');if(i<1)return;
+  const dev=mk.slice(0,i),key=mk.slice(i+1),value=CACHE.mem.get(mk);if(value!==undefined)rpc('cachePut',{key,value,device:dev}).catch(()=>{});});
+ CACHE.timers.clear();}
+if(typeof window!=='undefined'){
+ window.addEventListener('pagehide',cacheFlush);
+ document.addEventListener('visibilitychange',()=>{if(document.hidden)cacheFlush();});}
 // Settings → 清除缓存 wipes the native store, then calls this to drop memory and pending writes.
-function cacheForget(){CACHE.timers.forEach(t=>clearTimeout(t));CACHE.timers.clear();CACHE.mem.clear();S.fromCache=false;if(S.chat)S.chat.cacheSig='';}
+function cacheForget(){CACHE.timers.forEach(t=>clearTimeout(t));CACHE.timers.clear();CACHE.mem.clear();S.fromCache=false;if(S.chat){S.chat.cacheSig='';S.chat.cacheStored=false;}}
 function cacheAge(at){if(!at)return '';const a=ago(Date.now()-at);return a==='刚刚'?a:a+'前';}
 
 // ─── Session list ───────────────────────────────────────────────────────────
@@ -59,12 +74,24 @@ async function cacheFill(record,epoch){
  if(v?.messages?.length){S.messages=v.messages;S.children=v.children||[];S.more=false;S.chat.cached=v.at||Date.now();S.stick=true;}
  if(!S.device){S.chat.waiting=true;S.more=false;return true;}
  return false;}
+// Keep the newest rows that fit the native entry cap, dropping the oldest quarter at a time. The
+// children (sub-agent chips) are counted too, so a chat with many children cannot push the entry
+// past the native limit on its own.
+function cacheChatValue(messages,children){
+ let keep=messages.slice(-CACHE_CHAT_MESSAGES),kids=(children||[]).slice(-CACHE_CHAT_CHILDREN);
+ const size=()=>CACHE_UTF8.encode(JSON.stringify({messages:keep,children:kids})).length;
+ while(kids.length>1&&size()>CACHE_CHAT_BYTES)kids=kids.slice(Math.ceil(kids.length/4));
+ while(keep.length>1&&size()>CACHE_CHAT_BYTES)keep=keep.slice(Math.ceil(keep.length/4));
+ if(size()>CACHE_CHAT_BYTES)kids=[];
+ return {messages:keep,children:kids};}
 function cacheChat(){
  const c=S.chat;if(!c?.record||!S.messages.length||S.demo)return;
+ const dev=cacheDevice();if(!dev)return;
  const sig=S.messages.length+':'+(S.messages.at(-1)?.id||'')+':'+(S.messages.at(-1)?.text?.length||0)+':'+S.children.length;if(c.cacheSig===sig)return;c.cacheSig=sig;
- let messages=S.messages.slice(-CACHE_CHAT_MESSAGES);
- while(messages.length>1&&JSON.stringify(messages).length>CACHE_CHAT_CHARS)messages=messages.slice(Math.ceil(messages.length/4));
- cachePut(cacheChatKey(c.record),{messages,children:S.children,at:Date.now()});}
+ // The first write after opening a chat goes out at once: a glance at an old conversation that
+ // is left (or the app is killed) before the debounce used to leave nothing behind.
+ const first=!c.cacheStored;c.cacheStored=true;
+ cachePut(cacheChatKey(c.record),{...cacheChatValue(S.messages,S.children),at:Date.now()},dev,first);}
 function cacheChatNote(list){
  const c=S.chat;if(!c?.cached)return;
  const note=el('div','fine center cache-note');

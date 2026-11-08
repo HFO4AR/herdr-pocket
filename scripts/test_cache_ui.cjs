@@ -81,6 +81,23 @@ await page.waitForFunction(()=>fx.store.get('fx\nchat:r1:')?.messages?.length===
 await page.waitForFunction(()=>fx.store.get('fx\nlive')?.at>Date.now()-60000,null,{timeout:5000});
 await shot('chat-fresh');
 
+// 3b. A Chinese-heavy tail is trimmed by UTF-8 bytes — the native store's unit — not by JavaScript
+// characters: it must stay well under LocalCache.MAX_ENTRY, keeping the newest rows.
+const trimmed=await page.evaluate(()=>{
+ const text='这是很久以前的一段很长的中文回答。'.repeat(1200);
+ const messages=Array.from({length:80},(_,i)=>({id:(i+1)+':0',kind:i%2?'assistant':'user',text,title:'',call_id:'',timestamp:''}));
+ const v=cacheChatValue(messages,Array.from({length:90},(_,i)=>({id:'c'+i,title:'kid '+i})));
+ return {count:v.messages.length,kids:v.children.length,last:v.messages.at(-1).id,
+  bytes:new TextEncoder().encode(JSON.stringify({messages:v.messages,children:v.children})).length};
+});
+assert(trimmed.bytes<=400000,'chat cache entry stays under the byte budget (got '+trimmed.bytes+')');
+assert(trimmed.count<80&&trimmed.count>=1,'oldest rows dropped, newest kept');
+assert.equal(trimmed.last,'80:0','the newest row survives trimming');
+assert(trimmed.kids<=60,'children are capped too');
+// 3c. Pending debounced writes go out when the page is hidden (the app going to the background).
+await page.evaluate(()=>{cachePut('flush-probe',{v:1},'fx');cacheFlush();});
+await page.waitForFunction(()=>!!fx.store.get('fx\nflush-probe'),null,{timeout:2000});
+
 // 4. Reopening the same chat later paints from memory before the read returns.
 await page.getByRole('button',{name:'返回列表',exact:true}).click();
 assert.equal(await page.getByText(/正在连接/).count(),0);

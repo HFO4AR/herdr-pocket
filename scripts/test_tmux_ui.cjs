@@ -155,9 +155,12 @@ await page.waitForFunction(()=>document.querySelectorAll('.tmux-row').length===2
 await page.evaluate(()=>{fx.tmux=[];});await page.evaluate(()=>loadLive());
 await page.waitForFunction(()=>!document.querySelector('.tmux-label'));
 await page.evaluate(()=>{fx.tmuxKnown=false;fx.tmux=[{pane_id:'%9',identity:'x'}];});
+// An older bridge answers Unknown once; a background poll may be the one to ask. Consume that
+// answer first, then prove that neither of the next two loads asks again.
+await page.evaluate(()=>loadLive());await page.waitForTimeout(400);
 const asked=(await calls('tmux')).length;
 await page.evaluate(()=>loadLive());await page.waitForTimeout(400);await page.evaluate(()=>loadLive());await page.waitForTimeout(400);
-assert.equal((await calls('tmux')).length,asked+1,'an old bridge is not asked again');
+assert.equal((await calls('tmux')).length,asked,'an old bridge is not asked again');
 assert.equal(await page.locator('.tmux-label').count(),0);
 assert.equal(await page.getByText(/Unknown operation/).count(),0,'no error for an old bridge');
 console.log('PASS: no tmux, no section; an old bridge stays quiet');
