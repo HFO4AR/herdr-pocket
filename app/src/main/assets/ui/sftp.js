@@ -12,7 +12,7 @@
 //    passive image/PDF URLs on https://pocket.invalid/preview/… (PreviewServer.kt). Remote HTML/JS is
 //    only ever shown as text: this file never assigns innerHTML from remote content and never loads
 //    remote scripts.
-const FX={view:null,transfers:[],states:new Map(),want:0,sort:'name',hidden:false,prefs:false,
+const FX={view:null,transfers:[],states:new Map(),want:0,sort:'name',hidden:false,prefs:false,favs:[],favsDev:'',
  pv:null,pcache:new Map(),meters:new Map(),hint:undefined,hintLoaded:'',nav:0,flew:new Set(),lastPoll:0};
 const FX_BIG=200e6;// downloads above this ask first (mobile data, phone storage)
 const FX_MEDIA_MAX=20_000_000;// mirrors Previews.MEDIA_MAX / MediaPreview.CONFIRM_MAX: large previews ask first
@@ -30,6 +30,28 @@ function filesIcons(){if(paths.fUpload)return;Object.assign(paths,{fUpload:'M12 
 // WebView has no DOM storage). Read once per run; a choice made meanwhile wins.
 function filesPrefs(dev){if(!dev||FX.prefs)return;FX.prefs=true;cacheGet('files:prefs',dev).then(v=>{if(!v||FX.prefsSet)return;if(['name','time','size'].includes(v.sort))FX.sort=v.sort;FX.hidden=!!v.hidden;paintFiles();});}
 function filesSavePrefs(){FX.prefsSet=true;const dev=FX.view?.device;if(dev)cachePut('files:prefs',{sort:FX.sort,hidden:FX.hidden},dev);}
+// ─── Favourite folders ──────────────────────────────────────────────────────
+// Kept per computer in the same encrypted cache as the sort choice. Paths are the SFTP listing's
+// own absolute paths; the phone only navigates them through sftpList, never reads or writes by path.
+const FX_FAVS=30;
+function filesFavsLoad(dev){
+ if(!dev||FX.favsDev===dev)return;FX.favsDev=dev;FX.favs=[];
+ cacheGet('files:favs',dev).then(v=>{
+  if(FX.favsDev!==dev)return;
+  FX.favs=Array.isArray(v?.paths)?v.paths.filter(p=>typeof p==='string'&&p.startsWith('/')&&p.length<=4096).filter((p,i,a)=>a.indexOf(p)===i).slice(0,FX_FAVS):[];
+  paintFiles();});
+}
+function filesFavsSave(){const dev=FX.view?.device;if(!dev)return;FX.favsDev=dev;cachePut('files:favs',{paths:FX.favs},dev);}
+function filesFavHas(path){return !!path&&FX.favs.includes(path);}
+function filesFavToggle(path){
+ const p=String(path||'');if(!p||!p.startsWith('/'))return;
+ const i=FX.favs.indexOf(p);
+ if(i>=0){FX.favs.splice(i,1);toast('已取消收藏');}
+ else{FX.favs.unshift(p);FX.favs=FX.favs.slice(0,FX_FAVS);toast('已收藏这个文件夹');}
+ filesFavsSave();paintFiles();
+}
+function fxFavName(p){const home=FX.view?.home||'';if(home&&p===home)return '主目录';const parts=String(p).split('/').filter(Boolean);return parts[parts.length-1]||'/';}
+function fxFavShort(p){const home=FX.view?.home||'';return home&&(p===home||p.startsWith(home+'/'))?'~'+p.slice(home.length):p;}
 function fxReduced(){return document.documentElement.classList.contains('reduce-motion')||matchMedia('(prefers-reduced-motion: reduce)').matches;}
 function fxMotion(node,cls,ms){if(!node||fxReduced())return;node.classList.add(cls);setTimeout(()=>node.classList.remove(cls),ms);}
 
@@ -39,7 +61,7 @@ function filesOpen(opts={}){
  filesIcons();fxClosePreview();
  if(S.demo){toast('演示模式不连电脑，不能传文件');return;}
  const dev=opts.device||S.device;if(!dev){toast('先连上电脑');return;}
- filesPrefs(dev.id);
+ filesPrefs(dev.id);filesFavsLoad(dev.id);
  const backChat=S.chat,backTerminal=(typeof T!=='undefined'&&T.view)?T.view:null;
  if(typeof leaveTerminal==='function')leaveTerminal();closeSheet();S.chat=null;
  FX.view={device:dev.id,name:dev.name||dev.host||'电脑',path:opts.path||'~',back:[],list:null,loading:true,error:'',select:null,epoch:0,backChat,backTerminal,
@@ -108,14 +130,19 @@ function renderFiles(){
  const head=el('header','chat-head files-head');const backLabel=v.backChat?'返回会话':v.backTerminal?'返回终端':'返回';head.append(ib('back',backLabel,()=>filesReturn()),ib('fHome','回到主目录',()=>filesGo('~')));
  const av=el('div','avatar files-av');av.append(icon('folder'));head.append(av);
  const id=el('div','grow chat-id');id.append(el('h2','','文件'),el('small','files-sub',v.name+' · 通过 SSH 传文件'));head.append(id);
- head.append(ib('fUpload','上传到这里',filesUpload),ib('more','文件选项',filesMenu));root.append(head);
+ const fav=ib('star','收藏这个文件夹',()=>filesFavToggle(filesHere()));fav.id='files-fav';
+ head.append(fav,ib('fUpload','上传到这里',filesUpload),ib('more','文件选项',filesMenu));root.append(head);
  const crumbs=el('nav','files-crumbs');crumbs.id='files-crumbs';crumbs.setAttribute('aria-label','当前位置');root.append(crumbs);
  const main=el('main','main files-main');main.id='files-main';const list=el('div','files-list');list.id='files-list';main.append(list);root.append(main);
  pullRefresh(main,()=>filesLoad(filesHere()||v.path));
  const dock=el('div','files-dock');dock.id='files-dock';root.append(dock);
  paintFiles();
  if(v.listScroll&&v.list&&v.listScroll.path===filesHere())main.scrollTop=v.listScroll.top;}
-function paintFiles(){if(!FX.view)return;if(FX.pv){paintPreview();return;}if(!document.getElementById('files-list')){if(!S.chat&&!overlay.querySelector('.sheet')&&!(typeof T!=='undefined'&&T.view))renderFiles();return;}paintCrumbs();paintFileList();paintDock();}
+function paintFiles(){if(!FX.view)return;if(FX.pv){paintPreview();return;}if(!document.getElementById('files-list')){if(!S.chat&&!overlay.querySelector('.sheet')&&!(typeof T!=='undefined'&&T.view))renderFiles();return;}paintFavHead();paintCrumbs();paintFileList();paintDock();}
+function paintFavHead(){
+ const b=document.getElementById('files-fav');if(!b)return;
+ const p=filesHere(),on=filesFavHas(p);b.classList.toggle('fav-on',on);b.disabled=!p;
+ const label=on?'取消收藏这个文件夹':'收藏这个文件夹';b.setAttribute('aria-label',label);b.title=label;}
 
 // "/ › home › yuki › src" with the home folder shown as 主目录; scrolled so the current folder shows.
 function paintCrumbs(){
@@ -163,6 +190,7 @@ function paintFileList(){
   box.append(ic,el('h2','','读不了这个文件夹'),el('p','',v.error));
   const row=el('div','files-error-actions');row.append(btn('重试','primary',()=>filesLoad(filesHere()||v.path)));if(v.list||v.path!=='~')row.append(btn('回主目录','secondary',()=>filesGo('~')));box.append(row);n.append(box);if(!v.list)return;}
  if(!v.list){if(v.loading){const s=el('div','files-loading');s.setAttribute('role','status');s.append(el('span','spinner'),el('span','','正在读取电脑上的文件夹…'));n.append(s);skeleton(n,4);}return;}
+ if(FX.favs.length)n.append(filesFavsRow());
  const all=v.list.entries||[],shown=filesSorted(all.slice()),hidden=all.length-all.filter(e=>FX.hidden||!e.name.startsWith('.')).length;
  const bar=el('div','row files-bar');const facts=el('span','grow files-facts');
  const dirs=shown.filter(fileIsDir).length;facts.append(el('span','',dirs+' 个文件夹 · '+(shown.length-dirs)+' 个文件'));
@@ -182,6 +210,27 @@ function paintFileList(){
  n.append(el('p','fine files-note','用这台电脑的 SSH 连接（SFTP）传文件，不用另开 FTP；点文件可以预览，左右滑动切换，长按多选。能动哪些文件，和这个 SSH 用户在电脑上一样。'));
  v.first=false;v.selectNew=false;}
 
+// The favourite folders of this computer, as compact chips above the listing.
+function filesFavsRow(){
+ const row=el('div','files-favs');row.setAttribute('role','group');row.setAttribute('aria-label','收藏的文件夹');
+ const here=filesHere();
+ for(const p of FX.favs){const on=p===here;
+  const b=btn('','pill files-fav'+(on?' here':''),()=>filesGo(p),'star');
+  b.setAttribute('aria-label','打开收藏文件夹 '+fxFavShort(p));
+  b.append(el('span','files-fav-name',fxFavName(p)));row.append(b);}
+ const manage=btn('管理','link-btn files-fav-manage',filesFavsSheet,'more');manage.setAttribute('aria-label','管理收藏的文件夹');row.append(manage);
+ return row;}
+function filesFavsSheet(){
+ const box=sheet('收藏的文件夹');
+ if(!FX.favs.length){box.append(el('p','fine','还没有收藏。在文件夹里点右上角的星标，或在「文件选项」里收藏当前文件夹。'));return;}
+ const list=el('div','files-fav-manage');
+ for(const p of FX.favs){
+  const item=el('div','files-fav-manage-row');
+  const open=btn('','menu-item files-fav-open',()=>{closeSheet();filesGo(p);},'folder');
+  const t=el('span','grow');t.append(el('span','menu-label',fxFavName(p)),el('small','truncate',fxFavShort(p)));open.append(t);
+  const rm=ib('star','取消收藏 '+fxFavShort(p),()=>{filesFavToggle(p);item.remove();if(!FX.favs.length){closeSheet();filesFavsSheet();}});
+  rm.classList.add('fav-on');item.append(open,rm);list.append(item);}
+ box.append(list);box.append(el('p','fine','收藏按电脑分开，只记在这台手机上。'));}
 function fileRow(e){
  const v=FX.view,dir=fileIsDir(e),sel=v.select,picked=sel?.has(e.name);
  const row=el('div','file-row-wrap'+(picked?' picked':''));row.setAttribute('role','listitem');
@@ -242,7 +291,7 @@ function fxSheet(e){
  const head=el('div','file-detail');const ic=dir?el('span','file-badge'):fileBadge(e.name);if(dir)ic.append(icon('folder'));
  const t=el('div');t.append(el('span','file-detail-name',e.name),el('small','muted',[fxMeta(e),e.mtime?time(e.mtime):'',e.perm||''].filter(Boolean).join(' · ')));head.append(ic,t);box.append(head);
  box.append(el('code','file-path',path));
- if(dir)menuItem(box,'打开',()=>filesGo(path),'folder');
+ if(dir){menuItem(box,'打开',()=>filesGo(path),'folder');menuItem(box,filesFavHas(path)?'取消收藏这个文件夹':'收藏这个文件夹',()=>filesFavToggle(path),'star');}
  else{menuItem(box,'预览',()=>filesPreview(e),'fEye',fxKindLabel(e));}
  if(!dir&&e.type!=='other'&&e.target!=='broken'){
   if(v.list?.downloads)menuItem(box,'下载到手机',()=>fileDownload(e,false),'download','存到手机的「下载/Herdr Pocket」');
@@ -1202,6 +1251,8 @@ function filesHintSeen(dev){
 function filesMenu(){const v=FX.view;const box=sheet('文件选项');
  menuItem(box,'上传到这里',filesUpload,'fUpload','从手机选一个或多个文件');
  menuItem(box,'新建文件夹',filesMkdir,'fFolderPlus');
+ if(filesHere())menuItem(box,filesFavHas(filesHere())?'取消收藏这个文件夹':'收藏这个文件夹',()=>filesFavToggle(filesHere()),'star');
+ if(FX.favs.length)menuItem(box,'收藏的文件夹',filesFavsSheet,'star',FX.favs.length+' 个');
  menuItem(box,'多选',()=>{v.select=new Set();v.selectNew=true;paintFiles();},'fSelect','一次下载或删除好几个；长按文件也行');
  menuItem(box,FX.hidden?'不显示隐藏文件':'显示隐藏文件',()=>{FX.hidden=!FX.hidden;filesSavePrefs();paintFiles();},'fEye','名字以 . 开头的');
  menuItem(box,'排序',filesSortSheet,'fSort',{name:'按名称',time:'按修改时间',size:'按大小'}[FX.sort]);

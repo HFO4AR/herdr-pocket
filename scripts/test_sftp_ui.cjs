@@ -165,6 +165,25 @@ await row('src').locator('.file-row').click();await row('app').waitFor();
 await page.getByRole('button',{name:'回到主目录',exact:true}).click();await row('report.pdf').waitFor();
 assert.equal(await page.locator('.files-crumb.here').innerText(),'主目录');
 console.log('PASS: home button jumps straight to ~');
+
+// ── Favourite folders: star the open folder, jump from the chip, manage and remove ──
+await row('src').locator('.file-row').click();await row('app').waitFor();
+await page.getByRole('button',{name:'收藏这个文件夹',exact:true}).click();
+await page.waitForFunction(()=>fx.calls.some(c=>c.op==='cachePut'&&c.a.key==='files:favs'));
+assert.deepEqual((await calls('cachePut')).filter(c=>c.key==='files:favs').at(-1),{key:'files:favs',value:{paths:['/home/u/src']},device:'A'},'favourites saved per computer');
+assert.equal(await page.getByRole('button',{name:'取消收藏这个文件夹',exact:true}).count(),1,'header star follows the open folder');
+await page.getByRole('button',{name:'回到主目录',exact:true}).click();await row('report.pdf').waitFor();
+await page.getByRole('button',{name:'打开收藏文件夹 ~/src',exact:true}).waitFor();
+await page.getByRole('button',{name:'打开收藏文件夹 ~/src',exact:true}).click();await row('app').waitFor();
+assert.deepEqual(await page.locator('.files-crumb').allTextContents(),['主目录','src'],'the favourite chip navigates into the folder');
+await page.getByRole('button',{name:'管理收藏的文件夹',exact:true}).click();
+const favSheet=page.getByRole('dialog',{name:'收藏的文件夹'});await favSheet.waitFor();
+await favSheet.getByRole('button',{name:'取消收藏 ~/src',exact:true}).click();
+await page.waitForFunction(()=>fx.calls.filter(c=>c.op==='cachePut'&&c.a.key==='files:favs').at(-1)?.a.value.paths.length===0);
+await page.evaluate(()=>closeSheet());
+await page.getByRole('button',{name:'回到主目录',exact:true}).click();await row('report.pdf').waitFor();
+assert.equal(await page.locator('.files-favs').count(),0,'removed favourites disappear from the list');
+console.log('PASS: favourite folders are starred, listed, opened and removed, saved per computer');
 // One tap back to the conversation 文件 was opened from.
 await page.evaluate(()=>{S.chat={record:{id:'r1',thread:'t1',title:'测试会话',provider:'claude',parent:null,cwd:'/home/u',modified:Date.now()/1000},agent:null,title:'测试会话',provider:'claude'};filesOpen();});
 await page.getByRole('heading',{name:'文件',exact:true}).waitFor();

@@ -123,8 +123,8 @@ function pkSection(main){
  if(list.length>1){const all=btn('全部继续','link-btn pk-all',()=>pickupAll(),'refresh');all.setAttribute('aria-label','全部继续 · '+list.length+' 个对话');h.append(all);}
  const card=el('div','card list-card pk-list');list.forEach(e=>card.append(pkRow(e)));
  const note=el('p','fine pk-note','这些对话之前在这台电脑上开着，现在窗格没了（比如 Herdr 重启过）。点一下就能接着聊。');
- const anchor=main.querySelector(':scope>.agent-list,:scope>.tmux-label,:scope>.tmux-list,:scope>.empty,:scope>.loading-card');
- for(const n of [h,card,note])anchor?main.insertBefore(n,anchor):main.append(n);
+ // At the bottom of 会话: recently closed conversations must not push the live agents down.
+ for(const n of [h,card,note])main.append(n);
  return list.length;}
 function pkRow(e){
  const b=btn('','card-button agent-row pk-row',()=>pickupSheet(pkConv(e.kind,e.id,{host:e.host,cwd:e.cwd,title:pkTitle(e),record:e.record})));
@@ -276,7 +276,7 @@ function pkRecordConv(){const c=S.chat;if(!c||c.agent&&!c.stale)return null;retu
 (function(){
  const baseLive=livePage,baseCacheLive=cacheLive,baseTmuxLoad=tmuxLoad,baseHistoryRow=historyRow,baseHistoryActions=historyActions,
   baseChatMenu=chatMenu,baseComposer=renderComposer,baseFollowFooter=followFooter,baseAfterPane=closeAfterPane,baseAfterExit=closeAfterExit;
- // 会话: 最近断开的 under 正在启动, above the agents (and on a computer with only tmux).
+ // 会话: 最近断开的 at the bottom, under the live agents (and on a computer with only tmux).
  livePage=function(main){baseLive(main);if(S.device&&!S.demo)try{pkSection(main);}catch(_){}};
  cacheLive=function(...args){const r=baseCacheLive(...args);if(!S.fromCache)pkNote();return r;};
  tmuxLoad=async function(...args){const r=await baseTmuxLoad(...args);if(tmuxDevice()&&pkTmuxFresh())pkNote();return r;};

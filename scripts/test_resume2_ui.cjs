@@ -189,6 +189,7 @@ let saved;
  assert.ok(!titles.includes('写周报'),'quit in a pane that is still there: not listed');
  assert.ok(titles.includes('stm32_host · ch 5fce5692'),'the ch session is listed by project and short id');
  assert.equal(await page.locator('.pk-label .group-count').textContent(),String(titles.length));
+ assert.equal(await page.evaluate(()=>{const l=document.querySelector('.pk-label'),a=document.querySelector('.agent-list');return !!l&&!!a&&!!(a.compareDocumentPosition(l)&Node.DOCUMENT_POSITION_FOLLOWING);}),true,'最近断开的 sits below the live agent list');
  assert.equal(await page.evaluate(()=>window.pickupCount()),titles.length,'count for other screens (Herdr guardian)');
  assert.ok((await calls(page,'panes')).length>=1,'pane check read');
  assert.equal(await overflow(page),false);

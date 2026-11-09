@@ -28,6 +28,18 @@
 .files-crumb-wait{color:var(--faint);font-size:var(--fs-sm);padding:0 8px}
 .files-main{padding-top:var(--sp-2);position:relative}
 .files-bar{min-height:44px;margin:0 2px 4px}
+/* Favourite folders: compact chips above the listing; the header's star toggles the open folder. */
+.files-favs{display:flex;align-items:center;gap:6px;margin:0 2px 8px;padding:2px;overflow-x:auto;scrollbar-width:none}
+.files-favs::-webkit-scrollbar{display:none}
+.files-fav{flex-shrink:0;max-width:58vw;min-height:38px;padding:0 12px;font-size:var(--fs-sm)}
+.files-fav svg{width:16px;height:16px}
+.files-fav-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.files-fav.here{border-color:var(--accent-raw);background:var(--soft);color:var(--accent);font-weight:600}
+.files-fav.here svg,.icon-btn.fav-on svg,.files-fav .fav-on svg{fill:currentColor}
+.icon-btn.fav-on{color:var(--accent)}
+.files-fav-manage{flex-shrink:0;min-height:38px;padding:0 6px}
+.files-fav-manage-row{display:flex;align-items:center;gap:4px}
+.files-fav-open{flex:1;min-width:0}
 .files-facts{display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--fs-xs);color:var(--muted);white-space:nowrap;overflow:hidden}
 .files-hidden-note{color:var(--faint)}
 .files-sort{flex-shrink:0}
