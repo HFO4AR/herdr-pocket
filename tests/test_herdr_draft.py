@@ -21,6 +21,15 @@ HERDR_CLAUDE = (FIXTURES / "claude_screen.ansi").read_text(encoding="utf-8")
 IDS = ["%d2345678-1234-4234-8234-123456789012" % i for i in range(1, 10)]
 
 
+def queued_inputs(raw):
+    """A real Codex idle screen with its queued follow-up inputs above the composer (live shape,
+    Codex 0.163, sanitized): the composer stays and the question waits behind "shift+← to answer"."""
+    lines = raw.split("\n")
+    at = next(i for i, x in enumerate(lines) if "Ask Codex to do anything" in bridge.strip_sgr(x))
+    queue = ["\x1b[2m• Queued follow-up inputs\x1b[0m", "  ? 1 question · 20s", "    shift+← to answer", ""]
+    return "\n".join(lines[:max(0, at - 1)] + queue + lines[max(0, at - 1):])
+
+
 class HerdrDraftTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
@@ -110,6 +119,31 @@ class HerdrDraftTests(unittest.TestCase):
         # A numbered list the user sent earlier ("❯ 1. …" in the transcript) with the box below is no dialog.
         echo = "\n".join(["❯ 1. fix the parser", "  2. run the tests", "", "● Done.", "", rule, "\x1b[39m❯ \x1b[7m \x1b[0m", rule, "  ⏸ manual mode on"])
         self.assertEqual(bridge.box_view(echo, "claude"), {"box": "", "menu": None, "pasting": False})
+
+    def test_codex_queued_followup_inputs_refuse_the_prompt(self):
+        # A question put aside with "shift+← to answer" (live shape, sanitized): the composer is on
+        # screen with its placeholder, but typed text joins Codex's own queue. A paste there never
+        # appeared in the box ("missing"); now the screen refuses the prompt before anything is typed.
+        self.screen = queued_inputs(HERDR_CODEX)
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它把一个提问放在一边了"):
+            self.prompt(IDS[0])
+        self.assertEqual((self.prompts(), self.receipts()), ([], 0))
+        self.assertFalse(any(c[:2] == ["pane", "send-text"] or "enter" in c for c in self.commands))
+        # The same is true without colours: the queue header and hint are plain text.
+        self.screen = bridge.strip_sgr(queued_inputs(HERDR_CODEX))
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它把一个提问放在一边了"):
+            self.prompt(IDS[1])
+        self.assertEqual(self.prompts(), [])
+        # Once Codex's queue header is gone, Herdr's idle stands again: the box is checked as usual.
+        self.screen = CODEX["idle"]
+        self.assertEqual(bridge.box_view(self.screen, "codex").get("queued"), None)
+        # The end-of-turn label is the same overlay, and a conversation line that merely mentions the
+        # phrase away from the composer is not it.
+        self.assertTrue(bridge.codex_queued_inputs(["• Messages to be submitted at end of turn", "  next", "",
+                                                     "› Ask Codex to do anything", "", "  ? for shortcuts"]))
+        self.assertFalse(bridge.codex_queued_inputs(["• Queued follow-up inputs is the label", ""] +
+                                                     ["line %d" % i for i in range(30)] +
+                                                     ["› Ask Codex to do anything", "", "  ? for shortcuts"]))
 
     def test_unknown_box_keeps_the_old_behaviour(self):
         # Unreadable screen, a Herdr without colours, no input box on screen: Herdr's state decides.

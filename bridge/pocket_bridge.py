@@ -26,7 +26,9 @@ LIMIT = 65536
 
 
 # Keys the phone may press in an agent pane. "shift+tab" is Herdr's name for Back-Tab (ESC [ Z).
-AGENT_KEYS = ("up", "down", "left", "right", "enter", "esc", "ctrl+c", "shift+tab")
+# The confirm panel's raw keys, plus Shift+Tab (mode) and Shift+← (Codex's own hint for opening a
+# queued follow-up question: "shift+← to answer").
+AGENT_KEYS = ("up", "down", "left", "right", "enter", "esc", "ctrl+c", "shift+tab", "shift+left")
 
 # Any agent kind Herdr detects (claude, codex, opencode, gemini, pi, …) is listed, read, prompted,
 # interrupted and closed the same generic way. Extras need an understood format:
@@ -84,6 +86,10 @@ NOT_SENT = {
 }
 # A question or approval dialog Herdr still calls idle: typed text plus Enter would pick an option.
 MENU_ON_SCREEN = "没发出去：它正停在一个提问或选择框上（电脑那边还显示它空闲），这时打字回车会直接选中选项。先回答它，或点“用按键操作”看屏幕"
+# Codex holding typed messages above its composer (a question put aside): what is pasted joins that
+# queue instead of the box, so Enter would only hand it to the queue. The person answers it with the
+# key its own screen names ("shift+← to answer"); the phone's confirm panel offers that key.
+QUEUED_ON_SCREEN = "没发出去：它把一个提问放在一边了（屏幕上是「Queued follow-up inputs · shift+← to answer」），这时打进去的字会排进它自己的队列、不会进输入框。先按 Shift+← 回答那个问题，再点继续"
 # Text already in a Claude / Codex input box is replaced by the new message (box_send); these are the
 # cases where that cannot be done safely. Nothing of the new message was submitted in any of them.
 BOX_NOT_SENT = {
@@ -498,7 +504,9 @@ def herdr_box(prefix, agent):
     kind = agent.get("agent")
     if kind not in ("claude", "codex"): return None
     view = box_before(lambda: read_screen(prefix, agent, 0, ansi=True).get("text", ""), kind)
-    if view and view.get("blind") and not view["menu"]: return None
+    # A blind view is normally dropped (text there cannot be told from the placeholder), but a
+    # queued follow-up screen is certain from plain text and must refuse the prompt either way.
+    if view and view.get("blind") and not view["menu"] and not view.get("queued"): return None
     return view
 
 
@@ -553,6 +561,7 @@ def box_view(raw, kind):
     tail = [x for x in plain.split("\n") if x.strip()][-4:]
     view = {"box": box, "menu": parse_menu(plain, kind) if box is None else None,
             "pasting": kind == "claude" and any(CLAUDE_PASTING.match(x) for x in tail)}
+    if kind == "codex" and codex_queued_inputs(plain.split("\n")): view["queued"] = True
     if "\x1b[" not in raw: view["blind"] = True
     return view
 
@@ -726,11 +735,14 @@ def box_attempt(io, text, view):
 
 
 def screen_input(raw, kind):
-    """{box, menu} of a Claude / Codex visible screen: the text in its input box ("" when empty, None
-    when the box is not on screen) and, only while the box is not there, the dialog parsed instead."""
+    """{box, menu[, queued]} of a Claude / Codex visible screen: the text in its input box ("" when
+    empty, None when the box is not on screen) and, only while the box is not there, the dialog
+    parsed instead. `queued`: Codex's composer is there but holds its own queue (a put-aside question)."""
     plain, colored = screen_pair(raw)
     box = claude_draft(plain, colored) if kind == "claude" else codex_draft(plain, colored)
-    return {"box": box, "menu": parse_menu(plain, kind) if box is None else None}
+    view = {"box": box, "menu": parse_menu(plain, kind) if box is None else None}
+    if kind == "codex" and codex_queued_inputs(plain.split("\n")): view["queued"] = True
+    return view
 
 
 def screen_dialog(menu, kind):
@@ -755,8 +767,9 @@ SCREEN_MEMO = "screens-v1.json"
 def mark_screen_menus(prefix, found, state_dir):
     """Herdr can call a Claude / Codex idle or done while a question or approval dialog is up: in a
     narrow pane the dialog's footer wraps and Herdr 0.8.2 no longer recognises it. Such an agent is
-    reported "blocked" (with `screen: "menu"` and Herdr's own `herdr_status`), so the phone shows the
-    answer card, holds queued messages and can answer it through the usual checked path.
+    reported "blocked" (with `screen: "menu"`, or "queued" for Codex's own held queue, and Herdr's
+    own `herdr_status`), so the phone shows the answer card, holds queued messages and can answer it
+    through the usual checked path.
 
     Only idle/done Claude / Codex agents are read (their visible screen, one read each). One whose
     input box was on screen at least SCREEN_SETTLE seconds after Herdr's last state change for it
@@ -791,7 +804,12 @@ def mark_screen_menus(prefix, found, state_dir):
     else: seen = [look(t[0]) for t in todo]
     for (agent, entry), result in zip(todo, seen):
         if not result: continue
-        if result["box"] is not None: entry["box"] = now
+        if result.get("queued"):
+            # Codex's composer is on screen but takes typed text into its own queue: a dialog in
+            # effect. Nothing settles here; every poll looks again until the queue is gone.
+            entry.pop("box", None)
+            agent.update(herdr_status=agent["agent_status"], agent_status="blocked", screen="queued")
+        elif result["box"] is not None: entry["box"] = now
         else:
             entry.pop("box", None)
             if screen_dialog(result["menu"], agent_provider(agent)):
@@ -851,6 +869,8 @@ def mutate(request, prefix, agent, state_dir):
     view = herdr_box(prefix, agent) if op in ("prompt", "exitAgent") and (
         agent.get("agent_status") in ("idle", "done") or waiting_kid) else None
     menu_up = bool(view and view["box"] is None and view["menu"])
+    # Codex's composer is on screen but takes typed text into its own queue (a put-aside question).
+    queued_up = bool(view and view.get("queued"))
     # The box is on screen (with colours): it is replaced and the submit is checked (box_send).
     boxed = bool(view and isinstance(view["box"], str))
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -869,6 +889,7 @@ def mutate(request, prefix, agent, state_dir):
         text = request.get("text")
         key = request.get("key")
         if op == "prompt":
+            if agent.get("screen") == "queued": raise BridgeError(QUEUED_ON_SCREEN)
             if agent.get("screen") == "menu": raise BridgeError(MENU_ON_SCREEN)
             # A parent waiting on a sub-agent is the one exception to "only idle/done takes a
             # prompt"; its visible input box is required (no dialog, nothing unreadable).
@@ -879,9 +900,9 @@ def mutate(request, prefix, agent, state_dir):
             if not isinstance(text, str) or (not text.strip() and not images and not files) or len(text.encode()) > 15000 or "\x00" in text:
                 raise BridgeError("Prompt must contain 1–15000 UTF-8 bytes without NUL")
             # Before the receipt: a refusal here sent nothing.
-            if menu_up:
+            if menu_up or queued_up:
                 screen_memo_forget(state_dir, agent.get("terminal_id"))
-                raise BridgeError(MENU_ON_SCREEN)
+                raise BridgeError(QUEUED_ON_SCREEN if queued_up and not menu_up else MENU_ON_SCREEN)
             if boxed and view["pasting"]: raise BridgeError(BOX_NOT_SENT["pasting"])
             if images is not None or files is not None:
                 # Checked and (for ch routes) shared before the receipt: a failure here sent nothing.
@@ -908,7 +929,7 @@ def mutate(request, prefix, agent, state_dir):
             if set(request) - CLOSE_KEYS: raise BridgeError("没发出去：请求里有不认识的字段")
             command = EXIT_COMMANDS.get(agent.get("agent"))
             if not command: raise BridgeError("没发出去：不认识这个 Agent，没法让它自己退出")
-            if agent.get("agent_status") not in ("idle", "done") or menu_up:
+            if agent.get("agent_status") not in ("idle", "done") or menu_up or queued_up:
                 raise BridgeError("没发出去：Agent 还在干活或在等确认，先中断它再结束")
             args = ["agent", "prompt", agent["pane_id"], command]
         elif op == "answer":
@@ -3717,6 +3738,11 @@ CODEX_GOALS = (("Pursuing goal", "active"), ("Goal paused", "paused"), ("Goal st
 CODEX_GOAL_RE = re.compile(r"(Pursuing goal|Goal paused|Goal stalled|Goal hit usage limits|Goal unmet|Goal achieved)(?: \(([^)]{1,30})\))?")
 CODEX_FOOTER_RE = re.compile(r"for shortcuts|esc to interrupt|Context \d+% used|% context left|to cycle\)|tab to queue")
 CODEX_MENU_ROW = re.compile(r"^›[ \t]*\d{1,2}\.[ \t]")
+# Codex's own queue above the composer (seen live, Codex 0.163): a question put aside ("Queued
+# follow-up inputs" with "shift+← to answer") or messages waiting for the end of the turn. Typed
+# text joins that list instead of the composer, which stays on screen with its placeholder.
+CODEX_QUEUED_HEAD = re.compile(r"^\s*(?:•\s*)?(?:Queued follow-up inputs|Messages to be submitted at end of turn)\s*$")
+CODEX_QUEUED_HINT = re.compile(r"^\s*shift\s*\+\s*(?:←|left)\s+to answer\s*$", re.I)
 RULE_RE = re.compile(r"^\s*[─━]{8,}")
 
 
@@ -3798,6 +3824,16 @@ def codex_footer(lines):
     """Lines under Codex's composer (the last › line), when they look like its footer."""
     i = codex_composer(lines)
     return None if i is None else lines[i + 1:i + 13]
+
+
+def codex_queued_inputs(lines):
+    """True while Codex holds messages above its composer (a question put aside with "shift+← to
+    answer", or "Messages to be submitted at end of turn"). Its composer stays on screen but typed
+    text joins that list instead of the box: a prompt pasted there never lands (BoxNotSent "missing"),
+    so such a screen is a dialog — the phone must wait and offer the key the screen names."""
+    i = codex_composer(lines)
+    if i is None: return False
+    return any(CODEX_QUEUED_HEAD.match(x) or CODEX_QUEUED_HINT.match(x) for x in lines[max(0, i - 16):i])
 
 
 def codex_draft(text, ansi):
@@ -6487,8 +6523,10 @@ def tmux_agent_identity(pane, found):
 
 
 def tmux_screen_state(text, kind):
-    """blocked (a menu waits), working (the footer offers to interrupt, or a spinner) or idle, from the screen."""
+    """blocked (a menu waits, or Codex holds its own queued inputs), working (the footer offers to
+    interrupt, or a spinner) or idle, from the screen."""
     if parse_menu(text, kind): return "blocked"
+    if kind == "codex" and codex_queued_inputs(screen_lines(text)): return "blocked"
     tail = [x for x in str(text or "").split("\n") if x.strip()][-12:]
     return "working" if any(TMUX_WORKING.search(x) for x in tail) else "idle"
 
@@ -7089,7 +7127,9 @@ def tmux_agent_request(request, state_dir):
         # Codex: idle only with its own composer on screen (letters may be shortcuts elsewhere).
         if found["kind"] == "codex": raise BridgeError("Agent is busy or waiting for confirmation; refresh and inspect it first")
         if view["menu"]: raise BridgeError(NOT_SENT["agent_blocked"])
-    elif view.get("blind"):
+    # Codex's composer is there but holds its own queue: a paste would join it, not land in the box.
+    if view.get("queued"): raise BridgeError(QUEUED_ON_SCREEN)
+    if view.get("blind"):
         # Without colours an empty box's placeholder looks like typed text: cannot be cleared verifiably.
         if view["box"]: raise BridgeError(BOX_NOT_SENT["unclear"])
     elif view["pasting"]: raise BridgeError(BOX_NOT_SENT["pasting"])

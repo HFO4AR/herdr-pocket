@@ -23,6 +23,16 @@ CLAUDE_APPROVE = "\n".join([RULE, " Bash command", "", "   rm -rf build", "", " 
                             "  2. No, and tell Claude what to do differently (esc)", "", "Esc to cancel · Tab to amend"])
 
 
+def queued_screen():
+    """The real Codex idle screen with its queued follow-up inputs above the composer (live shape,
+    Codex 0.163, sanitized): the composer stays and the question waits behind "shift+← to answer"."""
+    raw = bridge.strip_sgr(CODEX["idle"])
+    lines = raw.split("\n")
+    at = next(i for i, x in enumerate(lines) if "Ask Codex to do anything" in x)
+    queue = ["• Queued follow-up inputs", "  ? 1 question · 20s", "    shift+← to answer", ""]
+    return "\n".join(lines[:max(0, at - 1)] + queue + lines[max(0, at - 1):])
+
+
 class MultiChatTui:
     """The real captured Claude multi-select screen (test_answer.CLAUDE_MULTI_CHAT), redrawn for the
     cursor, the checked rows and what was typed into the "Type something" row, with Claude's keys:
@@ -298,6 +308,11 @@ class TmuxAgentTests(unittest.TestCase):
         self.assertEqual(len(self.h(op="status", session="default", tmux=True)["agents"]), 1)
         self.assertFalse(any(a[0] == "send-keys" for a in self.log), "reads only")
 
+    def test_shift_left_goes_to_the_tmux_agent(self):
+        a = self.agent()
+        self.h(op="key", target="%1", identity=a["identity"], id=UUIDS[0], key="shift+left")
+        self.assertEqual(self.keys(), ["S-Left"])
+
     def test_shift_tab_only_with_the_footer_on_screen(self):
         a = self.agent()
         self.tuis["%1"] = Static("● 好了。\n")
@@ -441,6 +456,18 @@ class CodexTmuxTests(unittest.TestCase):
         self.assertEqual(self.agent()["agent_status"], "working")
         with self.assertRaisesRegex(bridge.BridgeError, "^Agent is busy"):
             self.h(op="prompt", target="%1", identity=self.agent()["identity"], id=UUIDS[0], text="yes")
+        self.assertEqual(self.sent(), [])
+
+    def test_queued_followup_inputs_block_the_prompt(self):
+        # A question put aside with "shift+← to answer" (live shape, sanitized): the composer stays
+        # on screen but typing joins Codex's own queue. The state reads blocked (the phone's key
+        # panel offers that key), and a prompt is refused before anything is pasted.
+        self.tuis["%1"] = Static(queued_screen())
+        a = self.agent()
+        read = self.h(op="read", target="%1", identity=a["identity"])
+        self.assertEqual((a["agent_status"], read["agent_status"], read.get("menu")), ("blocked", "blocked", None))
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去"):
+            self.h(op="prompt", target="%1", identity=a["identity"], id=UUIDS[0], text="按5640适配吧")
         self.assertEqual(self.sent(), [])
 
     def test_modes_only_under_its_composer(self):

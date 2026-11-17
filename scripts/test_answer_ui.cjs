@@ -17,12 +17,15 @@ const SCREENS={
  // Claude's folder-trust dialog (live capture, path anonymized): unnumbered rows.
  trust:['~/site','❯ claude','','─'.repeat(100),' Accessing workspace:','',' /home/demo/site',''," Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If"," not, take a moment to review what's in this folder first.",''," Claude Code'll be able to read, edit, and execute files here.",'',' Security guide','',' ❯ No, exit','   Yes, I trust this folder','',' Enter to confirm · Esc to cancel'].join('\n'),
  bash:['● 我先清掉旧的构建结果。','',RULE,' Bash command','','   rm -rf dist .cache','   Remove build outputs','',' Do you want to proceed?',' ❯ 1. Yes',"   2. Yes, and don't ask again for rm commands in /home/demo/site",'   3. No, and tell Claude what to do differently (esc)','',' Esc to cancel · Tab to amend · ctrl+e to explain'].join('\n'),
+ // Codex 0.163's queued follow-up inputs (live capture, sanitized): no numbered menu, and the
+ // screen's own hint names the key that opens the question.
+ queued:['• Queued follow-up inputs','  ? 1 question · 20s','    shift+← to answer','','› Ask Codex to do anything'].join('\n'),
 };
 const menus=JSON.parse(execFileSync('python3',['-c',`
 import importlib.util,json,sys
 spec=importlib.util.spec_from_file_location('b',sys.argv[1]);b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
-print(json.dumps({k:b.parse_menu(v,'claude') for k,v in json.loads(sys.argv[2]).items()},ensure_ascii=False))`,path.join(root,'bridge/pocket_bridge.py'),JSON.stringify(SCREENS)],{encoding:'utf8'}));
-for(const [k,m] of Object.entries(menus))assert(m&&m.cursor,'bridge parsed '+k);
+print(json.dumps({k:(b.parse_menu(v,'codex') if k=='queued' else b.parse_menu(v,'claude')) for k,v in json.loads(sys.argv[2]).items()},ensure_ascii=False))`,path.join(root,'bridge/pocket_bridge.py'),JSON.stringify(SCREENS)],{encoding:'utf8'}));
+for(const [k,m] of Object.entries(menus))if(k==='queued')assert.equal(m,null,'the queued-inputs screen is not a parsed menu');else assert(m&&m.cursor,'bridge parsed '+k);
 // Codex 0.163's own rate-limit picker (real capture, fixtures/codex_tmux.json), as the bridge reads it.
 const codexPick=JSON.parse(execFileSync('python3',['-c',`
 import importlib.util,json,sys
@@ -245,6 +248,27 @@ const pq=await page.evaluate(()=>fx.calls.filter(c=>c.op==='answer').at(-1).args
 assert.deepEqual([pq.action,pq.option,pq.label,pq.fingerprint,pq.target],['select',2,'Keep current model',codexPick.menu.fingerprint,'w1:p6']);
 await page.waitForTimeout(900);// its follow-up status/screen reads land before the next chat opens
 console.log('PASS: Codex rate-limit picker is a 等你选择 card, answered only when the person picks');
+
+// Codex's queued follow-up inputs: no menu to parse, and the screen's own hint says Shift+← opens
+// the question. The raw-key panel offers exactly that key and makes it the primary one.
+await page.evaluate(async()=>{fx.screen='queued';fx.messages=[];
+ fx.agent={pane_id:'w1:p5',identity:'id-codex-q',agent:'codex',agent_status:'blocked',cwd:'/home/demo/site',terminal_title:'修复问题',agent_session:{value:'cq'}};
+ delete fx.agent.picker;delete fx.agent.screen;S.agents=[fx.agent];S.qaMenu=null;
+ await openAgent(fx.agent);
+ // The panel is drawn as soon as the state turns blocked, before this chat's screen read lands:
+ // drop the text and redraw, then let the read arrive — the hinted key must appear with it.
+ S.terminalText='';S.terminalAnsi='';renderComposer();
+ await fetchTerminal(true);});
+const queued=page.locator('.confirm-panel');await queued.waitFor();
+await queued.getByText(/Queued follow-up inputs/).waitFor();
+const shiftLeft=queued.getByRole('button',{name:'Shift+←',exact:true});await shiftLeft.waitFor();
+assert.ok(await shiftLeft.evaluate(n=>n.classList.contains('primary')),'the hinted key is the primary action');
+assert.equal(await queued.getByRole('button',{name:'Enter 确认',exact:true}).evaluate(n=>n.classList.contains('primary')),false,'Enter is not the answer here');
+await shiftLeft.click();
+await page.waitForFunction(()=>fx.calls.some(c=>c.op==='key'&&c.args.key==='shift+left'),null,{timeout:3000});
+await page.locator('#toast').getByText('已发送 Shift+←',{exact:true}).waitFor();
+await page.screenshot({path:path.join(folder,'answer-codex-queued.png')});
+console.log('PASS: queued follow-up inputs offer Shift+← from the screen\'s own hint');
 
 // Codex async question: the agent is idle, the card sits in the timeline and replies as a prompt.
 await page.evaluate(()=>{

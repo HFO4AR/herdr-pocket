@@ -102,6 +102,11 @@ class GenericAgentTests(unittest.TestCase):
         self.send("key", key="esc")
         self.assertEqual(self.sent(), [["agent", "send-keys", "w1:p7", "esc"]])
 
+    def test_shift_left_opens_codex_queued_inputs(self):
+        # Codex's queued follow-up screen says "shift+← to answer"; the phone sends that key.
+        self.send("key", key="shift+left")
+        self.assertEqual(self.sent(), [["agent", "send-keys", "w1:p7", "shift+left"]])
+
     def test_shift_tab_only_when_the_footer_offers_it(self):
         self.screen = "  > \n  build · gpt-6\n  tab switch agent · ctrl+p commands"
         with self.assertRaisesRegex(bridge.BridgeError, "没提到 Shift\\+Tab"): self.send("key", key="shift+tab")

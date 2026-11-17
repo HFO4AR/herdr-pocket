@@ -610,11 +610,27 @@ function buildComposer(key){
  input.onblur=()=>setTimeout(()=>{if(document.activeElement!==input)slashClose(compose);},150);input.onfocus=()=>slashSuggest(compose,input);
  const attach=ib('plus','添加附件',imgMenu);attach.classList.add('attach');
  compose.append(attach,input,send);requestAnimationFrame(grow);return compose;}
+// A dialog's own hint may name the key that answers it (Codex's queued follow-up inputs say
+// "shift+← to answer"). Offer exactly that key, taken from the visible screen's last lines, next
+// to the usual raw keys (the bridge's agent key list carries shift+left).
+function confirmHintKeys(text){
+ const tail=String(text||'').split('\n').slice(-15).join('\n'),out=[];
+ if(/shift\s*\+\s*(?:←|left\b)/i.test(tail))out.push(['Shift+←','shift+left']);
+ return out;
+}
+// The panel is drawn when the state turns blocked, often before this chat's screen read arrives: the
+// hinted key is only in the text then. Redraw it once the text lands, so the row matches the screen.
+function confirmHintRepaint(){
+ const keys=document.querySelector('#live-state .confirm-keys');if(!keys)return;
+ const hints=confirmHintKeys(S.terminalText),first=keys.querySelector('button'),hinted=first&&first.textContent==='Shift+←';
+ if(hints.length?(!first||first.textContent!==hints[0][0]):hinted)renderComposer();
+}
 function renderLiveState(live,a){
  live.replaceChildren();const st=a.agent_status;S.qaShown='';S.qaBar='';
  if(st==='blocked'){if(qaLive(live,a))return;const panel=el('section','confirm-panel');panel.setAttribute('role','alert');const h=el('div','confirm-head');h.append(icon('alert'));const t=el('strong','grow',qaPicker(a)?'等你选择':'等你确认');const at=statusSince(a);if(at)t.append(' ',since(at));h.append(t,btn('写消息','link-btn foot-write',footWrite,'pen'),btn('刷新','link-btn',()=>fetchTerminal(true)));panel.append(h);
   const pre=el('pre','confirm-screen');pre.id='confirm-screen';screenPaint(pre,S.terminalText||'正在读取终端画面…',S.terminalText&&S.terminalAnsi,12);panel.append(pre);
-  const keys=el('div','confirm-keys');[['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);live.append(panel);requestAnimationFrame(()=>{pre.scrollTop=pre.scrollHeight;});}
+  const keys=el('div','confirm-keys');const hints=confirmHintKeys(S.terminalText);
+  [...hints,['↑','up'],['↓','down'],['Enter 确认','enter'],['Esc','esc'],['Ctrl+C','ctrl+c']].forEach(([t,k])=>keys.append(btn(t,hints.length?k===hints[0][1]?'primary small':'secondary small':k==='enter'?'primary small':'secondary small',()=>sendKey(k,t))));panel.append(keys);live.append(panel);requestAnimationFrame(()=>{pre.scrollTop=pre.scrollHeight;});}
  // Working and 「做完了」 are one line in the footer rail (foot.js), not a block here.
  // A Codex question put aside with 「暂不回答」 stays one tap away (answer.js).
  if(st==='idle'||st==='done')qaAsyncBar(live);}
@@ -719,7 +735,7 @@ async function fetchTerminal(quiet=false){
  if(quiet&&S.reading===epoch){S.readAgain=epoch;return;}S.reading=epoch;S.readAgain=null;
  // Colors cost a second screen read on the computer: ask only while the 终端 tab or the confirm screen shows.
   const color=S.chatMode==='terminal'||S.chat.agent.agent_status==='blocked';
-  try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity,...(color?{ansi:true}:{})});if(epoch!==S.epoch)return;S.terminalText=r.text;S.terminalAnsi=r.ansi||'';applyReadStatus(r.agent_status);qaScreen(r);modeScreen(r);actScreen(r);
+  try{const r=await remote('read',{session:S.session,target:S.chat.agent.pane_id,identity:S.chat.agent.identity,...(color?{ansi:true}:{})});if(epoch!==S.epoch)return;S.terminalText=r.text;S.terminalAnsi=r.ansi||'';applyReadStatus(r.agent_status);qaScreen(r);modeScreen(r);actScreen(r);confirmHintRepaint();
   const lines=r.text.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[─━═\-_│|>›❯▌\s]+$/.test(x));S.activity=lines.at(-1)||'';
   screenPaint(document.getElementById('terminal-output'),r.text,S.terminalAnsi);const c=document.getElementById('confirm-screen');if(c){screenPaint(c,r.text,S.terminalAnsi,12);c.scrollTop=c.scrollHeight;}
   if(!S.chat.record&&S.chatMode==='conversation')paintTimeline();}

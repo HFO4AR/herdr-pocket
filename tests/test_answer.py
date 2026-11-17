@@ -106,6 +106,30 @@ CODEX_APPROVAL = "\n".join([
     "  Press enter to confirm or esc to cancel",
 ])
 
+# Codex 0.163's queued follow-up inputs (live capture, sanitized): a question put aside, the
+# composer still on screen with its placeholder, and the screen's own hint naming the key that
+# opens the question.
+CODEX_QUEUED = "\n".join([
+    "• 改好了，还有一个问题。",
+    "",
+    "• Queued follow-up inputs",
+    "  ? 1 question · 20s",
+    "    shift+← to answer",
+    "",
+    "› Ask Codex to do anything",
+    "",
+    "  GPT-6 medium · ~/project · Context 38% used",
+    "  ⏎ send   ⇧⏎ newline   ⏸ pause   ? shortcuts",
+])
+CODEX_IDLE = "\n".join([
+    "• 改好了。",
+    "",
+    "› Ask Codex to do anything",
+    "",
+    "  GPT-6 medium · ~/project · Context 38% used",
+    "  ⏎ send   ⇧⏎ newline   ⏸ pause   ? shortcuts",
+])
+
 CODEX_QUESTION = "\n".join([
     "  Question 1/2 (2 unanswered)",
     "  消息顺序",
@@ -573,6 +597,27 @@ class AnswerTests(unittest.TestCase):
         self.fake.screen = lambda: "● 好。\n\n" + RULE + "\n❯ \n" + RULE + "\n  ? for shortcuts"
         self.assertEqual(self.status()["agent_status"], "done")
         self.assertNotIn("screen", self.status())
+
+    def test_codex_queued_inputs_read_as_waiting_and_hold_the_prompt(self):
+        # Codex put its question aside and holds typed messages above the composer ("shift+← to
+        # answer", live capture sanitized). Herdr calls the agent done; the composer is on screen, so
+        # a prompt looked sendable — but a paste there joined Codex's own queue and never showed in
+        # the box ("missing"). The screen now reads as waiting: the phone shows its key panel (the
+        # shift+← hint) and the message waits instead of being pasted.
+        self.agent.update(agent="codex", agent_status="done")
+        self.fake.screen = lambda: CODEX_QUEUED
+        row = self.status()
+        self.assertEqual((row["agent_status"], row["screen"], row["herdr_status"]), ("blocked", "queued", "done"))
+        read = bridge.handle(dict(v=1, op="read", session="default", target="w1:p1", identity=bridge.identity(self.agent)), self.state)
+        self.assertEqual((read["agent_status"], read.get("menu")), ("blocked", None))
+        with self.assertRaisesRegex(bridge.BridgeError, "^没发出去：它把一个提问放在一边了"):
+            bridge.handle(dict(v=1, op="prompt", session="default", target="w1:p1", identity=bridge.identity(self.agent),
+                               id="32345678-1234-4234-8234-123456789012", text="按5640适配吧"), self.state)
+        self.assertEqual(self.writes, [])
+        # Answered on the computer: the queue header is gone, the composer is back, Herdr's own
+        # "done" stands again (nothing is recorded from the refusal: the same message can go).
+        self.fake.screen = lambda: CODEX_IDLE
+        self.assertEqual(self.status()["agent_status"], "done")
 
     def test_screen_is_not_read_again_once_the_box_settled(self):
         self.agent.update(agent_status="idle", state_change_seq=4)
